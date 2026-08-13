@@ -71,6 +71,21 @@ model = "openaicompat/qwen3.5:9b-mlx"
 surface = "ollama"
 ```
 
+OpenAI is its own provider rather than a profile of the compatible adapter,
+because target identity is provider, surface, and model: sharing a decoder is a
+fact about this codebase, not about where a request goes or whose key pays for
+it.
+
+```toml
+[tiers.t4]
+model = "openai/gpt-5-mini"
+```
+
+Nothing in that adapter has been run against the live API yet, so it claims no
+reasoning support and there is no catalog entry to price it with. Both get
+filled in from a capture rather than from documentation, and until then `sb
+-tiers` reports it as unpriced instead of guessing.
+
 The same model reached two ways is two targets, with two catalog entries and
 two costs. That is the point rather than an inconvenience: the compatibility
 format discards cache breakpoints and reports no per-model capabilities, so
@@ -91,9 +106,8 @@ sb -think high             ask for reasoning output
 
 ## Credentials
 
-Nothing here needs one yet: every target this build can reach is a local server.
-The machinery exists so that the first paid provider does not arrive alongside a
-rushed decision about where secrets live.
+Local targets need none. Anything billed does, and the machinery was built
+before the first paid provider arrived rather than alongside it.
 
 ```
 sb auth status             where each configured tier's credential comes from
@@ -110,8 +124,9 @@ Three places are consulted, in order:
 
 1. **An environment variable.** `SB_<PROVIDER>_<SURFACE>_API_KEY`, then
    `SB_<PROVIDER>_API_KEY`, then the vendor's own name where the provider *is*
-   that vendor. An OpenAI-compatible endpoint is not OpenAI, so a target on that
-   provider will not pick up `OPENAI_API_KEY`.
+   that vendor. `openai/first-party` picks up `OPENAI_API_KEY`; a target on the
+   `openaicompat` provider does not, because a compatible endpoint can point at
+   any server and a vendor's key should not follow it there.
 2. **A credential helper**, if configured. Its standard output is the
    credential and is never logged or quoted back, even on failure.
 3. **The operating system's credential service**: the login Keychain on macOS,

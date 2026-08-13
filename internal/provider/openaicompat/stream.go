@@ -29,6 +29,11 @@ type stream struct {
 	scanner *bufio.Scanner
 	profile Profile
 
+	// name is the provider a failure is attributed to. A profile that names its
+	// vendor reports under that name, so an error from OpenAI does not arrive
+	// blamed on a generic adapter.
+	name string
+
 	pending []provider.Event
 
 	blockIndex int
@@ -64,6 +69,7 @@ func newStream(ctx context.Context, body io.ReadCloser, profile Profile) *stream
 		body:    body,
 		scanner: sc,
 		profile: profile,
+		name:    providerName(profile),
 		tools:   map[int]*toolAccum{},
 	}
 }
@@ -95,7 +101,7 @@ func (s *stream) readLine() error {
 			if ctxErr := s.ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			return &provider.ProtocolError{Provider: Name, Detail: "reading the event stream", Err: err}
+			return &provider.ProtocolError{Provider: s.name, Detail: "reading the event stream", Err: err}
 		}
 		if ctxErr := s.ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -130,10 +136,10 @@ func (s *stream) readLine() error {
 
 	var chunk chatChunk
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		return &provider.ProtocolError{Provider: Name, Detail: "decoding a stream chunk", Err: err}
+		return &provider.ProtocolError{Provider: s.name, Detail: "decoding a stream chunk", Err: err}
 	}
 	if chunk.Error != nil {
-		return &provider.APIError{Provider: Name, StatusCode: 0, Body: chunk.Error.Message}
+		return &provider.APIError{Provider: s.name, StatusCode: 0, Body: chunk.Error.Message}
 	}
 
 	if chunk.Usage != nil {
@@ -213,7 +219,7 @@ func (s *stream) emitToolCalls() {
 	sort.Ints(indexes)
 
 	for _, i := range indexes {
-		use, err := s.tools[i].toolUse()
+		use, err := s.tools[i].toolUse(s.name)
 		if err != nil {
 			// A malformed call cannot be executed. Reporting it rather than
 			// dropping it keeps the turn from continuing as though the model
@@ -249,9 +255,9 @@ func (s *stream) finish() {
 	})
 }
 
-func (acc *toolAccum) toolUse() (*provider.ToolUse, error) {
+func (acc *toolAccum) toolUse(name string) (*provider.ToolUse, error) {
 	if acc.name == "" {
-		return nil, &provider.ProtocolError{Provider: Name, Detail: "tool call with no function name"}
+		return nil, &provider.ProtocolError{Provider: name, Detail: "tool call with no function name"}
 	}
 
 	args := strings.TrimSpace(acc.args.String())
@@ -262,7 +268,7 @@ func (acc *toolAccum) toolUse() (*provider.ToolUse, error) {
 		// Arguments arrive as a string built from fragments, so an incomplete
 		// or malformed accumulation is the failure mode this check exists for.
 		return nil, &provider.ProtocolError{
-			Provider: Name,
+			Provider: name,
 			Detail:   fmt.Sprintf("tool call %q carried arguments that are not valid JSON", acc.name),
 		}
 	}

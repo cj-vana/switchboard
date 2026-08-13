@@ -38,6 +38,12 @@ const Name = "openaicompat"
 // reached natively: it gets its own catalog entry, price sheet, cache
 // behavior, and quirks.
 type Profile struct {
+	// Provider overrides the provider component of a RouteTarget. It exists so
+	// that a vendor with its own name and its own catalog entry is not filed
+	// under "openaicompat" merely because this adapter speaks its format. An
+	// empty value means the target really is a generic compatible endpoint.
+	Provider string
+
 	BaseURL string
 
 	Tools bool
@@ -116,7 +122,14 @@ func New(profileName string, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("no tested profile named %q; known profiles are %s",
 			profileName, strings.Join(profileNames(), ", "))
 	}
+	return NewFor(profileName, profile, opts...), nil
+}
 
+// NewFor builds a client for a profile the caller owns rather than one from the
+// tested map. It is how a vendor that speaks this format gets its own provider
+// name and catalog entry without every such vendor having to appear in a map
+// that is meant to describe servers this package has itself run against.
+func NewFor(profileName string, profile Profile, opts ...Option) *Client {
 	c := &Client{
 		profile:     profile,
 		profileName: profileName,
@@ -127,7 +140,7 @@ func New(profileName string, opts ...Option) (*Client, error) {
 	for _, opt := range opts {
 		opt(c)
 	}
-	return c, nil
+	return c
 }
 
 func profileNames() []string {
@@ -140,7 +153,16 @@ func profileNames() []string {
 	return names
 }
 
-func (c *Client) Name() string { return Name }
+// Name reports the provider this client speaks for, which is the profile's
+// vendor where it names one and the generic adapter otherwise.
+func (c *Client) Name() string { return providerName(c.profile) }
+
+func providerName(p Profile) string {
+	if p.Provider != "" {
+		return p.Provider
+	}
+	return Name
+}
 
 // Target builds a RouteTarget for a model reached through this adapter.
 func Target(profileName, model string) (provider.RouteTarget, error) {
@@ -225,7 +247,7 @@ func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provid
 
 	var list modelList
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return res, &provider.ProtocolError{Provider: Name, Detail: "decoding /models", Err: err}
+		return res, &provider.ProtocolError{Provider: c.Name(), Detail: "decoding /models", Err: err}
 	}
 	res.Reachable = true
 	for _, m := range list.Data {
@@ -277,7 +299,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-		return nil, &provider.APIError{Provider: Name, StatusCode: resp.StatusCode, Body: errorMessage(raw)}
+		return nil, &provider.APIError{Provider: c.Name(), StatusCode: resp.StatusCode, Body: errorMessage(raw)}
 	}
 	return resp, nil
 }

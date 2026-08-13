@@ -9,6 +9,7 @@ import (
 	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/provider/ollama"
+	"github.com/cjvana/switchboard/internal/provider/openai"
 	"github.com/cjvana/switchboard/internal/provider/openaicompat"
 )
 
@@ -25,6 +26,10 @@ type providers struct {
 	// capabilities, so they cannot share a client.
 	compat map[string]*openaicompat.Client
 
+	// openai is its own provider rather than a compat profile, so it gets its
+	// own client, its own credential, and its own catalog entry.
+	openai *openaicompat.Client
+
 	config *config.Config
 }
 
@@ -40,6 +45,17 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 	switch target.Provider {
 	case ollama.Name:
 		return p.ollama, nil
+
+	case openai.Name:
+		if p.openai != nil {
+			return p.openai, nil
+		}
+		opts, err := p.authOptions(target)
+		if err != nil {
+			return nil, err
+		}
+		p.openai = openai.New(opts...)
+		return p.openai, nil
 
 	case openaicompat.Name:
 		if c, ok := p.compat[target.Surface]; ok {
@@ -67,8 +83,8 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 	}
 
 	return nil, fmt.Errorf(
-		"target %s names provider %q, and this build has adapters for %s and %s only",
-		target.ID(), target.Provider, ollama.Name, openaicompat.Name)
+		"target %s names provider %q; this build has adapters for %s, %s, and %s",
+		target.ID(), target.Provider, ollama.Name, openai.Name, openaicompat.Name)
 }
 
 // authOptions resolves the credential for a target, if there is one to find.
@@ -83,6 +99,9 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 // Turning a rejection into "you have no credential" needs a server that can
 // actually issue one, and this build has no adapter that reaches such a server.
 // That message gets written against a real 401 rather than a guess at one.
+//
+// It returns openaicompat options because both adapters that need a credential
+// are built on that client.
 func (p *providers) authOptions(target provider.RouteTarget) ([]openaicompat.Option, error) {
 	ref := credential.Ref{Provider: target.Provider, Account: target.Surface}
 	resolver := credential.Chain(p.config.AuthFor(target.Provider))
