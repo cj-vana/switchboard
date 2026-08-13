@@ -6,7 +6,10 @@
 // (design principle 4).
 package execution
 
-import "runtime"
+import (
+	"errors"
+	"runtime"
+)
 
 // Mechanism names an OS isolation primitive.
 type Mechanism string
@@ -63,10 +66,14 @@ func Detect() Capability {
 	return c
 }
 
-// TestingVerifiedCapability builds a Capability that reports containment,
-// wrapping nothing. It exists so tests in other packages can exercise the
-// allowed path. Production capability comes only from Detect, which runs the
-// self-test.
+// TestingVerifiedCapability builds a Capability that reports containment, so
+// tests in other packages can exercise the path where execution is allowed.
+// Production capability comes only from Detect, which runs the self-test.
+//
+// Its wrapper refuses rather than passing the command through. Tests of policy
+// never execute anything, and if this ever leaked into a real build the result
+// is a refusal to run instead of a command running unconfined while the
+// interface reports a sandbox.
 func TestingVerifiedCapability() Capability {
 	return Capability{
 		Platform:         runtime.GOOS,
@@ -75,7 +82,9 @@ func TestingVerifiedCapability() Capability {
 		Detail:           "test double",
 		confinement: &Confinement{
 			mechanism: MechanismNone,
-			wrap:      func(_ Policy, argv []string) ([]string, error) { return argv, nil },
+			wrap: func(Policy, []string) ([]string, error) {
+				return nil, errors.New("test-double capability confines nothing and must not run commands")
+			},
 		},
 	}
 }

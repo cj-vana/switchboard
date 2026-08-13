@@ -5,7 +5,9 @@ import (
 	"testing"
 )
 
-func TestCapabilityNeverClaimsUnverifiedContainment(t *testing.T) {
+// The invariant the whole design rests on: whether automatic execution is
+// allowed and whether a wrapper exists are one fact, not two that could drift.
+func TestAutomaticExecutionAndTheWrapperAreOneFact(t *testing.T) {
 	c := Detect()
 	// Confinement is the only thing that may grant automatic execution, and it
 	// is the wrapper itself, so there is no boolean that can disagree with it.
