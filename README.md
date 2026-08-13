@@ -14,14 +14,17 @@ attacked, and it is ahead of the code.
 
 ## Status
 
-**Phase 0 of the build sequence.** What exists is the agent loop and the
-machinery under it: canonical provider types, an Ollama adapter, a crash-safe
-session log, the four core tools, the permission model, and a plain REPL.
+**Phase 0 complete; phase 1 in progress.** What exists is the agent loop and
+the machinery under it (canonical provider types, an Ollama adapter, a
+crash-safe session log, the four core tools, the permission model, verified
+sandboxing on macOS and Linux, a plain REPL), plus the first three pieces of
+phase 1: a versioned target catalog with price bands and cache mechanics,
+manual tiers, and observed cost accounting.
 
-Deliberately absent, each waiting for its phase: the target catalog, the cache
-and breakpoint machinery, tiers and routing, the eval harness, MCP, hooks, the
-Bubble Tea interface, and telemetry. The routing this is named for does not
-exist yet.
+Still ahead in phase 1: an OpenAI-compatible adapter, credential storage, and
+the exit-gate measurement. Then the cache and breakpoint machinery, the router,
+the eval harness, MCP, hooks, the Bubble Tea interface, and telemetry. **The
+routing this is named for does not exist yet** — tiers are selected by hand.
 
 ## Running it
 
@@ -37,8 +40,24 @@ The model has to support tool calling or it cannot drive the loop; `sb` checks
 and says so rather than failing halfway through a turn. Run `sb` with no
 `-model` to see what your server has.
 
+Bind a tier ladder in `~/.switchboard/config.toml`:
+
+```toml
+[tiers.t1]
+label = "light"
+model = "ollama/qwen3.5:9b-mlx"
+
+[tiers.t2]
+label = "deep"
+model = "ollama/qwen3.6:27b-mtp-q4_K_M"
+effort = "high"
 ```
-sb -model <model>          start a session in the current directory
+
+```
+sb                         start on the lowest tier
+sb -tiers                  show the ladder and what each tier costs
+sb -tier t2                start on a specific tier
+sb -model <model>          bind an Ollama model directly, bypassing tiers
 sb --continue              resume the most recent session here
 sb --resume <id>           resume a specific session
 sb --sessions              list sessions for this directory
@@ -47,7 +66,8 @@ sb -mode plan              read-only: no writes, no commands
 sb -think high             ask for reasoning output
 ```
 
-Inside a session: `/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit`.
+Inside a session: `/t1` and `/t2` switch tier, `/tiers` shows the ladder, and
+`/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit` do what they say.
 Ctrl-C cancels the current turn and returns you to the prompt; the session
 stays resumable.
 
