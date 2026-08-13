@@ -17,7 +17,7 @@ attacked, and it is ahead of the code.
 **Phase 0 complete; phase 1 in progress.** What exists is the agent loop and
 the machinery under it (canonical provider types, an Ollama adapter, a
 crash-safe session log, the four core tools, the permission model, verified
-sandboxing on macOS and Linux, a plain REPL), plus four pieces of phase 1: a
+sandboxing on macOS and Linux, a plain REPL), plus five pieces of phase 1: a
 versioned target catalog with price bands and cache mechanics, manual tiers,
 observed cost accounting, and an OpenAI-compatible adapter.
 
@@ -82,6 +82,46 @@ sb -p "<prompt>"           run one prompt and exit
 sb -mode plan              read-only: no writes, no commands
 sb -think high             ask for reasoning output
 ```
+
+## Credentials
+
+Nothing here needs one yet: every target this build can reach is a local server.
+The machinery exists so that the first paid provider does not arrive alongside a
+rushed decision about where secrets live.
+
+```
+sb auth status             where each configured tier's credential comes from
+sb auth login <provider>[/<surface>]    store one
+sb auth logout <provider>[/<surface>]   remove one
+```
+
+A credential is read from standard input, never from the command line, and is
+handed to the platform store over a pipe. It is never written to the config
+file, never written to the session log, and has no rendering that shows it: a
+credential that reaches a log line or a formatted error prints as a placeholder.
+
+Three places are consulted, in order:
+
+1. **An environment variable.** `SB_<PROVIDER>_<SURFACE>_API_KEY`, then
+   `SB_<PROVIDER>_API_KEY`, then the vendor's own name where the provider *is*
+   that vendor. An OpenAI-compatible endpoint is not OpenAI, so a target on that
+   provider will not pick up `OPENAI_API_KEY`.
+2. **A credential helper**, if configured. Its standard output is the
+   credential and is never logged or quoted back, even on failure.
+3. **The operating system's credential service**: the login Keychain on macOS,
+   the Secret Service keyring on Linux.
+
+The environment comes first because a variable is set deliberately, for one
+process, usually to override what is on the machine.
+
+```toml
+[auth.anthropic]
+helper = ["op", "read", "op://vault/anthropic/credential"]
+```
+
+There is no encrypted-file fallback and no plaintext one. A mode 0600 file is
+access control, not encryption, and on a machine with no keyring the honest
+answer is the environment variable or the helper.
 
 Inside a session: `/t1` and `/t2` switch tier, `/tiers` shows the ladder, and
 `/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit` do what they say.

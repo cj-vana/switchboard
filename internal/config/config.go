@@ -18,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
 )
 
@@ -51,7 +52,17 @@ type Config struct {
 	// Slots bind named roles to a model or to a tier alias such as "t1".
 	Slots map[string]string
 
+	// Auth is keyed by provider name.
+	Auth map[string]credential.Settings
+
 	Path string
+}
+
+// AuthFor returns the credential settings for a provider, which is the zero
+// value when none are configured: the default chain still works, because the
+// environment and the platform store need no configuration.
+func (c *Config) AuthFor(providerName string) credential.Settings {
+	return c.Auth[providerName]
 }
 
 // Default returns the tier a session starts on. The bottom of the ladder is
@@ -76,6 +87,15 @@ func (c *Config) Tier(id string) (Tier, bool) {
 type file struct {
 	Tiers map[string]tierEntry `toml:"tiers"`
 	Slots map[string]string    `toml:"slots"`
+	Auth  map[string]authEntry `toml:"auth"`
+}
+
+// authEntry configures where a provider's credential comes from. It carries no
+// field for the credential itself: §5.3 keeps secrets out of this file, and a
+// key that exists is a key someone pastes a secret into.
+type authEntry struct {
+	Env    string   `toml:"env"`
+	Helper []string `toml:"helper"`
 }
 
 type tierEntry struct {
@@ -90,13 +110,13 @@ type tierEntry struct {
 func Load() (*Config, error) {
 	path, err := Path()
 	if err != nil {
-		return &Config{Slots: map[string]string{}}, nil
+		return &Config{Slots: map[string]string{}, Auth: map[string]credential.Settings{}}, nil
 	}
 	return LoadFile(path)
 }
 
 func LoadFile(path string) (*Config, error) {
-	c := &Config{Slots: map[string]string{}, Path: path}
+	c := &Config{Slots: map[string]string{}, Auth: map[string]credential.Settings{}, Path: path}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -123,6 +143,9 @@ func LoadFile(path string) (*Config, error) {
 
 	for k, v := range f.Slots {
 		c.Slots[k] = v
+	}
+	for k, v := range f.Auth {
+		c.Auth[k] = credential.Settings{Env: v.Env, Helper: v.Helper}
 	}
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err

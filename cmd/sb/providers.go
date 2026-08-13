@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cjvana/switchboard/internal/config"
+	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/provider/ollama"
 	"github.com/cjvana/switchboard/internal/provider/openaicompat"
@@ -22,12 +24,15 @@ type providers struct {
 	// profile name: two profiles are two different servers with different
 	// capabilities, so they cannot share a client.
 	compat map[string]*openaicompat.Client
+
+	config *config.Config
 }
 
-func newProviders(host string) *providers {
+func newProviders(host string, cfg *config.Config) *providers {
 	return &providers{
 		ollama: ollama.New(ollama.WithBaseURL(host)),
 		compat: map[string]*openaicompat.Client{},
+		config: cfg,
 	}
 }
 
@@ -40,7 +45,10 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if c, ok := p.compat[target.Surface]; ok {
 			return c, nil
 		}
-		var opts []openaicompat.Option
+		opts, err := p.authOptions(target)
+		if err != nil {
+			return nil, err
+		}
 		if target.Surface == "ollama" {
 			// The same server, reached through its compatibility endpoint. The
 			// host was already resolved from the flag and the environment for
@@ -48,11 +56,11 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 			// disagree about which server the user meant.
 			opts = append(opts, openaicompat.WithBaseURL(p.ollama.BaseURL()+"/v1"))
 		}
-		c, err := openaicompat.New(target.Surface, opts...)
-		if err != nil {
+		c, newErr := openaicompat.New(target.Surface, opts...)
+		if newErr != nil {
 			return nil, fmt.Errorf(
 				"target %s names serving surface %q, which is not a profile this build has tested: %w",
-				target.ID(), target.Surface, err)
+				target.ID(), target.Surface, newErr)
 		}
 		p.compat[target.Surface] = c
 		return c, nil
@@ -61,6 +69,35 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 	return nil, fmt.Errorf(
 		"target %s names provider %q, and this build has adapters for %s and %s only",
 		target.ID(), target.Provider, ollama.Name, openaicompat.Name)
+}
+
+// authOptions resolves the credential for a target, if there is one to find.
+//
+// A missing credential is not an error here. Every profile this build ships
+// points at a local server that wants no authorization, and refusing to start
+// without a key nobody needs would be worse than useless.
+//
+// Nor does an absent credential get mentioned when a probe fails: on a local
+// server there is correctly nothing to find, so pointing at authentication
+// would send the user to `sb auth login` when the real answer is `ollama pull`.
+// Turning a rejection into "you have no credential" needs a server that can
+// actually issue one, and this build has no adapter that reaches such a server.
+// That message gets written against a real 401 rather than a guess at one.
+func (p *providers) authOptions(target provider.RouteTarget) ([]openaicompat.Option, error) {
+	ref := credential.Ref{Provider: target.Provider, Account: target.Surface}
+	resolver := credential.Chain(p.config.AuthFor(target.Provider))
+
+	secret, err := resolver.Get(context.Background(), ref)
+	if err != nil {
+		if errors.Is(err, credential.ErrNotFound) {
+			return nil, nil
+		}
+		// A configured helper that is present and broken is the user's problem
+		// to fix, and starting without the key it would have supplied only
+		// moves the failure somewhere less legible.
+		return nil, err
+	}
+	return []openaicompat.Option{openaicompat.WithAPIKey(secret.Expose())}, nil
 }
 
 // servedByOllama reports whether a target reaches an Ollama server, whether

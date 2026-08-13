@@ -1,5 +1,7 @@
-# Test bed for the Linux confinement work. Carries bubblewrap plus the
-# toolchains the profile has to keep working.
+# Test bed for the Linux work. Carries bubblewrap plus the toolchains the
+# confinement profile has to keep working, and a Secret Service (gnome-keyring
+# with secret-tool) so the credential store is verified against a real keyring
+# rather than against a description of one.
 FROM golang:1.26-bookworm
 
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
@@ -13,6 +15,9 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       clang \
       make \
       openssh-client \
+      dbus-x11 \
+      gnome-keyring \
+      libsecret-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

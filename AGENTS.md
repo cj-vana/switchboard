@@ -54,6 +54,18 @@ written against a recorded response from a running server, checked into
 its usage chunk *after* `finish_reason`, so a terminal event emitted at
 `finish_reason` reports zero tokens for the turn.
 
+**A credential has no rendering that shows it.** `credential.Secret` keeps its
+value unexported and redacts in `String`, `GoString`, `MarshalJSON`, and
+`MarshalText`, so a secret that reaches a log line, a formatted error, or the
+JSON session record prints as a placeholder. Reading it takes `Expose()`, which
+is deliberately easy to grep for. Do not add a field, an accessor, or a struct
+tag that would let one out by accident.
+
+Secrets go to the platform store over a pipe, never in argv, because every
+process's command line is readable by every user on the machine. Both backends
+have a test that fails if the value appears in a recorded argv; that test is the
+guarantee, not the comment above the code.
+
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by
 prompting (design principle 4, §11).
@@ -104,6 +116,15 @@ verified in a container:
 
 `--privileged` is needed because Docker's kernel blocks the unprivileged user
 namespaces bubblewrap depends on. See `docs/sandbox.md`.
+
+The same image carries a Secret Service, so the Linux credential store is
+verified against a real keyring rather than a description of one:
+
+    docker run --rm -v "$PWD:/src" -w /src sb-linuxdev bash -c '
+      eval "$(dbus-launch --sh-syntax)"; export DBUS_SESSION_BUS_ADDRESS
+      printf "p\n" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1 &
+      sleep 2; SB_LIVE=1 go test ./internal/credential/'
+
 
 Tests must pass without network access or an API key. Provider behavior is
 tested against recorded fixtures served by `httptest`; tests that need a live

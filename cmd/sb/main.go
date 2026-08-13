@@ -52,6 +52,17 @@ type options struct {
 }
 
 func run() error {
+	// A subcommand is dispatched before flag parsing, because `sb auth login`
+	// takes a credential rather than flags and must not be reachable in a form
+	// that puts one on the command line.
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return runAuth(context.Background(), os.Args[2:], cfg)
+	}
+
 	var opts options
 	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
 	flag.StringVar(&opts.tier, "tier", "", "tier to start on, for example t2 (default: the lowest configured tier)")
@@ -106,7 +117,7 @@ func run() error {
 		return err
 	}
 
-	reg := newProviders(opts.host)
+	reg := newProviders(opts.host, cfg)
 
 	sess, tier, client, resumed, err := openSession(ctx, store, reg, cfg, cat, workspace, &opts)
 	if err != nil {
