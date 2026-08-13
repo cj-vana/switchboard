@@ -58,6 +58,19 @@ minimum is accepted by the server and silently does nothing, with no error
 either way, so a logged reason is the only thing separating an expected miss
 from a bug.
 
+**Cache state comes from what the provider reported, never from what was
+sent.** `internal/cachestate` records observations and nothing else. Sending a
+marker is not evidence anything was cached: a marker below the minimum is
+accepted and does nothing, an entry can be evicted early, and a target may
+report nothing at all. All three look identical from the request side.
+
+A write observation and a read observation are different facts, and retention
+is modelled rather than known: providers describe a TTL as a floor, so the
+tracker reports a probability that decays instead of asserting an expiry it
+cannot see. A target with no cache accounting stays Unknown forever, because
+silence is not evidence of a miss and recording one would leave the alarm on
+permanently.
+
 **A capability claim gets tested against the target, not against its docs.**
 Everything the Anthropic adapter asserts was confirmed with a live request
 first: that this model rejects `adaptive` thinking and takes a token budget,
