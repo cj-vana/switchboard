@@ -94,8 +94,23 @@ type file struct {
 // field for the credential itself: §5.3 keeps secrets out of this file, and a
 // key that exists is a key someone pastes a secret into.
 type authEntry struct {
-	Env    string   `toml:"env"`
-	Helper []string `toml:"helper"`
+	Env    string     `toml:"env"`
+	Helper []string   `toml:"helper"`
+	OAuth  oauthEntry `toml:"oauth"`
+}
+
+// oauthEntry configures a login flow. It has a client id and no client secret,
+// because a command-line program cannot keep one: this is a public client and
+// PKCE is what stands in for a secret. A field for one would invite storing it
+// here in the clear, which is the thing §5.3 rules out.
+type oauthEntry struct {
+	ClientID     string            `toml:"client_id"`
+	AuthorizeURL string            `toml:"authorize_url"`
+	TokenURL     string            `toml:"token_url"`
+	Scopes       []string          `toml:"scopes"`
+	Audience     string            `toml:"audience"`
+	RedirectPort int               `toml:"redirect_port"`
+	ExtraParams  map[string]string `toml:"extra_params"`
 }
 
 type tierEntry struct {
@@ -145,7 +160,19 @@ func LoadFile(path string) (*Config, error) {
 		c.Slots[k] = v
 	}
 	for k, v := range f.Auth {
-		c.Auth[k] = credential.Settings{Env: v.Env, Helper: v.Helper}
+		c.Auth[k] = credential.Settings{
+			Env:    v.Env,
+			Helper: v.Helper,
+			OAuth: credential.OAuthSettings{
+				ClientID:        v.OAuth.ClientID,
+				AuthorizeURL:    v.OAuth.AuthorizeURL,
+				TokenURL:        v.OAuth.TokenURL,
+				Scopes:          v.OAuth.Scopes,
+				Audience:        v.OAuth.Audience,
+				RedirectPort:    v.OAuth.RedirectPort,
+				ExtraAuthParams: v.OAuth.ExtraParams,
+			},
+		}
 	}
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err

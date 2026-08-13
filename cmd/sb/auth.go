@@ -15,12 +15,24 @@ import (
 )
 
 const authUsage = `usage:
-  sb auth status                    show where each provider's credential would come from
-  sb auth login <provider>[/<surface>]   store a credential
-  sb auth logout <provider>[/<surface>]  remove a stored credential
+  sb auth status                          show where each provider's credential comes from
+  sb auth login <provider>[/<surface>]    store a credential
+  sb auth logout <provider>[/<surface>]   remove a stored credential
+  sb auth oauth login <provider>[/<surface>]    sign in through a configured OAuth client
+  sb auth oauth logout <provider>[/<surface>]   discard the stored tokens
 
 A credential is read from standard input, so it can be piped in a script and is
-never taken from the command line, where any user on the machine could read it.`
+never taken from the command line, where any user on the machine could read it.
+
+OAuth needs a client you registered yourself. Switchboard ships none, because
+presenting this program to an authorization server under some other program's
+registration is a decision that belongs to whoever runs it:
+
+  [auth.<provider>.oauth]
+  client_id = "..."
+  authorize_url = "https://.../authorize"
+  token_url = "https://.../token"
+  scopes = ["openid", "offline_access"]`
 
 func runAuth(ctx context.Context, args []string, cfg *config.Config) error {
 	if len(args) == 0 {
@@ -39,6 +51,8 @@ func runAuth(ctx context.Context, args []string, cfg *config.Config) error {
 			return errors.New(authUsage)
 		}
 		return authLogout(ctx, args[1])
+	case "oauth":
+		return runOAuth(ctx, args[1:], cfg)
 	default:
 		return fmt.Errorf("unknown auth command %q\n\n%s", args[0], authUsage)
 	}
@@ -224,4 +238,43 @@ func suppressEcho() (restore func(), ok bool) {
 		on.Stdin = os.Stdin
 		_ = on.Run()
 	}, true
+}
+
+func runOAuth(ctx context.Context, args []string, cfg *config.Config) error {
+	if len(args) != 2 {
+		return errors.New(authUsage)
+	}
+	ref, err := parseRef(args[1])
+	if err != nil {
+		return err
+	}
+	store := &credential.OAuthStore{Settings: cfg.AuthFor(ref.Provider).OAuth}
+
+	switch args[0] {
+	case "login":
+		// The URL is printed as well as opened. A machine with no browser can
+		// still complete the flow by pasting it somewhere that has one, and a
+		// user who would rather read a URL before following it can.
+		prompt := func(url string) {
+			fmt.Printf("Opening your browser to sign in to %s.\nIf it does not open, visit:\n\n  %s\n\nWaiting...\n", ref, url)
+		}
+		if err := store.Login(ctx, ref, prompt); err != nil {
+			return err
+		}
+		fmt.Printf("\nsigned in to %s; the tokens are in the %s\n", ref, credential.NewOSStore().Name())
+		return nil
+
+	case "logout":
+		if err := store.Logout(ctx, ref); err != nil {
+			if errors.Is(err, credential.ErrNotFound) {
+				return fmt.Errorf("no stored tokens for %s", ref)
+			}
+			return err
+		}
+		fmt.Printf("discarded the stored tokens for %s\n", ref)
+		return nil
+
+	default:
+		return errors.New(authUsage)
+	}
 }

@@ -252,16 +252,40 @@ func TestReferenceWithoutAProviderIsRejected(t *testing.T) {
 
 // The config file has no field a secret can be written into, which is the
 // mechanism §5.3 relies on rather than a warning in the documentation.
+//
+// Names that merely contain "token" are fine: a token endpoint is a URL. What
+// must not exist is a field that holds a credential value.
 func TestSettingsCannotCarryASecret(t *testing.T) {
-	s := Settings{Env: "SOME_VAR", Helper: []string{"op", "read", "op://vault/item"}}
-	encoded, err := json.Marshal(s)
+	encoded, err := json.Marshal(Settings{
+		Env:    "SOME_VAR",
+		Helper: []string{"op", "read", "op://vault/item"},
+		OAuth:  OAuthSettings{ClientID: "abc", AuthorizeURL: "https://x/authorize", TokenURL: "https://x/token"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"key", "token", "secret", "password"} {
-		if strings.Contains(strings.ToLower(string(encoded)), `"`+forbidden) {
-			t.Errorf("Settings has a %q field: %s", forbidden, encoded)
+	lowered := strings.ToLower(string(encoded))
+
+	for _, forbidden := range []string{
+		"apikey", "api_key", "accesstoken", "access_token",
+		"refreshtoken", "refresh_token", "password", "secret",
+	} {
+		if strings.Contains(lowered, `"`+forbidden) {
+			t.Errorf("Settings has a %q field, which is somewhere a secret can be pasted: %s", forbidden, encoded)
 		}
+	}
+}
+
+// A command-line client cannot keep a client secret, so this flow is a public
+// client and PKCE is what stands in for one. A ClientSecret field would invite
+// exactly the plaintext-in-config storage §5.3 rules out.
+func TestOAuthHasNoClientSecret(t *testing.T) {
+	encoded, err := json.Marshal(OAuthSettings{ClientID: "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(encoded)), "clientsecret") {
+		t.Errorf("OAuthSettings carries a client secret: %s", encoded)
 	}
 }
 

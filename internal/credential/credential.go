@@ -61,6 +61,7 @@ const (
 	SourceEnv      Source = "environment"
 	SourceHelper   Source = "helper"
 	SourceKeychain Source = "os credential service"
+	SourceOAuth    Source = "oauth"
 )
 
 // Secret carries a credential value.

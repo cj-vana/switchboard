@@ -150,6 +150,37 @@ There is no encrypted-file fallback and no plaintext one. A mode 0600 file is
 access control, not encryption, and on a machine with no keyring the honest
 answer is the environment variable or the helper.
 
+### OAuth
+
+A provider that publishes an authorization-code flow can be logged in to
+instead. The tokens go to the same platform store as an API key, under their
+own name so a login cannot overwrite a key, and are refreshed automatically a
+minute before they expire.
+
+```toml
+[auth.<provider>.oauth]
+client_id = "..."
+authorize_url = "https://.../authorize"
+token_url = "https://.../token"
+scopes = ["openid", "offline_access"]
+```
+
+```
+sb auth oauth login <provider>[/<surface>]
+sb auth oauth logout <provider>[/<surface>]
+```
+
+**Switchboard ships no client registration and no client ID.** The flow is
+here; the identity you present to an authorization server is yours to decide
+and to configure. Reusing another program's registration would make every copy
+of this tool claim to be that program, and that is not a default anything
+should ship with.
+
+There is no `client_secret` field either. A command-line program cannot keep a
+secret, so this is a public client and PKCE stands in for one. Adding the field
+would only invite storing a secret in the config file, which is the thing the
+rest of this section exists to prevent.
+
 Inside a session: `/t1` and `/t2` switch tier, `/tiers` shows the ladder, and
 `/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit` do what they say.
 Ctrl-C cancels the current turn and returns you to the prompt; the session
