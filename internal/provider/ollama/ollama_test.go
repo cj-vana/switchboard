@@ -298,6 +298,34 @@ func TestBuildRequestShape(t *testing.T) {
 	}
 }
 
+// Two calls to the same tool in one turn are only distinguishable by ID, so the
+// result messages must carry it.
+func TestBuildRequestCorrelatesRepeatedToolCalls(t *testing.T) {
+	req := provider.Request{Messages: []provider.Message{{
+		Role: provider.RoleTool,
+		Content: []provider.Block{
+			provider.ToolResult{ToolUseID: "call_a", Name: "read", Content: "first file"},
+			provider.ToolResult{ToolUseID: "call_b", Name: "read", Content: "second file"},
+		},
+	}}}
+
+	raw, err := New().buildRequest(Target("m"), req, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got chatRequest
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("got %d messages, want one per result", len(got.Messages))
+	}
+	if got.Messages[0].ToolCallID != "call_a" || got.Messages[1].ToolCallID != "call_b" {
+		t.Errorf("results not correlated by ID: %q and %q",
+			got.Messages[0].ToolCallID, got.Messages[1].ToolCallID)
+	}
+}
+
 func TestBuildRequestReasoningMapping(t *testing.T) {
 	think := func(enabled bool, effort string) any {
 		target := Target("m")

@@ -319,7 +319,12 @@ func toWireMessages(target provider.RouteTarget, m provider.Message) ([]wireMess
 			if !ok {
 				return nil, fmt.Errorf("%s: tool message carries a %s block", Name, b.Kind())
 			}
-			out = append(out, wireMessage{Role: "tool", ToolName: r.Name, Content: r.Content})
+			out = append(out, wireMessage{
+				Role:       "tool",
+				ToolName:   r.Name,
+				ToolCallID: r.ToolUseID,
+				Content:    r.Content,
+			})
 		}
 		return out, nil
 	}

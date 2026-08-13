@@ -282,6 +282,37 @@ func TestLatestAndListOrdering(t *testing.T) {
 	}
 }
 
+// A crash between creating the file and syncing its header leaves a stub that
+// cannot replay. `--continue` must step over it to the last real session rather
+// than failing on a file that never held a conversation.
+func TestHeaderlessStubIsSkipped(t *testing.T) {
+	store, workspace := newStore(t)
+
+	real, err := store.Create(workspace, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := real.AppendMessage(provider.UserText("keep me")); err != nil {
+		t.Fatal(err)
+	}
+	realID := real.ID()
+	real.Close()
+
+	stub := filepath.Join(filepath.Dir(real.Path()), "20991231T235959-deadbeef.log")
+	if err := os.WriteFile(stub, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	latest, err := store.Latest(workspace)
+	if err != nil {
+		t.Fatalf("a headerless stub must not break --continue: %v", err)
+	}
+	defer latest.Close()
+	if latest.ID() != realID {
+		t.Errorf("resumed %s, want the last real session %s", latest.ID(), realID)
+	}
+}
+
 func TestLatestWithNoSessions(t *testing.T) {
 	store, workspace := newStore(t)
 	if _, err := store.Latest(workspace); !errors.Is(err, ErrNoSessions) {

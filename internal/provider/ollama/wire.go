@@ -23,6 +23,10 @@ type wireMessage struct {
 	Images    []string       `json:"images,omitempty"`
 	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
 	ToolName  string         `json:"tool_name,omitempty"`
+
+	// ToolCallID disambiguates two calls to the same tool in one turn, which
+	// tool_name alone cannot.
+	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 type wireToolCall struct {

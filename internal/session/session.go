@@ -189,6 +189,12 @@ func (s *Store) List(workspace string) ([]Info, error) {
 		if err != nil {
 			continue
 		}
+		// A crash between creating the file and syncing its header leaves a stub
+		// that cannot be replayed. Skipping it keeps `--continue` from resuming
+		// into a parse failure on a session that never held anything.
+		if !hasValidHeader(filepath.Join(s.root, workspaceKey(workspace), e.Name())) {
+			continue
+		}
 		infos = append(infos, Info{
 			ID:       strings.TrimSuffix(e.Name(), ".log"),
 			Path:     filepath.Join(s.root, workspaceKey(workspace), e.Name()),
@@ -198,6 +204,16 @@ func (s *Store) List(workspace string) ([]Info, error) {
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Modified.After(infos[j].Modified) })
 	return infos, nil
+}
+
+func hasValidHeader(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	line, err := bufio.NewReader(f).ReadString('\n')
+	return err == nil && strings.HasPrefix(line, magic+" ")
 }
 
 func openPath(path string) (*Session, error) {
