@@ -32,8 +32,27 @@ executes tool calls only on that stop reason, so an adapter reporting
 session with no results, and every later request built from it is malformed.
 The Ollama adapter derives the stop reason from whether calls were emitted
 rather than trusting the server's `done_reason`, precisely because the server
-reports `"stop"` on a turn that ended in a call. Check this first when adding a
-provider.
+reports `"stop"` on a turn that ended in a call. The OpenAI-compatible adapter
+does the same, for the same reason. Check this first when adding a provider.
+
+**A serving surface is part of target identity, not a label on it.** The same
+model reached through a different endpoint is a different target: different
+adapter, different capability evidence, different catalog entry, different
+price. `openaicompat/ollama/qwen3.5:9b-mlx` and `ollama/local/qwen3.5:9b-mlx`
+are the same weights and are not interchangeable to the router.
+
+For the OpenAI-compatible adapter the profile name *is* the surface, because a
+profile is a claim about one server's behavior. There is no default: `New` on
+an unknown profile is an error rather than a fall back to the generic floor,
+since a typo would otherwise quietly disable the capabilities the user asked
+for. A profile nobody has run against a real server does not belong in the map.
+
+**Wire formats get captured before they get mapped.** Both adapters were
+written against a recorded response from a running server, checked into
+`testdata/`. Both captures contradicted the documentation: Ollama reports
+`done_reason: "stop"` on tool-call turns, and the compatibility endpoint sends
+its usage chunk *after* `finish_reason`, so a terminal event emitted at
+`finish_reason` reports zero tokens for the turn.
 
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by

@@ -15,7 +15,6 @@ import (
 	"github.com/cjvana/switchboard/internal/config"
 	"github.com/cjvana/switchboard/internal/execution"
 	"github.com/cjvana/switchboard/internal/permission"
-	"github.com/cjvana/switchboard/internal/provider/ollama"
 	"github.com/cjvana/switchboard/internal/session"
 )
 
@@ -26,10 +25,10 @@ type repl struct {
 	capability execution.Capability
 	workspace  string
 
-	config  *config.Config
-	catalog *catalog.Catalog
-	tier    config.Tier
-	client  *ollama.Client
+	config    *config.Config
+	catalog   *catalog.Catalog
+	tier      config.Tier
+	providers *providers
 }
 
 func (r *repl) banner(sess *session.Session, resumed bool) {
@@ -239,7 +238,7 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 		return
 	}
 
-	probed, err := probeTier(ctx, r.client, tier)
+	probed, client, err := r.providers.probeTier(ctx, tier)
 	if err != nil {
 		r.out.Notice("error", err.Error())
 		return
@@ -247,6 +246,8 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 
 	r.tier = probed
 	r.loop.Target = probed.Target
+	// A tier may cross providers, so the adapter moves with the target.
+	r.loop.Provider = client
 	r.out.line("  now on " + r.tierLine())
 
 	// Cache state is scoped to a target, so a switch abandons whatever was warm

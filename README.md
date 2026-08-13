@@ -17,14 +17,14 @@ attacked, and it is ahead of the code.
 **Phase 0 complete; phase 1 in progress.** What exists is the agent loop and
 the machinery under it (canonical provider types, an Ollama adapter, a
 crash-safe session log, the four core tools, the permission model, verified
-sandboxing on macOS and Linux, a plain REPL), plus the first three pieces of
-phase 1: a versioned target catalog with price bands and cache mechanics,
-manual tiers, and observed cost accounting.
+sandboxing on macOS and Linux, a plain REPL), plus four pieces of phase 1: a
+versioned target catalog with price bands and cache mechanics, manual tiers,
+observed cost accounting, and an OpenAI-compatible adapter.
 
-Still ahead in phase 1: an OpenAI-compatible adapter, credential storage, and
-the exit-gate measurement. Then the cache and breakpoint machinery, the router,
-the eval harness, MCP, hooks, the Bubble Tea interface, and telemetry. **The
-routing this is named for does not exist yet** — tiers are selected by hand.
+Still ahead in phase 1: credential storage and the exit-gate measurement. Then
+the cache and breakpoint machinery, the router, the eval harness, MCP, hooks,
+the Bubble Tea interface, and telemetry. **The routing this is named for does
+not exist yet** - tiers are selected by hand.
 
 ## Running it
 
@@ -52,6 +52,23 @@ label = "deep"
 model = "ollama/qwen3.6:27b-mtp-q4_K_M"
 effort = "high"
 ```
+
+A tier can also bind a model through an OpenAI-compatible endpoint. The surface
+names the profile, and there is no default: price, cache behavior, and which
+capabilities are real all differ per server, so guessing one would attach the
+wrong catalog entry.
+
+```toml
+[tiers.t3]
+label = "compat"
+model = "openaicompat/qwen3.5:9b-mlx"
+surface = "ollama"
+```
+
+The same model reached two ways is two targets, with two catalog entries and
+two costs. That is the point rather than an inconvenience: the compatibility
+format discards cache breakpoints and reports no per-model capabilities, so
+what it can promise is a property of the route, not of the model.
 
 ```
 sb                         start on the lowest tier

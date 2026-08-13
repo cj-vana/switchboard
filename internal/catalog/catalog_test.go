@@ -81,6 +81,35 @@ func TestUnknownModelFallsBackToSurfacePrior(t *testing.T) {
 	}
 }
 
+// One model served two ways is two targets. They price the same today because
+// both are free, but they are reached by different adapters with different
+// capability evidence, so collapsing them would attach one surface's catalog
+// entry to the other's traffic.
+func TestCompatibilityEndpointIsItsOwnTarget(t *testing.T) {
+	c := load(t)
+	const model = "qwen3.5:9b-mlx"
+	native := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: model}
+	compat := provider.RouteTarget{Provider: "openaicompat", Surface: "ollama", ModelID: model}
+
+	if native.ID() == compat.ID() {
+		t.Fatal("the same model through two adapters produced one target id")
+	}
+
+	info, confidence, ok := c.Lookup(compat)
+	if !ok {
+		t.Fatal("the openaicompat/ollama surface has no default entry, so a tier binding it cannot be priced")
+	}
+	if confidence != Prior {
+		t.Errorf("confidence = %s, want prior", confidence)
+	}
+	if !info.Free() {
+		t.Error("a local model costs nothing however it is reached")
+	}
+	if info.Cache.UsageAccounting != AccountingNone {
+		t.Error("this endpoint never populates prompt_tokens_details, so no cache accounting can be claimed")
+	}
+}
+
 func TestUnknownProviderIsNotInvented(t *testing.T) {
 	c := load(t)
 	_, _, ok := c.Lookup(provider.RouteTarget{Provider: "acme", Surface: "cloud", ModelID: "x"})

@@ -58,6 +58,58 @@ source_urls = ["https://github.com/ollama/ollama/blob/main/docs/api.md"]
   usage_accounting = "none"
 
 # --------------------------------------------------------------------------
+# The same local models, reached through Ollama's OpenAI-compatible endpoint.
+#
+# This is a second surface for models the surface above already serves, and it
+# is deliberately its own catalog entry rather than an alias. The format
+# discards things the native API carries, so the two are not interchangeable and
+# a target on one is not a target on the other.
+#
+# What the compatibility format costs, measured against a recorded capture of
+# this exact endpoint rather than against the format's documentation:
+#
+#   - Tool arguments arrive as an escaped JSON string assembled from fragments,
+#     so a call is only known to be well formed once the choice finishes.
+#   - Reasoning has no agreed field name; this server sends "reasoning" and
+#     others send "reasoning_content".
+#   - Per-model capabilities are not reported at all. The native surface probes
+#     them; here they come from the profile, which is a claim about the server
+#     rather than an observation of the model.
+# --------------------------------------------------------------------------
+
+[[surface_default]]
+provider = "openaicompat"
+surface = "ollama"
+display_name = "local model (OpenAI-compatible endpoint)"
+context_window = 0        # the format reports nothing; unknown means unknown
+max_output = 0
+tools = "parallel"
+vision = false
+reasoning = "adaptive"
+effort_levels = ["low", "medium", "high", "max"]
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://github.com/ollama/ollama/blob/main/docs/openai.md"]
+
+  [[surface_default.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "0"
+  output_per_mtok = "0"
+  cache_read_per_mtok = "0"
+
+  # The format has a place to report cached prompt tokens, under
+  # prompt_tokens_details.cached_tokens, and this server never populates it.
+  # The adapter reads the field because a paid server will send it; the catalog
+  # records that here it stays absent, so no cache accounting can be claimed.
+  [surface_default.cache]
+  modes = ["none"]
+  default_mode = "none"
+  min_tokens = 0
+  max_breakpoints = 0
+  lookback_blocks = 0
+  routing_key_support = false
+  usage_accounting = "none"
+
+# --------------------------------------------------------------------------
 # Anthropic, first-party API.
 #
 # No adapter binds these yet; they are here so the pricing and cache mechanics

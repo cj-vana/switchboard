@@ -84,6 +84,11 @@ func normalizeHost(raw string) string {
 
 func (c *Client) Name() string { return Name }
 
+// BaseURL reports the resolved server address, so a caller that reaches the
+// same server through a different protocol does not have to redo the
+// environment and flag precedence this client already settled.
+func (c *Client) BaseURL() string { return c.baseURL }
+
 // Target builds a RouteTarget for a model served by this client.
 func Target(model string) provider.RouteTarget {
 	return provider.RouteTarget{Provider: Name, Surface: SurfaceLocal, ModelID: model}
