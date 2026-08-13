@@ -287,7 +287,7 @@ func (c *Client) buildRequest(target provider.RouteTarget, req provider.Request,
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		out.Tools = append(out.Tools, wireTool{
-			Type: "function",
+			Type:     "function",
 			Function: wireToolFunc{Name: t.Name, Description: t.Description, Parameters: schema},
 		})
 	}
@@ -387,4 +387,3 @@ func blocksText(blocks []provider.Block) string {
 	}
 	return b.String()
 }
-
