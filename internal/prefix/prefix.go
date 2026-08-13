@@ -310,6 +310,116 @@ func (l *Layout) Request() provider.Request {
 	}
 }
 
+// Boundary is the last position of a zone in the rendered request, with the
+// prefix length it covers.
+//
+// The breakpoint manager needs both and can derive neither: only the layout
+// knows how its zones become messages, and a marker placed from a guess at that
+// caches a different prefix than the one that was scored.
+type Boundary struct {
+	Zone     Zone
+	Position provider.CachePosition
+
+	// TokensBefore estimates everything from the start of the request through
+	// this position. It decides whether a target's minimum is met, so it counts
+	// the prefix rather than the zone.
+	TokensBefore int
+}
+
+// Boundaries reports zone ends in prefix order, which is the order a provider
+// reads them: tools, then the system prompt, then the stable documents, then
+// history. A boundary is omitted when its zone is empty, because a marker on
+// nothing caches nothing.
+func (l *Layout) Boundaries() []Boundary {
+	req := l.Request()
+	var out []Boundary
+	running := 0
+
+	for i, t := range l.tools {
+		running += (len(t.Name) + len(t.Description) + len(t.Schema)) / 4
+		if i == len(l.tools)-1 {
+			out = append(out, Boundary{
+				Zone:         Frozen,
+				Position:     provider.CachePosition{MessageIndex: provider.ToolDefinitions, BlockIndex: i},
+				TokensBefore: running,
+			})
+		}
+	}
+	for i, b := range l.system {
+		running += blockTokens(b)
+		if i == len(l.system)-1 {
+			out = append(out, Boundary{
+				Zone:         Frozen,
+				Position:     provider.CachePosition{MessageIndex: provider.SystemBlocks, BlockIndex: i},
+				TokensBefore: running,
+			})
+		}
+	}
+
+	// Messages carry the stable zone first when it has anything, then history,
+	// then the tail. The tail is deliberately not a boundary: it is rewritten
+	// every turn, so a marker on it would never be reused.
+	stableMessages := 0
+	if len(l.documents) > 0 {
+		stableMessages = 2
+	}
+	historyEnd := stableMessages + len(l.history)
+
+	for i, m := range req.Messages {
+		if i >= historyEnd {
+			break // the tail
+		}
+		for _, b := range m.Content {
+			running += blockTokens(b)
+		}
+		last := len(m.Content) - 1
+		if last < 0 {
+			continue
+		}
+		switch {
+		case stableMessages > 0 && i == stableMessages-1:
+			out = append(out, Boundary{
+				Zone:         Stable,
+				Position:     provider.CachePosition{MessageIndex: i, BlockIndex: last},
+				TokensBefore: running,
+			})
+		case i == historyEnd-1:
+			out = append(out, Boundary{
+				Zone:         History,
+				Position:     provider.CachePosition{MessageIndex: i, BlockIndex: last},
+				TokensBefore: running,
+			})
+		}
+	}
+	return out
+}
+
+// HistoryBlocks counts blocks in the history zone. A target searches back only
+// so far for a reusable prefix, so this is what a growing turn is measured
+// against.
+func (l *Layout) HistoryBlocks() int {
+	n := 0
+	for _, m := range l.history {
+		n += len(m.Content)
+	}
+	return n
+}
+
+func blockTokens(b provider.Block) int {
+	switch v := b.(type) {
+	case provider.Text:
+		return len(v.Text) / 4
+	case provider.Thinking:
+		return (len(v.Text) + len(v.Signature)) / 4
+	case provider.ToolUse:
+		return (len(v.Name) + len(v.Input)) / 4
+	case provider.ToolResult:
+		return (len(v.Name) + len(v.Content)) / 4
+	default:
+		return 0
+	}
+}
+
 // PrefixHash fingerprints everything above the tail.
 //
 // The cache tracker keys on this: a prefix that hashes the same is one the

@@ -47,6 +47,17 @@ an unknown profile is an error rather than a fall back to the generic floor,
 since a typo would otherwise quietly disable the capabilities the user asked
 for. A profile nobody has run against a real server does not belong in the map.
 
+**One component owns cache-marker placement.** `internal/breakpoint` decides
+where markers go and whether to place any at all, because the four reachable
+surfaces want four different things: explicit markers with a limit and a
+minimum, a routing key, nothing at all, and no cache whatsoever. Spread that
+across call sites and each one grows its own wrong assumption.
+
+A declined marker is recorded rather than dropped. A marker below a target's
+minimum is accepted by the server and silently does nothing, with no error
+either way, so a logged reason is the only thing separating an expected miss
+from a bug.
+
 **A capability claim gets tested against the target, not against its docs.**
 Everything the Anthropic adapter asserts was confirmed with a live request
 first: that this model rejects `adaptive` thinking and takes a token budget,
