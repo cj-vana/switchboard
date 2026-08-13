@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjvana/switchboard/internal/config"
 	"github.com/cjvana/switchboard/internal/credential"
+	"github.com/cjvana/switchboard/internal/provider/openai"
 )
 
 const authUsage = `usage:
@@ -248,7 +249,11 @@ func runOAuth(ctx context.Context, args []string, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	store := &credential.OAuthStore{Settings: cfg.AuthFor(ref.Provider).OAuth}
+	settings := cfg.AuthFor(ref.Provider).OAuth
+	if settings.ClientID == "" && ref.Provider == openai.Name {
+		settings = openai.DefaultOAuth(ref.Account)
+	}
+	store := &credential.OAuthStore{Settings: settings}
 
 	switch args[0] {
 	case "login":

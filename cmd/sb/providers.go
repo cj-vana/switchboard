@@ -27,9 +27,9 @@ type providers struct {
 	// capabilities, so they cannot share a client.
 	compat map[string]*openaicompat.Client
 
-	// openai is its own provider rather than a compat profile, so it gets its
-	// own client, its own credential, and its own catalog entry.
-	openai *openaicompat.Client
+	// openai is keyed by surface: the developer API and the subscription
+	// backend are different endpoints with different credentials.
+	openai map[string]*openaicompat.Client
 
 	anthropic *anthropic.Client
 
@@ -40,6 +40,7 @@ func newProviders(host string, cfg *config.Config) *providers {
 	return &providers{
 		ollama: ollama.New(ollama.WithBaseURL(host)),
 		compat: map[string]*openaicompat.Client{},
+		openai: map[string]*openaicompat.Client{},
 		config: cfg,
 	}
 }
@@ -69,8 +70,8 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		return p.anthropic, nil
 
 	case openai.Name:
-		if p.openai != nil {
-			return p.openai, nil
+		if c, ok := p.openai[target.Surface]; ok {
+			return c, nil
 		}
 		opts, err := p.authOptions(target)
 		if err != nil {
@@ -79,8 +80,9 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if base := p.baseURL(openai.Name); base != "" {
 			opts = append(opts, openaicompat.WithBaseURL(base))
 		}
-		p.openai = openai.New(opts...)
-		return p.openai, nil
+		c := openai.New(target.Surface, opts...)
+		p.openai[target.Surface] = c
+		return c, nil
 
 	case openaicompat.Name:
 		if c, ok := p.compat[target.Surface]; ok {
@@ -129,7 +131,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 // That message gets written against a real 401 rather than a guess at one.
 func (p *providers) credential(target provider.RouteTarget) (string, error) {
 	ref := credential.Ref{Provider: target.Provider, Account: target.Surface}
-	resolver := credential.Chain(p.config.AuthFor(target.Provider))
+	resolver := credential.Chain(authSettings(p.config, target))
 
 	secret, err := resolver.Get(context.Background(), ref)
 	if err != nil {
@@ -154,6 +156,25 @@ func (p *providers) authOptions(target provider.RouteTarget) ([]openaicompat.Opt
 		return nil, err
 	}
 	return []openaicompat.Option{openaicompat.WithAPIKey(key)}, nil
+}
+
+// authSettings resolves the auth configuration for a target, filling in a
+// bundled OAuth client where one exists and the user has not named their own.
+//
+// Configuration always wins. A user who registers their own client and writes
+// it down uses theirs, and the bundled one is only what makes a surface work
+// without any configuration at all.
+func authSettings(cfg *config.Config, target provider.RouteTarget) credential.Settings {
+	settings := cfg.AuthFor(target.Provider)
+	if settings.OAuth.ClientID != "" {
+		return settings
+	}
+	if target.Provider == openai.Name {
+		if bundled := openai.DefaultOAuth(target.Surface); bundled.ClientID != "" {
+			settings.OAuth = bundled
+		}
+	}
+	return settings
 }
 
 // servedByOllama reports whether a target reaches an Ollama server, whether

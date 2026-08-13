@@ -26,7 +26,7 @@ func TestIdentityIsNotTheCompatibleAdapter(t *testing.T) {
 
 	// The credential is looked up by provider and surface, so the identity
 	// above is what decides which key pays for the request.
-	if got := New().Name(); got != Name {
+	if got := New(FirstParty).Name(); got != Name {
 		t.Errorf("client reports provider %q, so its errors and its credential would be attributed to the wrong vendor", got)
 	}
 }
@@ -39,7 +39,7 @@ func TestUntestedCapabilitiesAreRefusedNotDropped(t *testing.T) {
 	target := Target("gpt-5-mini")
 	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
 
-	_, err := New().Stream(context.Background(), target, provider.Request{
+	_, err := New(FirstParty).Stream(context.Background(), target, provider.Request{
 		Messages: []provider.Message{provider.UserText("hello")},
 	})
 
@@ -52,7 +52,7 @@ func TestUntestedCapabilitiesAreRefusedNotDropped(t *testing.T) {
 // A cache plan cannot be rendered into this format at all, so a non-nil plan is
 // an error rather than a request sent without the markers the caller asked for.
 func TestCachePlanIsRefused(t *testing.T) {
-	_, err := New().Stream(context.Background(), Target("gpt-5-mini"), provider.Request{
+	_, err := New(FirstParty).Stream(context.Background(), Target("gpt-5-mini"), provider.Request{
 		Messages:  []provider.Message{provider.UserText("hello")},
 		CachePlan: &provider.CachePlan{Breakpoints: []provider.Breakpoint{{}}},
 	})
@@ -60,5 +60,33 @@ func TestCachePlanIsRefused(t *testing.T) {
 	var capErr *provider.CapabilityError
 	if !errors.As(err, &capErr) {
 		t.Fatalf("err = %v, want a CapabilityError", err)
+	}
+}
+
+// The developer API and the subscription backend are different endpoints, with
+// different credentials and different billing. Collapsing them would attach one
+// surface's price sheet and one surface's token to the other's traffic.
+func TestTheTwoSurfacesAreDifferentTargets(t *testing.T) {
+	api := Target("gpt-5")
+	sub := SubscriptionTarget("gpt-5")
+
+	if api.ID() == sub.ID() {
+		t.Fatal("the same model on two surfaces produced one target id")
+	}
+	if DefaultBaseURL(FirstParty) == DefaultBaseURL(Subscription) {
+		t.Error("both surfaces resolved to the same endpoint")
+	}
+}
+
+// The subscription surface ships a login client so it works without
+// configuration; the developer API takes a key and has no flow to offer.
+func TestBundledOAuthOnlyAppliesToTheSubscriptionSurface(t *testing.T) {
+	if got := DefaultOAuth(Subscription); got.ClientID == "" {
+		t.Error("the subscription surface has no bundled client, so a login would need configuration")
+	} else if got.AuthorizeURL == "" || got.TokenURL == "" {
+		t.Errorf("the bundled client is incomplete: %+v", got)
+	}
+	if got := DefaultOAuth(FirstParty); got.ClientID != "" {
+		t.Error("the developer API offered a login flow; it takes an API key")
 	}
 }

@@ -185,16 +185,38 @@ sb auth oauth login <provider>[/<surface>]
 sb auth oauth logout <provider>[/<surface>]
 ```
 
-**Switchboard ships no client registration and no client ID.** The flow is
-here; the identity you present to an authorization server is yours to decide
-and to configure. Reusing another program's registration would make every copy
-of this tool claim to be that program, and that is not a default anything
-should ship with.
+There is no `client_secret` field. A command-line program cannot keep a secret,
+so this is a public client and PKCE stands in for one. Adding the field would
+only invite storing a secret in the config file, which is the thing the rest of
+this section exists to prevent.
 
-There is no `client_secret` field either. A command-line program cannot keep a
-secret, so this is a public client and PKCE stands in for one. Adding the field
-would only invite storing a secret in the config file, which is the thing the
-rest of this section exists to prevent.
+### Using a ChatGPT plan
+
+`openai/subscription` reaches the backend behind a ChatGPT plan with an OAuth
+token instead of the developer API with a key. It is a separate serving surface
+because it is a separate endpoint, a separate credential, and a flat
+subscription rather than per-token billing.
+
+```toml
+[tiers.t2]
+model = "openai/gpt-5"
+surface = "subscription"
+```
+
+```
+sb auth oauth login openai/subscription
+```
+
+**Read this before using it.** The OAuth client this presents is the one
+OpenAI's own Codex CLI registers. Switchboard is not affiliated with or endorsed
+by OpenAI, and this is not a flow OpenAI publishes for third-party clients: it
+works because the authorization server accepts that registration, not because
+anyone granted permission to use it. OpenAI's Terms of Use govern your account
+whatever a program claims to be, and accounts have been actioned for this. The
+risk is yours and it is not hypothetical.
+
+A client you register yourself always wins. Anything under
+`[auth.openai.oauth]` overrides the bundled one.
 
 Inside a session: `/t1` and `/t2` switch tier, `/tiers` shows the ladder, and
 `/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit` do what they say.
