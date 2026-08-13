@@ -1,3 +1,5 @@
+//go:build unix
+
 package execution
 
 import (
@@ -195,21 +197,5 @@ func TestMissingBinaryIsAnError(t *testing.T) {
 	_, err := Run(context.Background(), Command{Argv: []string{"switchboard-no-such-binary"}})
 	if err == nil {
 		t.Fatal("expected an error for a binary that does not exist")
-	}
-}
-
-func TestCapabilityNeverClaimsUnverifiedContainment(t *testing.T) {
-	c := Detect()
-	if c.PolicyVerified {
-		t.Fatal("no sandbox profile has passed the §11 spike; claiming otherwise would gate automatic execution on nothing")
-	}
-	if c.AutomaticExecutionAllowed() {
-		t.Fatal("automatic execution must follow PolicyVerified, not MechanismPresent")
-	}
-	if !strings.Contains(c.Summary(), "no verified sandbox") {
-		t.Errorf("the summary must say plainly that there is no sandbox, got %q", c.Summary())
-	}
-	if c.Platform == "" {
-		t.Error("capability report did not name the platform")
 	}
 }

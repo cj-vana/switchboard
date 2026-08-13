@@ -26,6 +26,15 @@ what the request asked for, the adapter returns a typed error. Emulating the
 missing capability is a decision for a visible policy layer, not something an
 adapter does quietly (§5.2).
 
+**An adapter that emits tool-use blocks must report `StopToolUse`.** The loop
+executes tool calls only on that stop reason, so an adapter reporting
+`end_turn` or `max_tokens` alongside tool-use blocks leaves those calls in the
+session with no results, and every later request built from it is malformed.
+The Ollama adapter derives the stop reason from whether calls were emitted
+rather than trusting the server's `done_reason`, precisely because the server
+reports `"stop"` on a turn that ended in a call. Check this first when adding a
+provider.
+
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by
 prompting. `execution.Capability` separates "the mechanism exists" from "we have
@@ -53,6 +62,14 @@ breakpoint machinery, tiers and routing, MCP, hooks, the TUI, telemetry, and the
     go build ./...
     go vet ./...
     go test ./...
+
+Platform-specific files carry build tags that a host-only build never
+exercises, so check the other targets before claiming a change is portable:
+
+    GOOS=windows GOARCH=amd64 go vet ./...
+    GOOS=linux GOARCH=amd64 go vet ./...
+
+Tests that drive a POSIX shell or signal a process group are tagged `unix`.
 
 Tests must pass without network access or an API key. Provider behavior is
 tested against recorded fixtures served by `httptest`; tests that need a live
