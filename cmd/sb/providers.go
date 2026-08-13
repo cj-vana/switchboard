@@ -8,6 +8,7 @@ import (
 	"github.com/cjvana/switchboard/internal/config"
 	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cjvana/switchboard/internal/provider/anthropic"
 	"github.com/cjvana/switchboard/internal/provider/ollama"
 	"github.com/cjvana/switchboard/internal/provider/openai"
 	"github.com/cjvana/switchboard/internal/provider/openaicompat"
@@ -30,6 +31,8 @@ type providers struct {
 	// own client, its own credential, and its own catalog entry.
 	openai *openaicompat.Client
 
+	anthropic *anthropic.Client
+
 	config *config.Config
 }
 
@@ -45,6 +48,17 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 	switch target.Provider {
 	case ollama.Name:
 		return p.ollama, nil
+
+	case anthropic.Name:
+		if p.anthropic != nil {
+			return p.anthropic, nil
+		}
+		key, err := p.credential(target)
+		if err != nil {
+			return nil, err
+		}
+		p.anthropic = anthropic.New(anthropic.WithAPIKey(key))
+		return p.anthropic, nil
 
 	case openai.Name:
 		if p.openai != nil {
@@ -83,8 +97,8 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 	}
 
 	return nil, fmt.Errorf(
-		"target %s names provider %q; this build has adapters for %s, %s, and %s",
-		target.ID(), target.Provider, ollama.Name, openai.Name, openaicompat.Name)
+		"target %s names provider %q; this build has adapters for %s, %s, %s, and %s",
+		target.ID(), target.Provider, anthropic.Name, ollama.Name, openai.Name, openaicompat.Name)
 }
 
 // authOptions resolves the credential for a target, if there is one to find.
@@ -99,24 +113,33 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 // Turning a rejection into "you have no credential" needs a server that can
 // actually issue one, and this build has no adapter that reaches such a server.
 // That message gets written against a real 401 rather than a guess at one.
-//
-// It returns openaicompat options because both adapters that need a credential
-// are built on that client.
-func (p *providers) authOptions(target provider.RouteTarget) ([]openaicompat.Option, error) {
+func (p *providers) credential(target provider.RouteTarget) (string, error) {
 	ref := credential.Ref{Provider: target.Provider, Account: target.Surface}
 	resolver := credential.Chain(p.config.AuthFor(target.Provider))
 
 	secret, err := resolver.Get(context.Background(), ref)
 	if err != nil {
 		if errors.Is(err, credential.ErrNotFound) {
-			return nil, nil
+			return "", nil
 		}
 		// A configured helper that is present and broken is the user's problem
 		// to fix, and starting without the key it would have supplied only
 		// moves the failure somewhere less legible.
+		return "", err
+	}
+	// Exposed at the point of use and handed straight to the adapter, which is
+	// the only place a credential is meant to be a plain string.
+	return secret.Expose(), nil
+}
+
+// authOptions adapts credential resolution for the two adapters built on the
+// OpenAI-compatible client.
+func (p *providers) authOptions(target provider.RouteTarget) ([]openaicompat.Option, error) {
+	key, err := p.credential(target)
+	if err != nil || key == "" {
 		return nil, err
 	}
-	return []openaicompat.Option{openaicompat.WithAPIKey(secret.Expose())}, nil
+	return []openaicompat.Option{openaicompat.WithAPIKey(key)}, nil
 }
 
 // servedByOllama reports whether a target reaches an Ollama server, whether

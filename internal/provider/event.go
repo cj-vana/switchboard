@@ -33,6 +33,18 @@ type Event struct {
 	ToolUse    *ToolUse
 	StopReason StopReason
 	Usage      Usage
+
+	// Signature is an opaque, provider-issued attestation over a thinking
+	// block. It is carried on the thinking deltas of the block at Index and has
+	// to survive into the assembled message, because a target that issues one
+	// verifies it on replay: Anthropic rejects a thinking block returned with a
+	// missing or altered signature outright, which would break the second
+	// request of every tool-use turn that had reasoning enabled.
+	//
+	// Dropping the whole thinking block is allowed and replaying it unsigned is
+	// not, so this is the difference between preserving reasoning across a tool
+	// call and discarding it.
+	Signature string
 }
 
 // Usage is reported by the provider after the fact. Cache read and write counts

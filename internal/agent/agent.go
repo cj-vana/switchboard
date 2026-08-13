@@ -218,6 +218,7 @@ func (l *Loop) streamOnce(ctx context.Context, req provider.Request) (provider.M
 		switch ev.Type {
 		case provider.EventThinkingDelta:
 			b.delta(ev.Index, provider.KindThinking, ev.Text)
+			b.sign(ev.Index, ev.Signature)
 			l.observer().ThinkingDelta(ev.Text)
 		case provider.EventTextDelta:
 			b.delta(ev.Index, provider.KindText, ev.Text)
@@ -360,9 +361,10 @@ type messageBuilder struct {
 }
 
 type blockAccum struct {
-	kind provider.BlockKind
-	text strings.Builder
-	use  provider.ToolUse
+	kind      provider.BlockKind
+	text      strings.Builder
+	use       provider.ToolUse
+	signature string
 }
 
 func (b *messageBuilder) accum(index int, kind provider.BlockKind) *blockAccum {
@@ -382,6 +384,16 @@ func (b *messageBuilder) delta(index int, kind provider.BlockKind, text string) 
 	b.accum(index, kind).text.WriteString(text)
 }
 
+// sign records the attestation a target issued over a thinking block. It
+// arrives on its own event rather than with the text, because the signature
+// covers the finished block and is only known once the block closes.
+func (b *messageBuilder) sign(index int, signature string) {
+	if signature == "" {
+		return
+	}
+	b.accum(index, provider.KindThinking).signature = signature
+}
+
 func (b *messageBuilder) toolUse(index int, use provider.ToolUse) {
 	b.accum(index, provider.KindToolUse).use = use
 }
@@ -392,7 +404,7 @@ func (b *messageBuilder) message() provider.Message {
 		a := b.byIndex[i]
 		switch a.kind {
 		case provider.KindThinking:
-			msg.Content = append(msg.Content, provider.Thinking{Text: a.text.String()})
+			msg.Content = append(msg.Content, provider.Thinking{Text: a.text.String(), Signature: a.signature})
 		case provider.KindText:
 			msg.Content = append(msg.Content, provider.Text{Text: a.text.String()})
 		case provider.KindToolUse:

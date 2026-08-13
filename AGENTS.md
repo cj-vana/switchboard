@@ -47,6 +47,14 @@ an unknown profile is an error rather than a fall back to the generic floor,
 since a typo would otherwise quietly disable the capabilities the user asked
 for. A profile nobody has run against a real server does not belong in the map.
 
+**A capability claim gets tested against the target, not against its docs.**
+Everything the Anthropic adapter asserts was confirmed with a live request
+first: that this model rejects `adaptive` thinking and takes a token budget,
+that the one-hour cache TTL needs no beta header and bills to its own bucket,
+that replaying a thinking block without its signature is refused while dropping
+the block is accepted, and that a tool result is a user message because there is
+no tool role. Each of those contradicted a reasonable guess.
+
 **Wire formats get captured before they get mapped.** Both adapters were
 written against a recorded response from a running server, checked into
 `testdata/`. Both captures contradicted the documentation: Ollama reports

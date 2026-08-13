@@ -25,8 +25,14 @@ The phase-1 exit gate has been run rather than described. Identical tasks
 complete on both pinned targets, and the token estimator's error is measured
 and written down in [docs/estimator.md](docs/estimator.md): it undercounts by
 18 to 24 percent, always in that direction, and worse as a conversation grows.
-Cost reconciliation stays unexercised, because every target this build can
-reach is free.
+Cost reconciliation was unexercised at the time, because every target this
+build could then reach was free.
+
+Phase 2a is underway. The Anthropic adapter is the target the cache work needs:
+it is the first one here that can render a cache plan, and the first that
+reports cache writes and reads as separate observations rather than not at all.
+It is also the first whose token count is exact, because that API will answer
+the question rather than leaving it to be estimated.
 
 Next: the cache and breakpoint machinery, the router, the eval harness, MCP,
 hooks, the Bubble Tea interface, and telemetry. **The routing this is named for

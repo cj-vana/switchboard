@@ -43,12 +43,20 @@ type Breakpoint struct {
 	TTL      time.Duration
 }
 
-// CachePosition addresses a canonical location. MessageIndex of -1 addresses
-// the system block list; -2 addresses the tool definitions.
+// CachePosition addresses a canonical location.
 type CachePosition struct {
 	MessageIndex int
 	BlockIndex   int
 }
+
+// SystemBlocks and ToolDefinitions are the two positions that are not messages.
+// They are named because an adapter reading a bare -2 has to guess, and a
+// breakpoint placed one position off caches a different prefix than the one
+// whose reuse was scored.
+const (
+	SystemBlocks    = -1
+	ToolDefinitions = -2
+)
 
 type Provider interface {
 	Name() string
