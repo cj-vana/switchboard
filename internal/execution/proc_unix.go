@@ -44,6 +44,15 @@ func terminateGroup(cmd *exec.Cmd, grace time.Duration) {
 		case <-poll.C:
 			// Signal 0 tests for the group's existence without delivering
 			// anything, so a group that exited on SIGTERM is never SIGKILLed.
+			//
+			// A group holds its pgid until its last member is reaped, not until
+			// it dies, so this early return depends on something reaping. Every
+			// real deployment has that: the direct child is reaped by the Wait
+			// already running in Run, and orphaned descendants reparent to the
+			// platform's init. Where nothing reaps, which means this process is
+			// pid 1 in a container, the loop simply waits out the grace period
+			// and sends a harmless SIGKILL to corpses. That costs latency on a
+			// timeout, never correctness.
 			if err := syscall.Kill(pgid, 0); err != nil {
 				return
 			}

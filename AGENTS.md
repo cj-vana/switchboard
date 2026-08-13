@@ -112,23 +112,23 @@ The Linux confinement cannot be exercised from macOS, so changes to it are
 verified in a container:
 
     docker build -f Dockerfile.linuxdev -t sb-linuxdev .
-    docker run --rm --init --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
+    docker run --rm --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
 
 `--privileged` is needed because Docker's kernel blocks the unprivileged user
 namespaces bubblewrap depends on. See `docs/sandbox.md`.
 
-`--init` is needed for a subtler reason, and dropping it produces a failure that
-looks like a real one. Without an init process to reap orphans, a descendant the
-runner has already killed stays a zombie, and the liveness probe that
-`TestTimeoutKillsDescendants` uses -- signal 0, which asks whether a pid exists
--- keeps succeeding against it. The test then reports that the process group was
-never signalled when in fact it was. If that test fails, check the flag before
-reading the kill path.
+**A pid that exists is not a process that is running.** Signal 0 asks only
+whether the kernel still has an entry, and it keeps one for a zombie until
+something reaps it. In a container with no init process nothing does, so a
+descendant the runner killed correctly answers "still here" forever. Any test
+that probes for a surviving process has to read its state, not just its pid;
+`processIsRunning` in `runner_test.go` is the one that does, and it is why the
+container loop above needs no `--init`.
 
 The same image carries a Secret Service, so the Linux credential store is
 verified against a real keyring rather than a description of one:
 
-    docker run --rm --init -v "$PWD:/src" -w /src sb-linuxdev bash -c '
+    docker run --rm -v "$PWD:/src" -w /src sb-linuxdev bash -c '
       eval "$(dbus-launch --sh-syntax)"; export DBUS_SESSION_BUS_ADDRESS
       printf "p\n" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1 &
       sleep 2; SB_LIVE=1 go test ./internal/credential/'

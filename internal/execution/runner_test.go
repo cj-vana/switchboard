@@ -5,7 +5,9 @@ package execution
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -105,20 +107,66 @@ func TestTimeoutKillsDescendants(t *testing.T) {
 		t.Fatalf("parsing grandchild pid from %q: %v", rest, err)
 	}
 
-	// Signal 0 asks whether the process exists without delivering anything. It
-	// cannot tell a live process from a zombie, so this needs something to reap
-	// orphans: in a container without an init process the killed grandchild
-	// lingers, the probe keeps succeeding, and the failure reads as a leak that
-	// is not there. See AGENTS.md on `--init`.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
+		if !processIsRunning(t, pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	syscall.Kill(pid, syscall.SIGKILL)
 	t.Errorf("grandchild %d survived the timeout: the group was not signalled", pid)
+}
+
+// processIsRunning reports whether pid names a process that is still executing.
+//
+// Signal 0 alone cannot answer that. It asks whether the pid exists, and a
+// zombie exists: the kernel keeps the entry until someone reaps it. Where
+// nothing does, which is any container running without an init process, a
+// descendant the runner killed correctly answers "still here" forever, and a
+// working kill path reports itself broken. Diagnosing that from the failure
+// message costs an hour, because every word of it is about process groups and
+// none of the problem is.
+func processIsRunning(t *testing.T, pid int) bool {
+	t.Helper()
+	if err := syscall.Kill(pid, 0); err != nil {
+		return false
+	}
+	if runtime.GOOS != "linux" {
+		// Elsewhere the platform's init reaps promptly and a test binary cannot
+		// be pid 1, so an existing pid is a running one.
+		return true
+	}
+
+	state, ok := procState(pid)
+	if !ok {
+		// The pid exists but its state could not be read, which is the race
+		// between the two reads rather than an answer. Reporting it as running
+		// keeps a probe that measured nothing from passing the test.
+		return true
+	}
+	return state != 'Z'
+}
+
+// procState reads the run state from /proc/<pid>/stat.
+//
+// The parse starts from the last close paren rather than splitting on spaces,
+// because the second field is the executable name in parens and may itself
+// contain spaces and parens.
+func procState(pid int) (byte, bool) {
+	body, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return 0, false
+	}
+	end := strings.LastIndexByte(string(body), ')')
+	if end < 0 {
+		return 0, false
+	}
+	rest := strings.TrimLeft(string(body[end+1:]), " ")
+	if rest == "" {
+		return 0, false
+	}
+	return rest[0], true
 }
 
 func TestCancellationReturnsContextError(t *testing.T) {

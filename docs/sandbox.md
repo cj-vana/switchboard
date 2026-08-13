@@ -250,7 +250,7 @@ The Linux path was developed and verified in a container:
 
 ```
 docker build -f Dockerfile.linuxdev -t sb-linuxdev .
-docker run --rm --init --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
+docker run --rm --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
 ```
 
 `--privileged` is required because Docker Desktop's kernel does not allow
