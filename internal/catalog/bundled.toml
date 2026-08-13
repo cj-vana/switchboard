@@ -1,0 +1,200 @@
+# Switchboard bundled target catalog.
+#
+# This file is vendored at build time so the tool works offline and on first
+# run. It is data, not code: a correction here does not need a binary release.
+#
+# Every price below was read from a primary source on the date in its
+# `verified_at` field. Provider documentation is versioned by editing in place,
+# so these URLs will keep resolving and will stop describing what was read.
+# Assume drift rather than agreement, and re-verify before trusting a number
+# for anything that matters.
+#
+# Known simplification: Claude Sonnet 5 carries an introductory rate of
+# $2/$10 per MTok through 2026-08-31, which is not modelled here because a
+# price band has a start date but no expiry. Estimates for that model are
+# therefore high until the introductory period ends. Over-estimating is the
+# safe direction for a budget, which enforces against worst-reasonable cost.
+
+revision = "2026-08-13"
+
+# --------------------------------------------------------------------------
+# Local models.
+#
+# Ollama serves whatever the user has pulled, so the catalog cannot enumerate
+# them. This default carries what holds for everything on the surface and the
+# probe fills in the rest.
+# --------------------------------------------------------------------------
+
+[[surface_default]]
+provider = "ollama"
+surface = "local"
+display_name = "local model"
+context_window = 0        # unknown until probed
+max_output = 0
+tools = "parallel"
+vision = false
+reasoning = "adaptive"
+effort_levels = ["low", "medium", "high", "max"]
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://github.com/ollama/ollama/blob/main/docs/api.md"]
+
+  # Running locally costs no money. It also costs the router its evidence:
+  # Ollama reuses its KV cache across requests and reports nothing about it,
+  # so a target on this surface cannot exercise the section 6 cache economics
+  # no matter how the prefix is arranged.
+  [[surface_default.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "0"
+  output_per_mtok = "0"
+  cache_read_per_mtok = "0"
+
+  [surface_default.cache]
+  modes = ["none"]
+  default_mode = "none"
+  min_tokens = 0
+  max_breakpoints = 0
+  lookback_blocks = 0
+  routing_key_support = false
+  usage_accounting = "none"
+
+# --------------------------------------------------------------------------
+# Anthropic, first-party API.
+#
+# No adapter binds these yet; they are here so the pricing and cache mechanics
+# the router needs are data rather than something to invent later. The
+# minimum cacheable prefix is the field most worth reading twice: it is not
+# monotonic across generations, so a 3,000-token prefix caches on Opus 5 and
+# silently does not on Haiku 4.5, with no error in either direction.
+# --------------------------------------------------------------------------
+
+[[model]]
+provider = "anthropic"
+surface = "first-party"
+provider_model_id = "claude-opus-5"
+display_name = "Claude Opus 5"
+context_window = 1000000
+max_output = 128000
+tools = "parallel"
+strict_schema = true
+vision = true
+reasoning = "adaptive"
+effort_levels = ["low", "medium", "high", "xhigh", "max"]
+structured_out = true
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://platform.claude.com/docs/en/about-claude/models/overview"]
+
+  [[model.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "5.00"
+  output_per_mtok = "25.00"
+  cache_read_per_mtok = "0.50"
+  cache_write_per_mtok = { "5m" = "6.25", "1h" = "10.00" }
+
+  [model.cache]
+  modes = ["explicit"]
+  default_mode = "explicit"
+  min_tokens = 512
+  ttls = ["5m", "1h"]
+  max_breakpoints = 4
+  lookback_blocks = 20
+  routing_key_support = false
+  usage_accounting = "separate"
+
+[[model]]
+provider = "anthropic"
+surface = "first-party"
+provider_model_id = "claude-opus-4-8"
+display_name = "Claude Opus 4.8"
+context_window = 1000000
+max_output = 128000
+tools = "parallel"
+strict_schema = true
+vision = true
+reasoning = "adaptive"
+effort_levels = ["low", "medium", "high", "xhigh", "max"]
+structured_out = true
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://platform.claude.com/docs/en/about-claude/models/overview"]
+
+  [[model.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "5.00"
+  output_per_mtok = "25.00"
+  cache_read_per_mtok = "0.50"
+  cache_write_per_mtok = { "5m" = "6.25", "1h" = "10.00" }
+
+  [model.cache]
+  modes = ["explicit"]
+  default_mode = "explicit"
+  min_tokens = 1024
+  ttls = ["5m", "1h"]
+  max_breakpoints = 4
+  lookback_blocks = 20
+  routing_key_support = false
+  usage_accounting = "separate"
+
+[[model]]
+provider = "anthropic"
+surface = "first-party"
+provider_model_id = "claude-sonnet-5"
+display_name = "Claude Sonnet 5"
+context_window = 1000000
+max_output = 128000
+tools = "parallel"
+strict_schema = true
+vision = true
+reasoning = "adaptive"
+effort_levels = ["low", "medium", "high", "xhigh", "max"]
+structured_out = true
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://platform.claude.com/docs/en/about-claude/models/overview"]
+
+  [[model.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "3.00"
+  output_per_mtok = "15.00"
+  cache_read_per_mtok = "0.30"
+  cache_write_per_mtok = { "5m" = "3.75", "1h" = "6.00" }
+
+  [model.cache]
+  modes = ["explicit"]
+  default_mode = "explicit"
+  min_tokens = 1024
+  ttls = ["5m", "1h"]
+  max_breakpoints = 4
+  lookback_blocks = 20
+  routing_key_support = false
+  usage_accounting = "separate"
+
+[[model]]
+provider = "anthropic"
+surface = "first-party"
+provider_model_id = "claude-haiku-4-5"
+display_name = "Claude Haiku 4.5"
+snapshot = "claude-haiku-4-5-20251001"
+context_window = 200000
+max_output = 64000
+tools = "parallel"
+strict_schema = true
+vision = true
+reasoning = "budget"
+structured_out = true
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://platform.claude.com/docs/en/about-claude/models/overview"]
+
+  [[model.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "1.00"
+  output_per_mtok = "5.00"
+  cache_read_per_mtok = "0.10"
+  cache_write_per_mtok = { "5m" = "1.25", "1h" = "2.00" }
+
+  [model.cache]
+  modes = ["explicit"]
+  default_mode = "explicit"
+  min_tokens = 4096
+  ttls = ["5m", "1h"]
+  max_breakpoints = 4
+  lookback_blocks = 20
+  routing_key_support = false
+  usage_accounting = "separate"
