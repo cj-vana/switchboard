@@ -44,6 +44,11 @@ func newProviders(host string, cfg *config.Config) *providers {
 	}
 }
 
+// baseURL is the configured address for a provider, or empty for its default.
+func (p *providers) baseURL(name string) string {
+	return p.config.ProviderFor(name).BaseURL
+}
+
 func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) {
 	switch target.Provider {
 	case ollama.Name:
@@ -57,7 +62,10 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if err != nil {
 			return nil, err
 		}
-		p.anthropic = anthropic.New(anthropic.WithAPIKey(key))
+		p.anthropic = anthropic.New(
+			anthropic.WithAPIKey(key),
+			anthropic.WithBaseURL(p.baseURL(anthropic.Name)),
+		)
 		return p.anthropic, nil
 
 	case openai.Name:
@@ -67,6 +75,9 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		opts, err := p.authOptions(target)
 		if err != nil {
 			return nil, err
+		}
+		if base := p.baseURL(openai.Name); base != "" {
+			opts = append(opts, openaicompat.WithBaseURL(base))
 		}
 		p.openai = openai.New(opts...)
 		return p.openai, nil
@@ -79,7 +90,10 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if err != nil {
 			return nil, err
 		}
-		if target.Surface == "ollama" {
+		switch {
+		case p.baseURL(openaicompat.Name) != "":
+			opts = append(opts, openaicompat.WithBaseURL(p.baseURL(openaicompat.Name)))
+		case target.Surface == "ollama":
 			// The same server, reached through its compatibility endpoint. The
 			// host was already resolved from the flag and the environment for
 			// the native adapter; resolving it twice invites the two to

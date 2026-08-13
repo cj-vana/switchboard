@@ -200,3 +200,38 @@ func TestTooManyTiers(t *testing.T) {
 		t.Errorf("more than %d tiers should be rejected", MaxTiers)
 	}
 }
+
+// A provider reached at another address is still that provider: a gateway, an
+// Azure deployment, or a proxy does not change which credential pays or which
+// catalog entry prices it.
+func TestProviderBaseURLOverride(t *testing.T) {
+	path := write(t, `
+[tiers.t1]
+model = "openai/some-model"
+
+[providers.openai]
+base_url = "https://gateway.example.com/v1"
+`)
+	c, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ProviderFor("openai").BaseURL; got != "https://gateway.example.com/v1" {
+		t.Errorf("base url = %q", got)
+	}
+	if got := c.ProviderFor("anthropic").BaseURL; got != "" {
+		t.Errorf("an unconfigured provider reported %q rather than falling back to its default", got)
+	}
+
+	t1, _ := c.Tier("t1")
+	if t1.Target.Provider != "openai" || t1.Target.Surface != "first-party" {
+		t.Errorf("the override changed target identity: %+v", t1.Target)
+	}
+}
+
+func TestUnrecognizedProviderKeyIsRejected(t *testing.T) {
+	path := write(t, "[providers.openai]\nbase_urls = \"typo\"\n")
+	if _, err := LoadFile(path); err == nil {
+		t.Error("a misspelled provider key must be an error, not silently ignored")
+	}
+}

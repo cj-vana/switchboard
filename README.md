@@ -150,6 +150,21 @@ There is no encrypted-file fallback and no plaintext one. A mode 0600 file is
 access control, not encryption, and on a machine with no keyring the honest
 answer is the environment variable or the helper.
 
+### Pointing a provider somewhere else
+
+A provider can be reached at a different address without becoming a different
+provider. A gateway, an Azure deployment, a corporate egress proxy, and a
+self-hosted endpoint all need this.
+
+```toml
+[providers.openai]
+base_url = "https://gateway.example.com/v1"
+```
+
+This does not change target identity: the credential and the catalog entry
+still follow the provider name, so redirecting somewhere that prices
+differently is you asserting you know that.
+
 ### OAuth
 
 A provider that publishes an authorization-code flow can be logged in to

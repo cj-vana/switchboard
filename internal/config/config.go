@@ -55,7 +55,20 @@ type Config struct {
 	// Auth is keyed by provider name.
 	Auth map[string]credential.Settings
 
+	// Providers holds per-provider endpoint overrides, keyed by provider name.
+	Providers map[string]ProviderSettings
+
 	Path string
+}
+
+type ProviderSettings struct {
+	BaseURL string
+}
+
+// ProviderFor returns the settings for a provider, which is the zero value when
+// none are configured: every adapter has a default address.
+func (c *Config) ProviderFor(name string) ProviderSettings {
+	return c.Providers[name]
 }
 
 // AuthFor returns the credential settings for a provider, which is the zero
@@ -85,9 +98,23 @@ func (c *Config) Tier(id string) (Tier, bool) {
 }
 
 type file struct {
-	Tiers map[string]tierEntry `toml:"tiers"`
-	Slots map[string]string    `toml:"slots"`
-	Auth  map[string]authEntry `toml:"auth"`
+	Tiers     map[string]tierEntry     `toml:"tiers"`
+	Slots     map[string]string        `toml:"slots"`
+	Auth      map[string]authEntry     `toml:"auth"`
+	Providers map[string]providerEntry `toml:"providers"`
+}
+
+// providerEntry redirects a provider at a different endpoint. A gateway, an
+// Azure deployment, a self-hosted proxy, and a corporate egress point all need
+// this, and hardcoding one address per vendor would make every one of them a
+// code change.
+//
+// It does not change target identity. A provider reached at another address is
+// still that provider as far as the catalog and the credential are concerned,
+// so redirecting to something that prices differently is the user asserting
+// they know that.
+type providerEntry struct {
+	BaseURL string `toml:"base_url"`
 }
 
 // authEntry configures where a provider's credential comes from. It carries no
@@ -125,13 +152,22 @@ type tierEntry struct {
 func Load() (*Config, error) {
 	path, err := Path()
 	if err != nil {
-		return &Config{Slots: map[string]string{}, Auth: map[string]credential.Settings{}}, nil
+		return &Config{
+			Slots:     map[string]string{},
+			Auth:      map[string]credential.Settings{},
+			Providers: map[string]ProviderSettings{},
+		}, nil
 	}
 	return LoadFile(path)
 }
 
 func LoadFile(path string) (*Config, error) {
-	c := &Config{Slots: map[string]string{}, Auth: map[string]credential.Settings{}, Path: path}
+	c := &Config{
+		Slots:     map[string]string{},
+		Auth:      map[string]credential.Settings{},
+		Providers: map[string]ProviderSettings{},
+		Path:      path,
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -173,6 +209,9 @@ func LoadFile(path string) (*Config, error) {
 				ExtraAuthParams: v.OAuth.ExtraParams,
 			},
 		}
+	}
+	for k, v := range f.Providers {
+		c.Providers[k] = ProviderSettings{BaseURL: v.BaseURL}
 	}
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err

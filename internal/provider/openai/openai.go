@@ -51,6 +51,11 @@ func New(opts ...openaicompat.Option) *openaicompat.Client {
 	return openaicompat.NewFor(Surface, profile, opts...)
 }
 
+// DefaultBaseURL is where this provider is reached unless configuration says
+// otherwise. It is exported so a caller can tell whether an override is in
+// effect without knowing the address.
+const DefaultBaseURL = "https://api.openai.com/v1"
+
 func Target(model string) provider.RouteTarget {
 	return provider.RouteTarget{Provider: Name, Surface: Surface, ModelID: model}
 }
