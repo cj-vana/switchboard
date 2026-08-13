@@ -70,6 +70,12 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		return p.anthropic, nil
 
 	case openai.Name:
+		if target.Surface == openai.Subscription {
+			// Reachable and authenticated, but this endpoint does not speak the
+			// format this adapter sends. Saying so beats a decode failure on an
+			// HTML error page.
+			return nil, fmt.Errorf("%w\n%s", openai.ErrSubscriptionNeedsResponsesAPI, openai.SubscriptionNotes)
+		}
 		if c, ok := p.openai[target.Surface]; ok {
 			return c, nil
 		}

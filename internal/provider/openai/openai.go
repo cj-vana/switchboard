@@ -12,6 +12,8 @@
 package openai
 
 import (
+	"errors"
+
 	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/provider/openaicompat"
@@ -84,6 +86,11 @@ var profiles = map[string]openaicompat.Profile{
 
 // New builds a client for a serving surface. An unknown surface falls back to
 // the developer API, which is the one that behaves like the documented format.
+//
+// Subscription is not served here. Signing in to it works and the token is
+// good, but the endpoint behind it does not speak this format, which was
+// established by asking it: /chat/completions returns an HTML error page, while
+// /responses answers semantically. See SubscriptionNotes.
 func New(surface string, opts ...openaicompat.Option) *openaicompat.Client {
 	profile, ok := profiles[surface]
 	if !ok {
@@ -92,6 +99,41 @@ func New(surface string, opts ...openaicompat.Option) *openaicompat.Client {
 	}
 	return openaicompat.NewFor(surface, profile, opts...)
 }
+
+// ErrSubscriptionNeedsResponsesAPI reports that this surface is reachable and
+// authenticated but has no adapter yet.
+//
+// It is an error rather than a best effort because the alternative is sending a
+// chat-completions body to an endpoint that answers HTML, and "unexpected end
+// of JSON input" tells a user nothing about what to do.
+var ErrSubscriptionNeedsResponsesAPI = errors.New(
+	"openai/subscription speaks the Responses API, which this build has no adapter for yet.\n" +
+		"Signing in works and the token is valid; what is missing is the wire format.\n" +
+		"Use openai/first-party with an API key, or anthropic/first-party, until it exists")
+
+// SubscriptionNotes records what the endpoint actually wants, captured from it
+// rather than from documentation, so the adapter can be written from facts.
+//
+// The cache surface is the reason this is worth building: it reports written
+// and cached tokens separately, and unlike any other target here it accepts a
+// caller-supplied cache routing key with a stated retention. §6.2 wants exactly
+// that affinity key and no target has offered one before.
+const SubscriptionNotes = `
+  endpoint   POST /backend-api/codex/responses?client_version=<x.y.z>
+             a version below some floor returns an empty model list rather
+             than an error, which reads as "no models" instead of "too old"
+  discovery  GET /backend-api/codex/models?client_version=<x.y.z>
+             returns slugs with per-model capabilities: input modalities,
+             verbosity support, and tool shapes
+  body       input is a list of typed message objects, not a string
+             store must be false or the request is refused
+  stream     Responses API SSE: response.created, response.output_text.delta,
+             response.output_item.done, response.completed
+  usage      input_tokens, output_tokens, and separately
+             input_tokens_details.{cached_tokens, cache_write_tokens},
+             plus output_tokens_details.reasoning_tokens
+  cache      prompt_cache_key is a caller-supplied routing key and
+             prompt_cache_retention was 24h`
 
 // DefaultBaseURL reports where a surface is reached before any configured
 // override, so a caller can tell whether one is in effect without knowing the
