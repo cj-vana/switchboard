@@ -15,6 +15,7 @@ import (
 	"github.com/cjvana/switchboard/internal/config"
 	"github.com/cjvana/switchboard/internal/execution"
 	"github.com/cjvana/switchboard/internal/permission"
+	route "github.com/cjvana/switchboard/internal/router"
 	"github.com/cjvana/switchboard/internal/session"
 )
 
@@ -29,6 +30,11 @@ type repl struct {
 	catalog   *catalog.Catalog
 	tier      config.Tier
 	providers *providers
+
+	// route is what chose the starting target, when a router chose it. §8.1
+	// renders this rather than logging it, because principle 3 requires the
+	// user can see why.
+	route *route.Decision
 }
 
 func (r *repl) banner(sess *session.Session, resumed bool) {
@@ -39,6 +45,11 @@ func (r *repl) banner(sess *session.Session, resumed bool) {
 	r.out.line(r.out.style(dim, "  mode       "+string(r.loop.Perms.Mode())))
 	r.out.line(r.out.style(dim, "  sandbox    "+r.capability.Summary()))
 	r.out.line(r.out.style(dim, "  catalog    "+r.catalog.Revision+" ("+r.catalog.Source+")"))
+	if r.route != nil {
+		for _, line := range describeRoute(*r.route) {
+			r.out.line(r.out.style(dim, line))
+		}
+	}
 
 	if resumed {
 		r.out.line(r.out.style(dim, fmt.Sprintf("  session    %s, resumed with %d messages",

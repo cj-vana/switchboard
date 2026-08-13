@@ -23,6 +23,7 @@ import (
 	"github.com/cjvana/switchboard/internal/permission"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/provider/ollama"
+	route "github.com/cjvana/switchboard/internal/router"
 	"github.com/cjvana/switchboard/internal/session"
 	"github.com/cjvana/switchboard/internal/tools"
 )
@@ -119,7 +120,8 @@ func run() error {
 
 	reg := newProviders(opts.host, cfg)
 
-	sess, tier, client, resumed, err := openSession(ctx, store, reg, cfg, cat, workspace, &opts)
+	var chosen route.Decision
+	sess, tier, client, resumed, err := openSession(ctx, store, reg, cfg, cat, workspace, &opts, &chosen)
 	if err != nil {
 		return err
 	}
@@ -158,6 +160,9 @@ func run() error {
 		tier:       tier,
 		providers:  reg,
 	}
+	if chosen.Source != "" {
+		r.route = &chosen
+	}
 	r.banner(sess, resumed)
 
 	if opts.prompt != "" {
@@ -177,6 +182,7 @@ func openSession(
 	cat *catalog.Catalog,
 	workspace string,
 	opts *options,
+	chosen *route.Decision,
 ) (*session.Session, config.Tier, provider.Provider, bool, error) {
 	var (
 		sess *session.Session
@@ -191,7 +197,7 @@ func openSession(
 			err = fmt.Errorf("no session to continue in %s", workspace)
 		}
 	default:
-		tier, client, buildErr := resolveTier(ctx, reg, cfg, opts, "")
+		tier, client, buildErr := resolveTier(ctx, reg, cfg, cat, opts, "", chosen)
 		if buildErr != nil {
 			return nil, config.Tier{}, nil, false, buildErr
 		}
@@ -203,7 +209,7 @@ func openSession(
 		return nil, config.Tier{}, nil, false, err
 	}
 
-	tier, client, err := resolveTier(ctx, reg, cfg, opts, sess.State().Target)
+	tier, client, err := resolveTier(ctx, reg, cfg, cat, opts, sess.State().Target, chosen)
 	if err != nil {
 		sess.Close()
 		return nil, config.Tier{}, nil, false, err
@@ -214,7 +220,7 @@ func openSession(
 // resolveTier picks the starting target. An explicit model wins, then an
 // explicit tier, then the target a resumed session recorded, then the bottom of
 // the ladder.
-func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, opts *options, recorded string) (config.Tier, provider.Provider, error) {
+func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *catalog.Catalog, opts *options, recorded string, chosen *route.Decision) (config.Tier, provider.Provider, error) {
 	switch {
 	case opts.model != "":
 		target := ollama.Target(opts.model)
@@ -243,9 +249,27 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, opts *
 		return reg.probeTier(ctx, config.Tier{ID: "-resumed", Label: "resumed", Target: target})
 	}
 
-	tier, ok := cfg.Default()
-	if !ok {
+	if len(cfg.Tiers) == 0 {
 		return config.Tier{}, nil, noTargetError(ctx, reg.ollama, cfg)
+	}
+
+	// Nothing was pinned, so the router picks. With no prompt yet this is the
+	// opening choice only, which §8.3 says is worth less than the mid-task
+	// adjustments; it exists so the ladder is entered deliberately rather than
+	// by taking the bottom rung on principle.
+	decision, err := route.Heuristic{}.Route(route.Input{
+		Prompt:       opts.prompt,
+		Candidates:   candidatesFor(cfg, cat, nil, 0),
+		Requirements: route.Requirements{NeedsTools: true},
+	})
+	if err != nil {
+		return config.Tier{}, nil, err
+	}
+	*chosen = decision
+
+	tier, ok := cfg.Tier(decision.Tier)
+	if !ok {
+		return config.Tier{}, nil, fmt.Errorf("the router chose %q, which is not on the ladder", decision.Tier)
 	}
 	applyEffort(&tier.Target, opts.think)
 	return reg.probeTier(ctx, tier)

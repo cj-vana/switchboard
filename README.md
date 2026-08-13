@@ -34,8 +34,19 @@ reports cache writes and reads as separate observations rather than not at all.
 It is also the first whose token count is exact, because that API will answer
 the question rather than leaving it to be estimated.
 
-Next: the cache and breakpoint machinery, the router, the eval harness, MCP,
-hooks, the Bubble Tea interface, and telemetry. **The routing this is named for
+Phase 2a is built: context zones, the breakpoint manager, the cache tracker,
+the cost model, and the heuristic router with a sticky primary. `sb` now picks a
+tier and tells you why, and a tier you name still wins.
+
+**The routing is rules, not a model, and that is the design's own sequencing.**
+§8.2 defines every classifier dimension by a measurement against an eval corpus
+that phase 2b builds, states the null hypothesis that a task profile loses to a
+plain scalar, and gates a learned router on beating heuristics once runtime and
+distribution costs are counted. Running the heuristic is what produces the
+evidence to settle it.
+
+Next: the eval harness and the §7.1 falsification gate, then MCP, hooks, the
+Bubble Tea interface, and telemetry. **The routing this is named for
 does not exist yet** - tiers are selected by hand.
 
 ## Running it
