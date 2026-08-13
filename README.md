@@ -14,17 +14,23 @@ attacked, and it is ahead of the code.
 
 ## Status
 
-**Phase 0 complete; phase 1 in progress.** What exists is the agent loop and
-the machinery under it (canonical provider types, an Ollama adapter, a
-crash-safe session log, the four core tools, the permission model, verified
-sandboxing on macOS and Linux, a plain REPL), plus five pieces of phase 1: a
-versioned target catalog with price bands and cache mechanics, manual tiers,
-observed cost accounting, and an OpenAI-compatible adapter.
+**Phases 0 and 1 complete.** What exists is the agent loop and the machinery
+under it (canonical provider types, a crash-safe session log, the four core
+tools, the permission model, verified sandboxing on macOS and Linux, a plain
+REPL), plus all of phase 1: a versioned target catalog with price bands and
+cache mechanics, manual tiers, observed cost accounting, two adapters that
+reach the same model over different wire formats, and credential storage.
 
-Still ahead in phase 1: credential storage and the exit-gate measurement. Then
-the cache and breakpoint machinery, the router, the eval harness, MCP, hooks,
-the Bubble Tea interface, and telemetry. **The routing this is named for does
-not exist yet** - tiers are selected by hand.
+The phase-1 exit gate has been run rather than described. Identical tasks
+complete on both pinned targets, and the token estimator's error is measured
+and written down in [docs/estimator.md](docs/estimator.md): it undercounts by
+18 to 24 percent, always in that direction, and worse as a conversation grows.
+Cost reconciliation stays unexercised, because every target this build can
+reach is free.
+
+Next: the cache and breakpoint machinery, the router, the eval harness, MCP,
+hooks, the Bubble Tea interface, and telemetry. **The routing this is named for
+does not exist yet** - tiers are selected by hand.
 
 ## Running it
 

@@ -126,6 +126,17 @@ verified against a real keyring rather than a description of one:
       sleep 2; SB_LIVE=1 go test ./internal/credential/'
 
 
+The phase-1 exit gate lives in `internal/gate` and is run, not described:
+
+    SB_LIVE=1 go test ./internal/gate/ -run TestExitGate -v -timeout 40m
+
+It runs the same corpus on both pinned targets and measures the token estimator
+against what each server reported. Its companion,
+`TestEstimatorStaysWithinTheDocumentedBound`, defends the numbers in
+`docs/estimator.md`; if a change to the system prompt, the tool schemas, or the
+estimator moves the ratio, that test fails and the document is what has to be
+updated. Do not widen the band to make it pass.
+
 Tests must pass without network access or an API key. Provider behavior is
 tested against recorded fixtures served by `httptest`; tests that need a live
 model are guarded by `SB_LIVE=1` and skipped otherwise.
