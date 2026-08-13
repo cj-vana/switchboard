@@ -140,6 +140,26 @@ func blockChars(b provider.Block) int {
 	}
 }
 
+// Models lists what this server has pulled, so the CLI can name real choices
+// instead of telling the user their model was not found.
+func (c *Client) Models(ctx context.Context) ([]string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var tags tagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return nil, &provider.ProtocolError{Provider: Name, Detail: "decoding /api/tags", Err: err}
+	}
+	names := make([]string, 0, len(tags.Models))
+	for _, m := range tags.Models {
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
 func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provider.ProbeResult, error) {
 	var res provider.ProbeResult
 
