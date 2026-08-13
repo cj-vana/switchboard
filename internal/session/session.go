@@ -66,6 +66,14 @@ type State struct {
 
 	Usage provider.Usage
 	Calls int
+
+	// CostMicroUSD totals what the catalog priced this session at. It is an
+	// estimate and a reconciliation aid, never a substitute for the provider's
+	// invoice (§15).
+	CostMicroUSD int64
+
+	// CatalogRevision is the revision the session started against.
+	CatalogRevision string
 }
 
 type Session struct {
@@ -81,7 +89,10 @@ type Session struct {
 	truncated int64
 }
 
-func (s *Store) Create(workspace string, target provider.RouteTargetID) (*Session, error) {
+// Create starts a session. catalogRevision pins the price and capability data
+// in force, so a cost recorded in this log stays checkable against the data
+// that produced it rather than whatever is current when it is read back.
+func (s *Store) Create(workspace string, target provider.RouteTargetID, catalogRevision string) (*Session, error) {
 	workspace, err := filepath.Abs(workspace)
 	if err != nil {
 		return nil, err
@@ -115,17 +126,19 @@ func (s *Store) Create(workspace string, target provider.RouteTargetID) (*Sessio
 		f:    f,
 		path: path,
 		state: State{
-			ID:        id,
-			Workspace: workspace,
-			Target:    string(target),
-			CreatedAt: time.Now().UTC(),
+			ID:              id,
+			Workspace:       workspace,
+			Target:          string(target),
+			CatalogRevision: catalogRevision,
+			CreatedAt:       time.Now().UTC(),
 		},
 	}
 	err = sess.append(RecordSessionStart, SessionStart{
-		ID:        id,
-		Workspace: workspace,
-		Target:    string(target),
-		Binary:    binaryVersion(),
+		ID:              id,
+		Workspace:       workspace,
+		Target:          string(target),
+		Binary:          binaryVersion(),
+		CatalogRevision: catalogRevision,
 	})
 	if err != nil {
 		sess.Close()
@@ -298,6 +311,7 @@ func (s *Session) apply(rec Record) error {
 		s.state.ID = p.ID
 		s.state.Workspace = p.Workspace
 		s.state.Target = p.Target
+		s.state.CatalogRevision = p.CatalogRevision
 		s.state.CreatedAt = rec.At
 	case RecordMessage:
 		var m provider.Message
@@ -311,6 +325,7 @@ func (s *Session) apply(rec Record) error {
 			return err
 		}
 		s.state.Usage = s.state.Usage.Add(p.Usage)
+		s.state.CostMicroUSD += p.CostMicroUSD
 		s.state.Calls++
 	case RecordPermission, RecordNote:
 		// Recorded for audit; they carry no conversation state.
@@ -361,6 +376,7 @@ func (s *Session) AppendUsage(u Usage) error {
 		return err
 	}
 	s.state.Usage = s.state.Usage.Add(u.Usage)
+	s.state.CostMicroUSD += u.CostMicroUSD
 	s.state.Calls++
 	return nil
 }

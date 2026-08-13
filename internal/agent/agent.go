@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjvana/switchboard/internal/catalog"
 	"github.com/cjvana/switchboard/internal/permission"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/session"
@@ -46,9 +47,35 @@ type Loop struct {
 	Session  *session.Session
 	Observer Observer
 
+	// Catalog prices what each call cost. Nil means costs are not recorded,
+	// which is different from recording them as zero.
+	Catalog *catalog.Catalog
+
 	System        []provider.Block
 	MaxToolRounds int
 	MaxAttempts   int
+}
+
+// price attaches what the catalog says this call cost, along with the revision
+// and confidence that produced the number. A cost with neither is not
+// reproducible, and one derived from a surface default is shape rather than
+// fact (§4, §15).
+func (l *Loop) price(record session.Usage) session.Usage {
+	if l.Catalog == nil {
+		return record
+	}
+	info, confidence, ok := l.Catalog.Lookup(l.Target)
+	if !ok {
+		return record
+	}
+	cost, _, priced := info.Cost(record.Usage)
+	if !priced {
+		return record
+	}
+	record.CostMicroUSD = int64(cost)
+	record.CatalogRevision = l.Catalog.Revision
+	record.PriceConfidence = string(confidence)
+	return record
 }
 
 func (l *Loop) observer() Observer {
@@ -89,11 +116,11 @@ func (l *Loop) Turn(ctx context.Context, input string) error {
 		if err := l.Session.AppendMessage(msg); err != nil {
 			return err
 		}
-		record := session.Usage{
+		record := l.price(session.Usage{
 			Target:   string(l.Target.ID()),
 			Usage:    usage,
 			Attempts: attempts,
-		}
+		})
 		if err := l.Session.AppendUsage(record); err != nil {
 			return err
 		}

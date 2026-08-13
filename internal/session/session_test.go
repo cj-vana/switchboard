@@ -27,7 +27,7 @@ func newStore(t *testing.T) (*Store, string) {
 func TestReplayReconstructsState(t *testing.T) {
 	store, workspace := newStore(t)
 
-	sess, err := store.Create(workspace, "ollama/local/qwen3.5:9b-mlx")
+	sess, err := store.Create(workspace, "ollama/local/qwen3.5:9b-mlx", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestReplayReconstructsState(t *testing.T) {
 func TestTornFinalWriteRecovers(t *testing.T) {
 	store, workspace := newStore(t)
 
-	sess, err := store.Create(workspace, "t")
+	sess, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestTornFinalWriteRecovers(t *testing.T) {
 func TestAlteredPayloadIsDetected(t *testing.T) {
 	store, workspace := newStore(t)
 
-	sess, err := store.Create(workspace, "t")
+	sess, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestAlteredPayloadIsDetected(t *testing.T) {
 
 func TestSchemaFromNewerBinaryIsRefused(t *testing.T) {
 	store, workspace := newStore(t)
-	sess, err := store.Create(workspace, "t")
+	sess, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestSchemaFromNewerBinaryIsRefused(t *testing.T) {
 func TestSecondWriterIsRefused(t *testing.T) {
 	store, workspace := newStore(t)
 
-	first, err := store.Create(workspace, "t")
+	first, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestLatestAndListOrdering(t *testing.T) {
 
 	var ids []string
 	for range 3 {
-		s, err := store.Create(workspace, "t")
+		s, err := store.Create(workspace, "t", "test-revision")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -288,7 +288,7 @@ func TestLatestAndListOrdering(t *testing.T) {
 func TestHeaderlessStubIsSkipped(t *testing.T) {
 	store, workspace := newStore(t)
 
-	real, err := store.Create(workspace, "t")
+	real, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestLatestWithNoSessions(t *testing.T) {
 func TestIncompleteMessageSurvivesReplay(t *testing.T) {
 	store, workspace := newStore(t)
 
-	sess, err := store.Create(workspace, "t")
+	sess, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestIncompleteMessageSurvivesReplay(t *testing.T) {
 
 func TestSessionsAreNotWorldReadable(t *testing.T) {
 	store, workspace := newStore(t)
-	sess, err := store.Create(workspace, "t")
+	sess, err := store.Create(workspace, "t", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -62,6 +62,11 @@ type SessionStart struct {
 	Workspace string `json:"workspace"`
 	Target    string `json:"target"`
 	Binary    string `json:"binary"`
+
+	// CatalogRevision pins the price and capability data this session started
+	// against, so a cost recorded here can be checked later against the data
+	// that actually produced it rather than whatever is current (§4).
+	CatalogRevision string `json:"catalog_revision,omitempty"`
 }
 
 // Usage records one model call. Attempts counts requests actually issued: a
@@ -72,6 +77,18 @@ type Usage struct {
 	Usage    provider.Usage `json:"usage"`
 	Duration time.Duration  `json:"duration_ns"`
 	Attempts int            `json:"attempts"`
+
+	// CostMicroUSD is what the catalog priced this call at, in millionths of
+	// a dollar. It is stored as a plain integer so the session log stays
+	// independent of the catalog's types, and micro-USD rather than cents
+	// because a single turn routinely costs a fraction of a cent.
+	CostMicroUSD int64 `json:"cost_micro_usd,omitempty"`
+
+	// CatalogRevision and PriceConfidence record what produced the number. A
+	// cost with neither is not reproducible, and one priced from a surface
+	// default is shape rather than fact.
+	CatalogRevision string `json:"catalog_revision,omitempty"`
+	PriceConfidence string `json:"price_confidence,omitempty"`
 }
 
 type Permission struct {

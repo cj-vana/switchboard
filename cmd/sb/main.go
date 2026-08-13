@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/cjvana/switchboard/internal/agent"
+	"github.com/cjvana/switchboard/internal/catalog"
+	"github.com/cjvana/switchboard/internal/config"
 	"github.com/cjvana/switchboard/internal/execution"
 	"github.com/cjvana/switchboard/internal/permission"
 	"github.com/cjvana/switchboard/internal/provider"
@@ -37,6 +39,7 @@ func main() {
 
 type options struct {
 	model     string
+	tier      string
 	host      string
 	mode      string
 	think     string
@@ -45,11 +48,13 @@ type options struct {
 	resume    string
 	cont      bool
 	list      bool
+	showTiers bool
 }
 
 func run() error {
 	var opts options
-	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind, for example qwen3.5:9b-mlx")
+	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
+	flag.StringVar(&opts.tier, "tier", "", "tier to start on, for example t2 (default: the lowest configured tier)")
 	flag.StringVar(&opts.host, "host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")
 	flag.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, or bypass")
 	flag.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")
@@ -58,6 +63,7 @@ func run() error {
 	flag.StringVar(&opts.resume, "resume", "", "resume a session by id")
 	flag.BoolVar(&opts.cont, "continue", false, "resume the most recent session for this workspace")
 	flag.BoolVar(&opts.list, "sessions", false, "list sessions for this workspace and exit")
+	flag.BoolVar(&opts.showTiers, "tiers", false, "list the configured tiers and exit")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -75,6 +81,18 @@ func run() error {
 		return err
 	}
 
+	cat, err := catalog.Load()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if opts.showTiers {
+		return listTiers(cfg, cat)
+	}
+
 	store, err := session.DefaultStore()
 	if err != nil {
 		return err
@@ -90,7 +108,7 @@ func run() error {
 
 	client := ollama.New(ollama.WithBaseURL(opts.host))
 
-	sess, target, resumed, err := openSession(ctx, store, client, workspace, &opts)
+	sess, tier, resumed, err := openSession(ctx, store, client, cfg, cat, workspace, &opts)
 	if err != nil {
 		return err
 	}
@@ -108,17 +126,28 @@ func run() error {
 
 	loop := &agent.Loop{
 		Provider: client,
-		Target:   target,
+		Target:   tier.Target,
 		Tools:    registry,
 		Perms:    permission.NewEngine(mode, capability),
 		Asker:    &terminalAsker{in: in, out: out},
 		Session:  sess,
 		Observer: out,
+		Catalog:  cat,
 		System:   agent.SystemPrompt(workspace, mode, capability),
 	}
 
-	r := &repl{loop: loop, out: out, in: in, capability: capability, workspace: workspace}
-	r.banner(sess, target, resumed)
+	r := &repl{
+		loop:       loop,
+		out:        out,
+		in:         in,
+		capability: capability,
+		workspace:  workspace,
+		config:     cfg,
+		catalog:    cat,
+		tier:       tier,
+		client:     client,
+	}
+	r.banner(sess, resumed)
 
 	if opts.prompt != "" {
 		return r.once(ctx, opts.prompt)
@@ -126,10 +155,18 @@ func run() error {
 	return r.interactive(ctx)
 }
 
-// openSession resolves the session and the route target together, because a
-// resumed session names the model it was recorded with and a new one is named
-// by the target.
-func openSession(ctx context.Context, store *session.Store, client *ollama.Client, workspace string, opts *options) (*session.Session, provider.RouteTarget, bool, error) {
+// openSession resolves the session and the starting tier together, because a
+// resumed session names the target it was recorded with and a new one is named
+// by the tier.
+func openSession(
+	ctx context.Context,
+	store *session.Store,
+	client *ollama.Client,
+	cfg *config.Config,
+	cat *catalog.Catalog,
+	workspace string,
+	opts *options,
+) (*session.Session, config.Tier, bool, error) {
 	var (
 		sess *session.Session
 		err  error
@@ -143,82 +180,168 @@ func openSession(ctx context.Context, store *session.Store, client *ollama.Clien
 			err = fmt.Errorf("no session to continue in %s", workspace)
 		}
 	default:
-		target, buildErr := buildTarget(ctx, client, opts.model, opts.think)
+		tier, buildErr := resolveTier(ctx, client, cfg, opts, "")
 		if buildErr != nil {
-			return nil, provider.RouteTarget{}, false, buildErr
+			return nil, config.Tier{}, false, buildErr
 		}
-		sess, err = store.Create(workspace, target.ID())
-		return sess, target, false, err
+		sess, err = store.Create(workspace, tier.Target.ID(), cat.Revision)
+		return sess, tier, false, err
 	}
 
 	if err != nil {
-		return nil, provider.RouteTarget{}, false, err
+		return nil, config.Tier{}, false, err
 	}
-	adoptRecordedModel(sess, opts)
 
-	target, err := buildTarget(ctx, client, opts.model, opts.think)
+	tier, err := resolveTier(ctx, client, cfg, opts, sess.State().Target)
 	if err != nil {
 		sess.Close()
-		return nil, provider.RouteTarget{}, false, err
+		return nil, config.Tier{}, false, err
 	}
-	return sess, target, true, nil
+	return sess, tier, true, nil
 }
 
-// adoptRecordedModel keeps a resumed session on the model it was recorded with
-// unless the user asked for a different one.
-//
-// It reads the model back out of the target ID, which is serviceable but not
-// where this belongs: the versioned target catalog in §4 owns target identity,
-// and this parsing goes away with it in phase 1.
-func adoptRecordedModel(sess *session.Session, opts *options) {
-	if opts.model != "" {
-		return
+// resolveTier picks the starting target. An explicit model wins, then an
+// explicit tier, then the target a resumed session recorded, then the bottom of
+// the ladder.
+func resolveTier(ctx context.Context, client *ollama.Client, cfg *config.Config, opts *options, recorded string) (config.Tier, error) {
+	switch {
+	case opts.model != "":
+		target := ollama.Target(opts.model)
+		applyEffort(&target, opts.think)
+		return probeTier(ctx, client, config.Tier{ID: "-model", Label: "ad hoc", Target: target})
+
+	case opts.tier != "":
+		tier, ok := cfg.Tier(opts.tier)
+		if !ok {
+			return config.Tier{}, fmt.Errorf("no tier %s is configured; run sb -tiers to see the ladder", opts.tier)
+		}
+		applyEffort(&tier.Target, opts.think)
+		return probeTier(ctx, client, tier)
+
+	case recorded != "":
+		// A resumed session stays on the target it was recorded with unless the
+		// user asked otherwise, so replaying it means what it meant.
+		if tier, ok := tierForTarget(cfg, recorded); ok {
+			return probeTier(ctx, client, tier)
+		}
+		target, err := parseRecordedTarget(recorded)
+		if err != nil {
+			return config.Tier{}, err
+		}
+		applyEffort(&target, opts.think)
+		return probeTier(ctx, client, config.Tier{ID: "-resumed", Label: "resumed", Target: target})
 	}
-	parts := strings.SplitN(sess.State().Target, "/", 3)
+
+	tier, ok := cfg.Default()
+	if !ok {
+		return config.Tier{}, noTargetError(ctx, client, cfg)
+	}
+	applyEffort(&tier.Target, opts.think)
+	return probeTier(ctx, client, tier)
+}
+
+func applyEffort(target *provider.RouteTarget, effort string) {
+	if effort != "" {
+		target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: effort}
+	}
+}
+
+func tierForTarget(cfg *config.Config, recorded string) (config.Tier, bool) {
+	for _, t := range cfg.Tiers {
+		if string(t.Target.ID()) == recorded {
+			return t, true
+		}
+	}
+	return config.Tier{}, false
+}
+
+// parseRecordedTarget reads a target back out of a session record. The catalog
+// owns target identity, so this is deliberately narrow: it recovers what was
+// recorded rather than inventing a target the user never configured.
+func parseRecordedTarget(recorded string) (provider.RouteTarget, error) {
+	parts := strings.SplitN(recorded, "/", 3)
 	if len(parts) < 3 {
-		return
+		return provider.RouteTarget{}, fmt.Errorf("session recorded an unreadable target %q", recorded)
 	}
 	model, _, _ := strings.Cut(parts[2], "+")
-	opts.model = model
+	return provider.RouteTarget{Provider: parts[0], Surface: parts[1], ModelID: model}, nil
 }
 
-func buildTarget(ctx context.Context, client *ollama.Client, model, think string) (provider.RouteTarget, error) {
-	if model == "" {
-		return provider.RouteTarget{}, noModelError(ctx, client)
+// probeTier confirms the target can actually drive the loop before a turn
+// starts, so a missing model is an error now rather than halfway through.
+func probeTier(ctx context.Context, client *ollama.Client, tier config.Tier) (config.Tier, error) {
+	if tier.Target.Provider != ollama.Name {
+		return config.Tier{}, fmt.Errorf(
+			"tier %s binds %s, and only the ollama provider has an adapter in this build",
+			tier.ID, tier.Target.ID())
 	}
 
-	target := ollama.Target(model)
-	if think != "" {
-		target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: think}
-	}
-
-	probe, err := client.Probe(ctx, target)
+	probe, err := client.Probe(ctx, tier.Target)
 	if err != nil {
-		return provider.RouteTarget{}, err
+		return config.Tier{}, err
 	}
-	if !probe.Reachable {
-		return provider.RouteTarget{}, fmt.Errorf("no Ollama server responded: %s", probe.Detail)
+	switch {
+	case !probe.Reachable:
+		return config.Tier{}, fmt.Errorf("no Ollama server responded: %s", probe.Detail)
+	case !probe.ModelPresent:
+		return config.Tier{}, fmt.Errorf("%s\nrun: ollama pull %s", probe.Detail, tier.Target.ModelID)
+	case probe.Tools == provider.ToolsNone:
+		return config.Tier{}, fmt.Errorf(
+			"%s does not support tool calling, so it cannot drive the agent loop", tier.Target.ModelID)
 	}
-	if !probe.ModelPresent {
-		return provider.RouteTarget{}, fmt.Errorf("%s\nrun: ollama pull %s", probe.Detail, model)
-	}
-	if probe.Tools == provider.ToolsNone {
-		return provider.RouteTarget{}, fmt.Errorf(
-			"%s does not support tool calling, so it cannot drive the agent loop", model)
-	}
-	return target, nil
+	return tier, nil
 }
 
-func noModelError(ctx context.Context, client *ollama.Client) error {
+func noTargetError(ctx context.Context, client *ollama.Client, cfg *config.Config) error {
 	models, err := client.Models(ctx)
 	if err != nil {
-		return fmt.Errorf("no model selected, and the Ollama server could not be reached: %w", err)
+		return fmt.Errorf("no tiers configured and no model given, and the Ollama server could not be reached: %w", err)
 	}
-	if len(models) == 0 {
-		return errors.New("no model selected, and this Ollama server has none pulled")
+
+	var b strings.Builder
+	b.WriteString("no tiers configured and no -model given.\n")
+	if cfg.Path != "" {
+		fmt.Fprintf(&b, "\nConfigure a ladder in %s:\n\n", cfg.Path)
+		b.WriteString("  [tiers.t1]\n  label = \"light\"\n  model = \"ollama/<model>\"\n\n")
+		b.WriteString("  [tiers.t2]\n  label = \"deep\"\n  model = \"ollama/<model>\"\n")
 	}
-	return fmt.Errorf("no model selected. Pass -model or set SB_MODEL. Available:\n  %s",
-		strings.Join(models, "\n  "))
+	if len(models) > 0 {
+		fmt.Fprintf(&b, "\nModels this server has pulled:\n  %s", strings.Join(models, "\n  "))
+	}
+	return errors.New(b.String())
+}
+
+func listTiers(cfg *config.Config, cat *catalog.Catalog) error {
+	if len(cfg.Tiers) == 0 {
+		fmt.Printf("no tiers configured in %s\n", cfg.Path)
+		return nil
+	}
+	fmt.Printf("catalog %s (%s)\n\n", cat.Revision, cat.Source)
+	for _, t := range cfg.Tiers {
+		fmt.Println(t)
+		info, confidence, ok := cat.Lookup(t.Target)
+		if !ok {
+			fmt.Println("      no catalog entry")
+			continue
+		}
+		fmt.Printf("      %s", describePricing(info))
+		if confidence == catalog.Prior {
+			fmt.Print("  (surface default, not verified for this model)")
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+func describePricing(info catalog.ModelInfo) string {
+	if info.Free() {
+		return "runs locally, no per-token cost"
+	}
+	band, ok := info.Band(0)
+	if !ok {
+		return "no price band"
+	}
+	return fmt.Sprintf("%s in / %s out per MTok", band.InputPerMTok, band.OutputPerMTok)
 }
 
 func listSessions(store *session.Store, workspace string) error {

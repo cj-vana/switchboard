@@ -147,7 +147,7 @@ func newHarness(t *testing.T, mode permission.Mode, turns ...scriptTurn) *harnes
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := store.Create(root, "scripted/local/test")
+	sess, err := store.Create(root, "scripted/local/test", "test-revision")
 	if err != nil {
 		t.Fatal(err)
 	}
