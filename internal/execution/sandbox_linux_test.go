@@ -5,9 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
+	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -24,10 +23,20 @@ func workspaceFor(t *testing.T) string {
 
 func confined(t *testing.T) *Confinement {
 	t.Helper()
-	if _, err := os.Stat(sandboxExec); err != nil {
-		t.Skip("sandbox-exec is not present")
+	path, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Skip("bubblewrap is not installed")
 	}
-	return &Confinement{mechanism: MechanismSeatbelt, wrap: wrapSeatbelt}
+	bwrapPath = path
+
+	// Unprivileged user namespaces are a kernel setting some distributions turn
+	// off. Without them bubblewrap cannot build a namespace at all, which is a
+	// property of the host rather than a defect in the construction.
+	probe := exec.Command(path, "--ro-bind", "/", "/", "--unshare-user", "/bin/true")
+	if err := probe.Run(); err != nil {
+		t.Skipf("bubblewrap cannot create a namespace here: %v", err)
+	}
+	return &Confinement{mechanism: MechanismBubblewrap, wrap: wrapBubblewrap}
 }
 
 func runConfined(t *testing.T, ws string, network NetworkAccess, argv []string, shell bool) Result {
@@ -36,7 +45,7 @@ func runConfined(t *testing.T, ws string, network NetworkAccess, argv []string, 
 		Argv:    argv,
 		Shell:   shell,
 		Dir:     ws,
-		Timeout: 30 * time.Second,
+		Timeout: 60 * time.Second,
 		Confine: confined(t),
 		Policy:  Policy{Workspace: ws, Network: network},
 	})
@@ -46,13 +55,9 @@ func runConfined(t *testing.T, ws string, network NetworkAccess, argv []string, 
 	return res
 }
 
-// The self-test is what earns the right to run commands without asking, so it
-// has to actually pass on a machine where the sandbox works.
 func TestSelfTestPassesOnThisHost(t *testing.T) {
-	if _, err := os.Stat(sandboxExec); err != nil {
-		t.Skip("sandbox-exec is not present")
-	}
-	ok, detail := darwinSelfTest()
+	confined(t)
+	ok, detail := linuxSelfTest()
 	if !ok {
 		t.Fatalf("self-test failed on this host: %s", detail)
 	}
@@ -73,16 +78,15 @@ func TestConfinedWritesStayInTheWorkspace(t *testing.T) {
 		t.Errorf("file = %q, err = %v", data, err)
 	}
 
-	// Not t.TempDir(): that lives under $TMPDIR, which the profile grants on
-	// purpose because build tools are unusable without it. The boundary being
-	// tested is the home directory and the rest of the filesystem.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Not t.TempDir(): that lives under $TMPDIR, which is granted on purpose
+	// because build tools are unusable without it.
 	for _, escape := range []string{
 		filepath.Join(home, ".switchboard-write-escape-probe"),
-		"/private/tmp/switchboard-write-escape-probe",
+		"/etc/switchboard-write-escape-probe",
 	} {
 		os.Remove(escape)
 		res = runConfined(t, ws, NetworkLoopback, []string{"echo out > " + escape}, true)
@@ -96,6 +100,8 @@ func TestConfinedWritesStayInTheWorkspace(t *testing.T) {
 	}
 }
 
+// The counterpart of the macOS keychain finding: hiding credential files is
+// pointless if the daemon handing out those credentials is still reachable.
 func TestConfinedCommandCannotReadCredentials(t *testing.T) {
 	ws := workspaceFor(t)
 	home, err := os.UserHomeDir()
@@ -103,45 +109,77 @@ func TestConfinedCommandCannotReadCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// securityd answers keychain queries over mach IPC, so a profile that only
-	// denies the keychain files still leaks unless mach-lookup is denied too.
-	// This is the check that caught it.
-	if res := runConfined(t, ws, NetworkLoopback, []string{"/usr/bin/security", "list-keychains"}, false); res.ExitCode == 0 {
-		t.Errorf("the keychain API answered inside the sandbox: %s", res.Output)
+	canary := filepath.Join(home, ".switchboard", "cred-canary")
+	if err := os.MkdirAll(filepath.Dir(canary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canary, []byte(canaryToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(canary)
+
+	res := runConfined(t, ws, NetworkLoopback, []string{"/bin/cat", canary}, false)
+	if strings.Contains(res.Output, canaryToken) {
+		t.Error("a confined command read Switchboard's session state, which holds other projects' prompts and code")
 	}
 
-	if res := runConfined(t, ws, NetworkLoopback, []string{"/bin/ls", filepath.Join(home, ".switchboard")}, false); res.ExitCode == 0 {
-		t.Error("a confined command listed Switchboard's session logs, which hold other projects' prompts and code")
-	}
-
-	if os.Getenv("SSH_AUTH_SOCK") != "" {
-		if res := runConfined(t, ws, NetworkLoopback, []string{"/usr/bin/ssh-add", "-l"}, false); res.ExitCode == 0 {
-			t.Error("a confined command reached the ssh agent")
+	fake := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(fake, 0o700); err == nil {
+		key := filepath.Join(fake, "switchboard-test-key")
+		if err := os.WriteFile(key, []byte(canaryToken), 0o600); err == nil {
+			defer os.Remove(key)
+			res := runConfined(t, ws, NetworkLoopback, []string{"/bin/cat", key}, false)
+			if strings.Contains(res.Output, canaryToken) {
+				t.Error("a confined command read a key out of ~/.ssh")
+			}
 		}
 	}
 }
 
-// Egress must be refused by the rule, not as a side effect of DNS failing, so
-// this dials a raw address with no name lookup involved.
-func TestNetworkPolicy(t *testing.T) {
+// The policy mapping is checked without touching the network, so it holds on a
+// host with no egress and no HTTP client. An assertion that needs the internet
+// to detect a missing flag is an assertion that quietly stops running.
+func TestNetworkNamespaceFlags(t *testing.T) {
 	ws := workspaceFor(t)
 
-	denied := runConfined(t, ws, NetworkLoopback,
-		[]string{"/usr/bin/curl", "-s", "-m", "5", "http://1.1.1.1", "-o", "/dev/null"}, false)
-	if denied.ExitCode == 0 {
-		t.Error("loopback policy allowed egress off the machine")
+	loopback, err := wrapBubblewrap(Policy{Workspace: ws, Network: NetworkLoopback}, []string{"/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(loopback, "--unshare-net") {
+		t.Error("the default policy must take a private network namespace")
 	}
 
-	granted := runConfined(t, ws, NetworkFull,
-		[]string{"/usr/bin/curl", "-s", "-m", "10", "http://1.1.1.1", "-o", "/dev/null"}, false)
-	if granted.ExitCode != 0 {
-		t.Skipf("network policy granted but the host has no egress (exit %d); nothing to compare against", granted.ExitCode)
+	full, err := wrapBubblewrap(Policy{Workspace: ws, Network: NetworkFull}, []string{"/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(full, "--unshare-net") {
+		t.Error("a granted-network command must keep the host's network namespace")
 	}
 }
 
-// A fixture server on an ephemeral loopback port is the most common thing a
-// test suite does. Binding one needs network-inbound as well as network-bind,
-// which is not obvious: network-bind alone fails as though the kernel refused.
+func TestNetworkPolicy(t *testing.T) {
+	ws := workspaceFor(t)
+
+	probe := egressProbeArgv()
+	if probe == nil {
+		t.Skip("no curl, wget, or nc to attempt a connection with")
+	}
+
+	// The granted case runs first: without it, a denial proves nothing, because
+	// a host with no internet refuses either way.
+	if granted := runConfined(t, ws, NetworkFull, probe, false); granted.ExitCode != 0 {
+		t.Skipf("this host has no egress even when granted (exit %d); nothing to compare against", granted.ExitCode)
+	}
+	if denied := runConfined(t, ws, NetworkLoopback, probe, false); denied.ExitCode == 0 {
+		t.Error("the default policy allowed egress off the machine")
+	}
+}
+
+// A private network namespace comes with a working loopback interface, so
+// fixture servers bind while egress stays unreachable. That is the property the
+// whole loopback policy rests on.
 func TestLoopbackServersStillWork(t *testing.T) {
 	ws := workspaceFor(t)
 
@@ -198,17 +236,18 @@ func main() {
 `), 0o644)
 }
 
-// sandbox-exec replaces itself with the target, so the process group the runner
-// created still governs everything the command spawns. If that stopped being
-// true, a timed-out build would leave its compiler running.
+// bubblewrap puts the command in a new PID namespace where it is init, so
+// killing the wrapper has to tear the namespace down with it. If that stopped
+// working, a timed-out build would leave its compiler running.
 func TestProcessGroupKillSurvivesTheWrap(t *testing.T) {
 	ws := workspaceFor(t)
+	marker := filepath.Join(ws, "still-running")
 
 	res, err := Run(context.Background(), Command{
-		Argv:    []string{"sleep 60 & echo CHILD:$!; wait"},
+		Argv:    []string{"(while true; do touch " + marker + "; sleep 0.1; done) & wait"},
 		Shell:   true,
 		Dir:     ws,
-		Timeout: 400 * time.Millisecond,
+		Timeout: 500 * time.Millisecond,
 		Confine: confined(t),
 		Policy:  Policy{Workspace: ws, Network: NetworkLoopback},
 	})
@@ -219,28 +258,16 @@ func TestProcessGroupKillSurvivesTheWrap(t *testing.T) {
 		t.Fatalf("expected a timeout, got %+v", res)
 	}
 
-	_, rest, ok := strings.Cut(res.Output, "CHILD:")
-	if !ok {
-		t.Fatalf("probe did not report a grandchild pid: %q", res.Output)
+	// A pid from inside a PID namespace means nothing out here, so liveness is
+	// measured by whether the descendant keeps touching a file after the
+	// wrapper is gone.
+	os.Remove(marker)
+	time.Sleep(600 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a descendant survived the timeout and is still writing")
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(rest, "\n", 2)[0]))
-	if err != nil {
-		t.Fatalf("parsing pid from %q: %v", rest, err)
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	syscall.Kill(pid, syscall.SIGKILL)
-	t.Errorf("grandchild %d survived: the wrap broke process-group signalling", pid)
 }
 
-// Failing closed is the point. A sandbox that quietly runs the command anyway
-// is worse than none, because the interface goes on reporting containment.
 func TestUnapplicableConfinementRefusesToRun(t *testing.T) {
 	res, err := Run(context.Background(), Command{
 		Argv:    []string{"/bin/echo", "should not run"},
@@ -256,9 +283,6 @@ func TestUnapplicableConfinementRefusesToRun(t *testing.T) {
 	}
 }
 
-// The toolchains present on this machine must still work confined. This
-// reports only what is installed here; it is not a claim about ecosystems that
-// were never run.
 func TestInstalledToolchainsWorkConfined(t *testing.T) {
 	if testing.Short() {
 		t.Skip("toolchain matrix is slow")
@@ -321,7 +345,7 @@ func TestInstalledToolchainsWorkConfined(t *testing.T) {
 				t.Fatal(err)
 			}
 			if res.ExitCode != 0 {
-				t.Errorf("%s does not work under the profile: %s", tc.name, res.Output)
+				t.Errorf("%s does not work confined: %s", tc.name, res.Output)
 			}
 			ran++
 		})

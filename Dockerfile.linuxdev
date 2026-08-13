@@ -1,0 +1,18 @@
+# Test bed for the Linux confinement work. Carries bubblewrap plus the
+# toolchains the profile has to keep working.
+FROM golang:1.26-bookworm
+
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+      bubblewrap \
+      ca-certificates \
+      curl \
+      git \
+      python3 \
+      nodejs \
+      npm \
+      clang \
+      make \
+      openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src

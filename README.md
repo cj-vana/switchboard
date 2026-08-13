@@ -58,27 +58,31 @@ mode can only grant automatic execution on a host where confinement has been
 demonstrated, and "demonstrated" means a self-test passed on that machine, at
 that OS build, against that profile.
 
-**macOS** confines commands with a Seatbelt profile. A confined command writes
-only inside the workspace, `$TMPDIR`, and build caches; cannot read the
-credential stores or reach the Keychain API; cannot use the ssh agent; and
-cannot reach the network beyond loopback. Loopback is allowed because test
-suites stand up fixture servers, and that is most of what an agent runs. With
-that verified, `-mode bypass` runs commands without prompting.
+**macOS and Linux** confine commands, with Seatbelt and bubblewrap
+respectively. A confined command writes only inside the workspace, the temp
+directory, and build caches; cannot read the enumerated credential stores or
+reach the daemon that hands them out (the Keychain on macOS, the session bus on
+Linux); cannot use the ssh agent; and cannot reach the network beyond loopback.
+Loopback is allowed because test suites stand up fixture servers, and that is
+most of what an agent runs. With that verified, `-mode bypass` runs commands
+without prompting.
+
+Linux needs `bubblewrap` installed and a kernel that permits unprivileged user
+namespaces. Without either, it falls back to per-action approval and says so.
 
 Network access off the machine is a separate grant that always prompts, even
 when confinement is verified. The sandbox governs what a command reads and
 writes; it cannot judge whether sending your workspace to the internet is what
 you meant.
 
-`docs/sandbox-macos.md` documents the profile, including what it deliberately
+`docs/sandbox.md` documents the profile, including what it deliberately
 does not protect against: reads leak by default outside an enumerated deny
 list, and writable build caches are a persistence vector between commands.
 
-**Linux and Windows** have no verified profile yet, so every command there
-requires per-action approval in every mode, `bypass` included. On Windows there
-is additionally no process-group cleanup, so a timed-out command may leave
-descendants running. Both are plan-and-approve environments until their
-containment meets the same bar.
+**Windows** has no verified containment, so every command there requires
+per-action approval in every mode, `bypass` included. It additionally has no
+process-group cleanup, so a timed-out command may leave descendants running. It
+stays a plan-and-approve environment until that meets the same bar.
 
 Commands everywhere run with the harness's own provider credentials stripped
 from their environment. That is credential hygiene rather than containment, and

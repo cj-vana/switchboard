@@ -1,21 +1,15 @@
 package execution
 
 import (
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
-	"time"
 )
 
 // seatbeltProfile is the confinement policy. Its comments explain each rule and
-// docs/sandbox-macos.md records how the rules were arrived at.
+// docs/sandbox.md records how the rules were arrived at.
 //
 //go:embed seatbelt.sb
 var seatbeltProfile string
@@ -23,7 +17,7 @@ var seatbeltProfile string
 // sandboxExec is the Seatbelt front end. It has carried a deprecation warning
 // in the headers since 10.8 and is still what Apple's own software and Chromium
 // use, so the posture is to depend on it while keeping per-action approval as
-// the always-available path (see docs/sandbox-macos.md).
+// the always-available path (see docs/sandbox.md).
 const sandboxExec = "/usr/bin/sandbox-exec"
 
 func detectPlatform() Capability {
@@ -37,7 +31,7 @@ func detectPlatform() Capability {
 	}
 	c.MechanismPresent = true
 
-	verified, detail := confinementVerified()
+	verified, detail := cachedVerification(shortHash(seatbeltProfile), darwinHostKey(), darwinSelfTest)
 	c.Detail = detail
 	if verified {
 		c.confinement = &Confinement{mechanism: MechanismSeatbelt, wrap: wrapSeatbelt}
@@ -128,76 +122,8 @@ func profileParams(p Policy) (map[string]string, error) {
 	}, nil
 }
 
-// checkRecord caches a self-test verdict. It is keyed by the profile and the OS
-// build, because a profile edit or an OS update can change what the kernel
-// enforces and neither should inherit an old pass.
-type checkRecord struct {
-	ProfileHash string    `json:"profile_hash"`
-	OSBuild     string    `json:"os_build"`
-	Verified    bool      `json:"verified"`
-	Detail      string    `json:"detail"`
-	CheckedAt   time.Time `json:"checked_at"`
-}
-
-func confinementVerified() (bool, string) {
-	hash := sha256.Sum256([]byte(seatbeltProfile))
-	key := hex.EncodeToString(hash[:8])
-	build := osBuild()
-
-	path, err := checkCachePath()
-	if err == nil {
-		if rec, readErr := readCheck(path); readErr == nil &&
-			rec.ProfileHash == key && rec.OSBuild == build {
-			return rec.Verified, rec.Detail
-		}
-	}
-
-	verified, detail := runSelfTest()
-	if path != "" {
-		writeCheck(path, checkRecord{
-			ProfileHash: key,
-			OSBuild:     build,
-			Verified:    verified,
-			Detail:      detail,
-			CheckedAt:   time.Now().UTC(),
-		})
-	}
-	return verified, detail
-}
-
-func osBuild() string {
-	out, err := exec.Command("/usr/bin/sw_vers", "-buildVersion").Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func checkCachePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".switchboard")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "sandbox-check.json"), nil
-}
-
-func readCheck(path string) (checkRecord, error) {
-	var rec checkRecord
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return rec, err
-	}
-	return rec, json.Unmarshal(data, &rec)
-}
-
-func writeCheck(path string, rec checkRecord) {
-	data, err := json.MarshalIndent(rec, "", "  ")
-	if err != nil {
-		return
-	}
-	os.WriteFile(path, data, 0o600)
+// darwinHostKey pins the verdict to this OS build. What the kernel enforces for
+// a given profile can change across releases.
+func darwinHostKey() string {
+	return commandOutput("/usr/bin/sw_vers", "-buildVersion")
 }

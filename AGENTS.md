@@ -45,7 +45,7 @@ this machine and is also the thing that wraps the command. Do not add a
 `Verified bool` beside it and do not let a caller consult one without applying
 the other: "we verified containment" and "we applied containment" have to be the
 same fact, or the product reports a sandbox it is not using. `Run` fails closed
-when a confinement is set and cannot be applied. See `docs/sandbox-macos.md`.
+when a confinement is set and cannot be applied. See `docs/sandbox.md`.
 
 **The prefix is append-only.** Context layout exists to keep provider caches
 warm. Anything that rewrites history is a cache-invalidating event and is
@@ -76,6 +76,15 @@ exercises, so check the other targets before claiming a change is portable:
     GOOS=linux GOARCH=amd64 go vet ./...
 
 Tests that drive a POSIX shell or signal a process group are tagged `unix`.
+
+The Linux confinement cannot be exercised from macOS, so changes to it are
+verified in a container:
+
+    docker build -f Dockerfile.linuxdev -t sb-linuxdev .
+    docker run --rm --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
+
+`--privileged` is needed because Docker's kernel blocks the unprivileged user
+namespaces bubblewrap depends on. See `docs/sandbox.md`.
 
 Tests must pass without network access or an API key. Provider behavior is
 tested against recorded fixtures served by `httptest`; tests that need a live

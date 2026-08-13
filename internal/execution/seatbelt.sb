@@ -4,7 +4,7 @@
 ;; Switchboard workspace confinement profile.
 ;;
 ;; Every rule here was arrived at by running it, not by reading documentation.
-;; docs/sandbox-macos.md records what each one is for and what breaks without
+;; docs/sandbox.md records what each one is for and what breaks without
 ;; it. Four properties are load-bearing and easy to undo by accident:
 ;;
 ;;   1. Paths must be pre-resolved. Seatbelt fully resolves a path before
