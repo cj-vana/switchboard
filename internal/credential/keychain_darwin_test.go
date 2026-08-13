@@ -2,6 +2,7 @@ package credential
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,16 +19,28 @@ func fakeSecurity(t *testing.T) (store *OSStore, argvLog string) {
 	argvLog = filepath.Join(dir, "argv")
 	vault := filepath.Join(dir, "vault")
 
+	// Writes go through the tool's interactive mode, where the command arrives
+	// on standard input and the value is a quoted argument. Reads and deletes
+	// still take arguments, because neither carries a secret.
+	//
+	// The parser is modelled with `eval`, which reproduces the two behaviours
+	// that were measured on the real tool: it splits on unquoted spaces and
+	// unescapes backslashes. A fake that just took the rest of the line would
+	// pass whether or not the quoting is right.
 	body := `#!/bin/sh
 printf '%s\n' "$*" >> ` + argvLog + `
+if [ "$1" = "-i" ]; then
+  read -r line
+  eval "set -- $line"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -w) shift; printf '%s' "$1" > ` + vault + `; exit 0 ;;
+      *) shift ;;
+    esac
+  done
+  exit 1
+fi
 case "$1" in
-  add-generic-password)
-    # The real command prompts twice and reads both from stdin.
-    read -r first
-    read -r second
-    [ "$first" = "$second" ] || exit 1
-    printf '%s' "$first" > ` + vault + `
-    ;;
   find-generic-password)
     [ -f ` + vault + ` ] || exit 44
     cat ` + vault + `
@@ -72,11 +85,57 @@ func TestKeychainKeepsTheSecretOutOfArgv(t *testing.T) {
 	if strings.Contains(string(argv), value) {
 		t.Errorf("the credential appeared on a command line, where any user on the machine can read it:\n%s", argv)
 	}
-	// The empty -w flag is what makes the command read from stdin. Losing it is
-	// exactly the change this test exists to catch, and without it the flag
-	// would take the next argument as the value.
-	if !strings.Contains(string(argv), "add-generic-password") {
-		t.Errorf("no store call was made:\n%s", argv)
+	// The only argument the write may carry is -i. Anything else means the
+	// command moved back onto the command line, which is what this exists to
+	// catch.
+	if !strings.Contains(string(argv), "-i") {
+		t.Errorf("no store call was made through the interactive parser:\n%s", argv)
+	}
+}
+
+// Quoting is what keeps the interactive parser from splitting or unescaping a
+// value on its way in. Without it a key with a space in it arrives truncated
+// and a Windows-style path loses its separators, both reported as stored.
+func TestKeychainQuotesAwkwardValues(t *testing.T) {
+	for name, awkward := range map[string]string{
+		"spaces":    "a value with spaces",
+		"quotes":    `he said "hi"`,
+		"backslash": `C:\Users\someone`,
+		"json":      `{"a":"b c","d":"e\"f"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, _ := fakeSecurity(t)
+			ref := Ref{Provider: "anthropic"}
+
+			if err := store.Set(context.Background(), ref, awkward); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Get(context.Background(), ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Expose() != awkward {
+				t.Errorf("stored %q and read back %q", awkward, got.Expose())
+			}
+		})
+	}
+}
+
+// The interactive prompt this replaced truncated at 128 characters and exited
+// zero, so a token document was stored as unparseable JSON and nothing said so.
+func TestKeychainStoresMoreThanThePromptBufferHeld(t *testing.T) {
+	store, _ := fakeSecurity(t)
+	long := strings.Repeat("x", 1000)
+
+	if err := store.Set(context.Background(), Ref{Provider: "anthropic"}, long); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(context.Background(), Ref{Provider: "anthropic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Expose()) != len(long) {
+		t.Errorf("stored %d characters and read back %d", len(long), len(got.Expose()))
 	}
 }
 
@@ -158,5 +217,77 @@ func TestLiveKeychainRoundTrip(t *testing.T) {
 	}
 	if _, err := store.Get(ctx, ref); !errors.Is(err, ErrNotFound) {
 		t.Errorf("after deletion, err = %v, want a miss", err)
+	}
+}
+
+// A credential longer than the tool's interactive prompt buffer used to be
+// truncated at 128 characters and reported as stored. Every test here passed,
+// because every value in them was short. An OAuth token document is not: it
+// carries two JWTs and lands in the keychain as unparseable JSON.
+//
+// This is the shape that broke, at a length that broke it.
+func TestLiveKeychainStoresALongDocument(t *testing.T) {
+	requireLiveKeychain(t)
+
+	ctx := context.Background()
+	store := NewOSStore()
+	ref := Ref{Provider: "sb-selftest", Account: "long-document"}
+
+	_ = store.Delete(ctx, ref)
+	t.Cleanup(func() { _ = store.Delete(ctx, ref) })
+
+	document := `{"access_token":"` + strings.Repeat("A", 900) +
+		`","refresh_token":"` + strings.Repeat("B", 200) +
+		`","expires_at":"2026-08-13T12:00:00Z"}`
+
+	if err := store.Set(ctx, ref, document); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Expose()) != len(document) {
+		t.Fatalf("stored %d characters and read back %d; the value was truncated and the write reported success",
+			len(document), len(got.Expose()))
+	}
+	if got.Expose() != document {
+		t.Error("the document did not round-trip byte for byte")
+	}
+	if !json.Valid([]byte(got.Expose())) {
+		t.Error("what came back is not valid JSON, so a token document would be unreadable")
+	}
+}
+
+// Values the interactive parser would otherwise split or unescape.
+func TestLiveKeychainStoresAwkwardValues(t *testing.T) {
+	requireLiveKeychain(t)
+
+	ctx := context.Background()
+	store := NewOSStore()
+
+	for name, awkward := range map[string]string{
+		"spaces":     "a value with spaces in it",
+		"quotes":     `he said "hi" to me`,
+		"backslash":  `C:\Users\someone\key`,
+		"json":       `{"a":"b","c":[1,2],"d":"with space"}`,
+		"everything": `{"t":"a b \"c\" d\\e"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ref := Ref{Provider: "sb-selftest", Account: "awkward-" + name}
+			_ = store.Delete(ctx, ref)
+			t.Cleanup(func() { _ = store.Delete(ctx, ref) })
+
+			if err := store.Set(ctx, ref, awkward); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Get(ctx, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Expose() != awkward {
+				t.Errorf("stored %q and read back %q", awkward, got.Expose())
+			}
+		})
 	}
 }

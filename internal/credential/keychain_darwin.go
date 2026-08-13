@@ -87,16 +87,25 @@ func (s *OSStore) Set(ctx context.Context, ref Ref, value string) error {
 		return errors.New("a credential containing a newline cannot be stored")
 	}
 
-	cmd := exec.CommandContext(ctx, s.tool(),
-		"add-generic-password",
-		"-s", service(ref),
-		"-a", account(ref),
-		"-D", "Switchboard provider credential",
-		"-U", // update in place rather than failing on an existing item
-		"-w", // no value: read it from stdin instead of argv
-	)
-	// The prompt asks twice.
-	cmd.Stdin = strings.NewReader(value + "\n" + value + "\n")
+	// The command is fed through the tool's own interactive mode rather than
+	// given as arguments, which is the only shape that gets both properties
+	// this write needs.
+	//
+	// Passing the value in argv would publish it to every process listing for
+	// the length of the call. Letting the tool prompt for it on standard input
+	// instead silently truncates at 128 characters, which was measured rather
+	// than assumed: a 500 character value written that way reads back as 128,
+	// with a success exit code. That is how an OAuth token document lands in
+	// the keychain as unparseable JSON. Here the whole command line arrives on
+	// standard input, so `ps` sees only "security -i" and nothing is truncated.
+	cmd := exec.CommandContext(ctx, s.tool(), "-i")
+	cmd.Stdin = strings.NewReader(fmt.Sprintf(
+		"add-generic-password -s %s -a %s -D %s -U -w %s\n",
+		quoteArg(service(ref)),
+		quoteArg(account(ref)),
+		quoteArg("Switchboard provider credential"),
+		quoteArg(value),
+	))
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -140,6 +149,22 @@ func (s *OSStore) Delete(ctx context.Context, ref Ref) error {
 		return fmt.Errorf("removing from the keychain: %w%s", err, diagnostics(stderr.String()))
 	}
 	return nil
+}
+
+// quoteArg wraps a value for the tool's interactive parser, which splits on
+// spaces and treats a backslash as an escape. Both were established by feeding
+// it awkward values and reading back what it stored.
+func quoteArg(value string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range value {
+		if r == '"' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func (s *OSStore) unavailable(err error) error {
