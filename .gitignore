@@ -1,0 +1,20 @@
+# Build output
+/sb
+/dist/
+*.test
+*.out
+
+# Local config and credentials
+/.switchboard/
+*.local.toml
+
+# Planning artifacts belong in the PR or a scratch dir, never in git
+/*-HANDOFF.md
+/*_SUMMARY.md
+/IMPLEMENTATION_*.md
+/progress.txt
+/.planning/
+/.forge/
+/.codex/
+
+.DS_Store
