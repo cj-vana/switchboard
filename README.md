@@ -97,6 +97,18 @@ two costs. That is the point rather than an inconvenience: the compatibility
 format discards cache breakpoints and reports no per-model capabilities, so
 what it can promise is a property of the route, not of the model.
 
+Kimi Code serves the Messages API, so it is driven by the same adapter as
+Anthropic and needs only a key:
+
+```toml
+[tiers.t5]
+model = "kimi/k3-256k"
+```
+
+```
+sb auth login kimi/coding
+```
+
 ```
 sb                         start on the lowest tier
 sb -tiers                  show the ladder and what each tier costs

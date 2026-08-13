@@ -320,8 +320,16 @@ func listTiers(cfg *config.Config, cat *catalog.Catalog) error {
 }
 
 func describePricing(info catalog.ModelInfo) string {
+	switch info.Metering {
+	case catalog.Local:
+		return "runs locally, nothing meters it"
+	case catalog.Plan:
+		// Not the same as free. Nothing here models quota yet, so the honest
+		// answer names what is actually finite rather than reporting zero.
+		return "billed as a plan, not per token; quota rather than cost is the limit"
+	}
 	if info.Free() {
-		return "runs locally, no per-token cost"
+		return "no per-token cost recorded"
 	}
 	band, ok := info.Band(0)
 	if !ok {

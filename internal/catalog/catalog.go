@@ -177,6 +177,13 @@ type ModelInfo struct {
 	Pricing []PriceBand `toml:"pricing"`
 	Cache   CachePolicy `toml:"cache"`
 
+	// Metering says what a turn actually consumes. Three entries now price at
+	// zero per token for three different reasons, and the difference decides
+	// what a router is optimizing: a local model consumes nothing scarce, a
+	// plan consumes quota, and a metered target consumes money. Reporting all
+	// three as "free" would tell a router the wrong thing about two of them.
+	Metering Metering `toml:"metering"`
+
 	Tools         ToolSupport      `toml:"tools"`
 	StrictSchema  bool             `toml:"strict_schema"`
 	Vision        bool             `toml:"vision"`
@@ -260,9 +267,32 @@ func cheapestWrite(b PriceBand) Money {
 	return cheapest
 }
 
-// Free reports whether every band in the entry costs nothing. A local model
-// is free to run and therefore cannot exercise the §6 cache economics, which
-// the router needs to know rather than infer from a zero total.
+// Metering names what a turn draws down.
+type Metering string
+
+const (
+	// PerToken is the ordinary case: a turn costs money, priced by the bands.
+	PerToken Metering = "per-token"
+
+	// Local means nothing meters it. Such a target cannot exercise the §6 cache
+	// economics at all, whatever it reports.
+	Local Metering = "local"
+
+	// Plan means a flat subscription pays for it and quota is the scarce
+	// resource. Nothing here models quota yet, so a cost estimate against a
+	// plan target is correct at zero and silent about what actually runs out.
+	Plan Metering = "plan"
+)
+
+func (m Metering) String() string {
+	if m == "" {
+		return string(PerToken)
+	}
+	return string(m)
+}
+
+// Free reports whether every band in the entry costs nothing. It is about
+// money only: a plan target is free per token and still finite.
 func (m ModelInfo) Free() bool {
 	for _, b := range m.Pricing {
 		if b.InputPerMTok != 0 || b.OutputPerMTok != 0 {

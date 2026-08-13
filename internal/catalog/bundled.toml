@@ -28,6 +28,7 @@ revision = "2026-08-13"
 [[surface_default]]
 provider = "ollama"
 surface = "local"
+metering = "local"
 display_name = "local model"
 context_window = 0        # unknown until probed
 max_output = 0
@@ -80,6 +81,7 @@ source_urls = ["https://github.com/ollama/ollama/blob/main/docs/api.md"]
 [[surface_default]]
 provider = "openaicompat"
 surface = "ollama"
+metering = "local"
 display_name = "local model (OpenAI-compatible endpoint)"
 context_window = 0        # the format reports nothing; unknown means unknown
 max_output = 0
@@ -128,6 +130,7 @@ source_urls = ["https://github.com/ollama/ollama/blob/main/docs/openai.md"]
 [[surface_default]]
 provider = "openai"
 surface = "subscription"
+metering = "plan"
 display_name = "ChatGPT plan model"
 context_window = 0        # not reported by the discovery endpoint
 max_output = 0
@@ -151,6 +154,55 @@ source_urls = ["https://chatgpt.com/backend-api/codex/models"]
   max_breakpoints = 0
   lookback_blocks = 0
   routing_key_support = true
+  usage_accounting = "separate"
+
+# --------------------------------------------------------------------------
+# Moonshot's Kimi Code plan.
+#
+# Serves the Messages API, so the Anthropic adapter drives it. What was
+# confirmed against the endpoint rather than assumed: usage reports cache reads
+# and writes as counts disjoint from the input total, caching happens without
+# any marker being sent, and thinking blocks arrive with signatures.
+#
+# The per-token rates are zero because this endpoint is the coding plan, which
+# is billed as a subscription rather than per token. That is the one field here
+# not established from the API: the endpoint reports usage but says nothing
+# about money, and Moonshot also sells a pay-as-you-go API at another host under
+# a different key. If this key is metered per token, these numbers are wrong in
+# the direction that under-reports, and the entry needs correcting before any
+# budget is trusted against it.
+# --------------------------------------------------------------------------
+
+[[surface_default]]
+provider = "kimi"
+surface = "coding"
+metering = "plan"
+display_name = "Kimi Code"
+context_window = 262144
+max_output = 0
+tools = "parallel"
+vision = true
+reasoning = "adaptive"
+effort_levels = []
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://api.kimi.com/coding/v1/models"]
+
+  [[surface_default.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "0"
+  output_per_mtok = "0"
+  cache_read_per_mtok = "0"
+
+  # Automatic: a read was observed on a second turn with no cache_control sent,
+  # so the server decides what to keep and a breakpoint manager has nothing to
+  # place here.
+  [surface_default.cache]
+  modes = ["automatic"]
+  default_mode = "automatic"
+  min_tokens = 0
+  max_breakpoints = 0
+  lookback_blocks = 0
+  routing_key_support = false
   usage_accounting = "separate"
 
 # --------------------------------------------------------------------------

@@ -42,6 +42,12 @@ type Client struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+
+	// provider names who this client speaks for. Other vendors serve this exact
+	// wire format, and a target reached from one of them is that vendor's
+	// target: its own credential, its own catalog entry, its own price. Empty
+	// means Anthropic itself.
+	provider string
 }
 
 type Option func(*Client)
@@ -64,6 +70,14 @@ func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) { c.http = h }
 }
 
+// WithProvider names the vendor this client serves, for a compatible endpoint
+// that is not Anthropic. It changes attribution only: what the adapter sends
+// and how it reads a response are properties of the format, not of who serves
+// it.
+func WithProvider(name string) Option {
+	return func(c *Client) { c.provider = name }
+}
+
 func New(opts ...Option) *Client {
 	c := &Client{
 		baseURL: defaultBaseURL,
@@ -77,7 +91,12 @@ func New(opts ...Option) *Client {
 	return c
 }
 
-func (c *Client) Name() string { return Name }
+func (c *Client) Name() string {
+	if c.provider != "" {
+		return c.provider
+	}
+	return Name
+}
 
 func Target(model string) provider.RouteTarget {
 	return provider.RouteTarget{Provider: Name, Surface: Surface, ModelID: model}
@@ -117,7 +136,7 @@ func (c *Client) CountTokens(ctx context.Context, target provider.RouteTarget, r
 	var counted countResponse
 	if err := json.NewDecoder(resp.Body).Decode(&counted); err != nil {
 		return provider.TokenEstimate{}, &provider.ProtocolError{
-			Provider: Name, Detail: "decoding a token count", Err: err}
+			Provider: c.Name(), Detail: "decoding a token count", Err: err}
 	}
 	return provider.TokenEstimate{InputTokens: counted.InputTokens, Exact: true}, nil
 }
@@ -138,7 +157,7 @@ func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provid
 
 	var list modelList
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return res, &provider.ProtocolError{Provider: Name, Detail: "decoding /v1/models", Err: err}
+		return res, &provider.ProtocolError{Provider: c.Name(), Detail: "decoding /v1/models", Err: err}
 	}
 	res.Reachable = true
 	for _, m := range list.Data {
@@ -188,7 +207,7 @@ func (c *Client) do(ctx context.Context, path string, body []byte) (*http.Respon
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		resp.Body.Close()
 		return nil, &provider.APIError{
-			Provider:   Name,
+			Provider:   c.Name(),
 			StatusCode: resp.StatusCode,
 			Body:       errorMessage(raw),
 		}

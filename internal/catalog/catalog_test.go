@@ -380,3 +380,42 @@ func TestSubscriptionSurfaceIsMeteredDifferently(t *testing.T) {
 		t.Error("the two openai surfaces produced one target id")
 	}
 }
+
+// Three surfaces price at zero per token for three different reasons, and a
+// router that treats them alike is optimizing the wrong thing: a local model
+// consumes nothing scarce, a plan consumes quota, and a metered target consumes
+// money.
+func TestMeteringDistinguishesZeroCostForDifferentReasons(t *testing.T) {
+	c := load(t)
+
+	for _, tc := range []struct {
+		target provider.RouteTarget
+		want   Metering
+	}{
+		{provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "any"}, Local},
+		{provider.RouteTarget{Provider: "openaicompat", Surface: "ollama", ModelID: "any"}, Local},
+		{provider.RouteTarget{Provider: "openai", Surface: "subscription", ModelID: "any"}, Plan},
+		{provider.RouteTarget{Provider: "kimi", Surface: "coding", ModelID: "any"}, Plan},
+		{provider.RouteTarget{Provider: "anthropic", Surface: "first-party", ModelID: "claude-haiku-4-5"}, PerToken},
+	} {
+		info, _, ok := c.Lookup(tc.target)
+		if !ok {
+			t.Errorf("%s has no catalog entry", tc.target.ID())
+			continue
+		}
+		if got := Metering(info.Metering.String()); got != tc.want {
+			t.Errorf("%s metering = %q, want %q", tc.target.ID(), got, tc.want)
+		}
+	}
+
+	// A plan target is free of per-token cost and is not free of limits, so the
+	// two questions must not collapse into one answer.
+	plan, _, _ := c.Lookup(provider.RouteTarget{Provider: "kimi", Surface: "coding", ModelID: "any"})
+	local, _, _ := c.Lookup(provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "any"})
+	if !plan.Free() || !local.Free() {
+		t.Error("both should report zero per-token cost")
+	}
+	if plan.Metering == local.Metering {
+		t.Error("a plan and a local model are metered differently and must not report the same thing")
+	}
+}

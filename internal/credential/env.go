@@ -69,6 +69,7 @@ func EnvNames(ref Ref) []string {
 var conventionalEnv = map[string]string{
 	"anthropic": "ANTHROPIC_API_KEY",
 	"openai":    "OPENAI_API_KEY",
+	"kimi":      "KIMI_API_KEY",
 }
 
 func envVar(parts ...string) string {

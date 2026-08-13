@@ -9,6 +9,7 @@ import (
 	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/provider/anthropic"
+	"github.com/cjvana/switchboard/internal/provider/kimi"
 	"github.com/cjvana/switchboard/internal/provider/ollama"
 	"github.com/cjvana/switchboard/internal/provider/openai"
 	"github.com/cjvana/switchboard/internal/provider/openaicompat"
@@ -32,6 +33,7 @@ type providers struct {
 	openai map[string]*openaicompat.Client
 
 	anthropic *anthropic.Client
+	kimi      *anthropic.Client
 
 	// responses serves the subscription surface, which speaks a third wire
 	// format and cannot share the compatible client.
@@ -72,6 +74,17 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 			anthropic.WithBaseURL(p.baseURL(anthropic.Name)),
 		)
 		return p.anthropic, nil
+
+	case kimi.Name:
+		if p.kimi != nil {
+			return p.kimi, nil
+		}
+		key, err := p.credential(target)
+		if err != nil {
+			return nil, err
+		}
+		p.kimi = kimi.New(key, anthropic.WithBaseURL(p.baseURL(kimi.Name)))
+		return p.kimi, nil
 
 	case openai.Name:
 		if target.Surface == openai.Subscription {
@@ -133,8 +146,9 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 	}
 
 	return nil, fmt.Errorf(
-		"target %s names provider %q; this build has adapters for %s, %s, %s, and %s",
-		target.ID(), target.Provider, anthropic.Name, ollama.Name, openai.Name, openaicompat.Name)
+		"target %s names provider %q; this build has adapters for %s, %s, %s, %s, and %s",
+		target.ID(), target.Provider,
+		anthropic.Name, kimi.Name, ollama.Name, openai.Name, openaicompat.Name)
 }
 
 // authOptions resolves the credential for a target, if there is one to find.

@@ -275,6 +275,7 @@ var defaultSurfaces = map[string]string{
 	"ollama":    "local",
 	"anthropic": "first-party",
 	"openai":    "first-party",
+	"kimi":      "coding",
 }
 
 // ParseTarget reads a "provider/model" reference into a route target.
