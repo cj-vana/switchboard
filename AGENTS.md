@@ -47,6 +47,28 @@ an unknown profile is an error rather than a fall back to the generic floor,
 since a typo would otherwise quietly disable the capabilities the user asked
 for. A profile nobody has run against a real server does not belong in the map.
 
+**The router is rules, and a learned one is not a near-term option.** §8.2
+defines every classifier dimension by a measurement procedure against the §8.6
+eval corpus, and that corpus is phase 2b. Weights cannot be fit against data
+that does not exist, the same section records the null hypothesis that a task
+profile loses to a plain scalar, and §19.2 gates a learned router on beating
+heuristics after runtime and distribution costs. Running the heuristic is what
+produces the evidence to settle it.
+
+**Feasibility is not economics.** A target that cannot hold the context, lacks a
+capability, or is not an approved destination is infeasible, not expensive. The
+filter checks those before budget so that a target excluded by policy is never
+reported as one that was out-priced, and a ceiling is checked against the upper
+bound rather than the expectation: a turn affordable on average is not a turn
+under a ceiling.
+
+**An outcome is worth less as evidence than it looks.** §8.4's labelling rules
+are in `internal/router` because each prevents a specific failure. A clean
+completion is weak evidence of sufficiency and none of necessity, which is the
+main way a naive router learns to over-provision. An escalation is not a
+negative label: provider failure, a phase change, and a bad rule produce the
+same event. Abandonment is censored rather than negative.
+
 **One component owns cache-marker placement.** `internal/breakpoint` decides
 where markers go and whether to place any at all, because the four reachable
 surfaces want four different things: explicit markers with a limit and a
