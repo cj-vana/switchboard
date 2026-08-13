@@ -72,6 +72,11 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Denies last: these override every grant above.
+;;
+;; The generated section that follows this file denies the home directory
+;; wholesale, which subsumes most of what is listed here. These stay as the
+;; floor: if the home directory cannot be resolved, the generated section is
+;; skipped and these are what remain standing.
 ;; ---------------------------------------------------------------------------
 
 (deny file-read* (subpath (param "DENY_SSH")))

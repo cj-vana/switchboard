@@ -42,8 +42,15 @@ type selfTestEnv struct {
 	Workspace string
 	Home      string
 
-	// Canary is a real file inside a directory the profile must hide.
+	// Canary is a real file inside a directory the profile explicitly hides.
 	Canary string
+
+	// UnlistedCanary sits at the top of the home directory under a name that
+	// appears on no allow list and no deny list. It is the check that the home
+	// directory is closed by default rather than by enumeration: under a
+	// deny-list policy this file is readable, and that is the whole failure
+	// mode being designed out.
+	UnlistedCanary string
 
 	// Escape is a path outside every writable root. Nothing should be able to
 	// create it, and the self-test checks the file system as well as the exit
@@ -86,14 +93,22 @@ func newSelfTestEnv() (*selfTestEnv, func(), error) {
 		return nil, nil, err
 	}
 
+	unlisted := filepath.Join(home, ".switchboard-selftest-unlisted-canary")
+	if err := os.WriteFile(unlisted, []byte(canaryToken), 0o600); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
 	env := &selfTestEnv{
-		Workspace: resolved,
-		Home:      home,
-		Canary:    canary,
-		Escape:    filepath.Join(home, ".switchboard-sandbox-escape-probe"),
+		Workspace:      resolved,
+		Home:           home,
+		Canary:         canary,
+		UnlistedCanary: unlisted,
+		Escape:         filepath.Join(home, ".switchboard-sandbox-escape-probe"),
 	}
 	return env, func() {
 		os.Remove(canary)
+		os.Remove(unlisted)
 		os.Remove(env.Escape)
 		cleanup()
 	}, nil

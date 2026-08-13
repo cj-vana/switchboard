@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // seatbeltProfile is the confinement policy. Its comments explain each rule and
@@ -31,7 +32,7 @@ func detectPlatform() Capability {
 	}
 	c.MechanismPresent = true
 
-	verified, detail := cachedVerification(shortHash(seatbeltProfile), darwinHostKey(), darwinSelfTest)
+	verified, detail := cachedVerification(darwinProfileKey(), darwinHostKey(), darwinSelfTest)
 	c.Detail = detail
 	if verified {
 		c.confinement = &Confinement{mechanism: MechanismSeatbelt, wrap: wrapSeatbelt}
@@ -62,14 +63,62 @@ func wrapSeatbelt(p Policy, argv []string) ([]string, error) {
 	return append(out, argv...), nil
 }
 
-// profileText appends the egress grant for a command the user explicitly gave
-// network access to. It goes after the deny block, which only covers reads, so
-// nothing above is weakened.
+// profileText appends the rules that cannot be expressed with a fixed set of
+// parameters, because their number depends on what exists on this machine.
+//
+// Everything here is emitted after the static profile, and later rules win, so
+// this section closes the home directory rather than opening anything the base
+// profile denied.
 func profileText(p Policy) string {
-	if p.Network == NetworkFull {
-		return seatbeltProfile + "\n; Egress granted explicitly for this command.\n(allow network*)\n"
+	var b strings.Builder
+	b.WriteString(seatbeltProfile)
+
+	if home, err := os.UserHomeDir(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(home); err == nil {
+			home = resolved
+		}
+		b.WriteString("\n;; Home is denied wholesale, then reopened where a toolchain needs it.\n")
+		fmt.Fprintf(&b, "(deny file-read* (subpath %s))\n", seatbeltString(home))
+
+		// The workspace is usually inside home, so it has to come back first.
+		if ws, err := filepath.EvalSymlinks(p.Workspace); err == nil {
+			fmt.Fprintf(&b, "(allow file-read* (subpath %s))\n", seatbeltString(ws))
+		}
+		for _, path := range readableHomePaths(home) {
+			fmt.Fprintf(&b, "(allow file-read* (subpath %s))\n", seatbeltString(path))
+		}
+		// Denied last, because some of them sit inside the paths just opened.
+		for _, path := range secretHomePaths(home) {
+			fmt.Fprintf(&b, "(deny file-read* (subpath %s))\n", seatbeltString(path))
+		}
 	}
-	return seatbeltProfile
+
+	if p.Network == NetworkFull {
+		b.WriteString("\n; Egress granted explicitly for this command.\n(allow network*)\n")
+	}
+	return b.String()
+}
+
+// seatbeltString renders a path as a profile string literal.
+//
+// Parameters passed with -D cannot be used for these rules because their count
+// varies by machine, so the path goes into the policy text and has to be
+// escaped. A workspace directory named with a quote would otherwise close the
+// literal and let the rest of the name be read as policy.
+func seatbeltString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func profileParams(p Policy) (map[string]string, error) {
@@ -120,6 +169,13 @@ func profileParams(p Policy) (map[string]string, error) {
 		"DENY_CONFIG_SSH":    under(".config", "ssh"),
 		"DENY_SWITCHBOARD":   under(".switchboard"),
 	}, nil
+}
+
+// darwinProfileKey covers the effective profile, not just the embedded file.
+// The generated section depends on which toolchain directories exist, so a
+// cached pass must not survive the user installing one.
+func darwinProfileKey() string {
+	return shortHash(profileText(Policy{Workspace: os.TempDir(), Network: NetworkLoopback}))
 }
 
 // darwinHostKey pins the verdict to this OS build. What the kernel enforces for

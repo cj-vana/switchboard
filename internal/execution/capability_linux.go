@@ -60,32 +60,6 @@ var writableCaches = []string{
 	filepath.Join("go", "pkg", "mod"),
 }
 
-// hiddenPaths are covered with an empty mount. Anything not named here is
-// readable, which is the same leak-by-default posture the macOS profile takes
-// and carries the same open question.
-var hiddenPaths = []string{
-	".ssh",
-	".aws",
-	".kube",
-	".docker",
-	".gnupg",
-	".config/gcloud",
-	".config/gh",
-	".password-store",
-	".local/share/keyrings",
-
-	// Switchboard's own logs hold prompts, diffs, and file contents from every
-	// workspace on this machine.
-	".switchboard",
-}
-
-// hiddenFiles are covered with /dev/null rather than an empty directory.
-var hiddenFiles = []string{
-	".netrc",
-	".git-credentials",
-	".pgpass",
-}
-
 func wrapBubblewrap(p Policy, argv []string) ([]string, error) {
 	workspace, err := filepath.EvalSymlinks(p.Workspace)
 	if err != nil {
@@ -110,37 +84,60 @@ func wrapBubblewrap(p Policy, argv []string) ([]string, error) {
 		"--proc", "/proc",
 	}
 
-	// Writable roots, layered over the read-only tree.
-	out = append(out, "--bind", workspace, workspace)
-	if tmp != "/" {
-		out = append(out, "--bind", tmp, tmp)
+	// An empty mount over the home directory closes it wholesale. Everything
+	// below reopens only what a build needs, so a credential file nobody
+	// thought to enumerate is denied by default rather than by luck.
+	out = append(out, "--tmpfs", home)
+
+	// Readable, but not writable: toolchains a version manager installed.
+	caches := map[string]bool{}
+	for _, rel := range writableCaches {
+		caches[filepath.Join(home, rel)] = true
 	}
+	for _, path := range readableHomePaths(home) {
+		if !caches[path] {
+			out = append(out, "--ro-bind", path, path)
+		}
+	}
+
+	// Build caches, writable. The directory has to exist before it can be
+	// bound: --bind-try would skip a missing one, and the tool inside cannot
+	// create it either, so a user who has never run a build would meet
+	// "mkdir ~/.cache: read-only file system" on their first confined command.
 	for _, rel := range writableCaches {
 		dir := filepath.Join(home, rel)
-		// The directory has to exist before it can be bound. --bind-try would
-		// otherwise skip it, and the tool inside cannot create it either because
-		// the home directory is read-only by then: a user who has never run a Go
-		// build gets "mkdir ~/.cache: read-only file system" on their first
-		// confined command. Creating it empty is what the tool would do anyway.
 		os.MkdirAll(dir, 0o700)
 		out = append(out, "--bind-try", dir, dir)
 	}
 
-	// Deny mounts last, so they cover anything the binds above exposed.
-	for _, rel := range hiddenPaths {
-		dir := filepath.Join(home, filepath.FromSlash(rel))
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			out = append(out, "--tmpfs", dir)
+	// The workspace usually sits inside home, so it comes after the tmpfs.
+	out = append(out, "--bind", workspace, workspace)
+	if tmp != "/" && !strings.HasPrefix(tmp, home+string(filepath.Separator)) {
+		out = append(out, "--bind", tmp, tmp)
+	}
+
+	// Secrets that live inside a directory just reopened: cargo keeps registry
+	// tokens beside its package cache, and the XDG data directory holds the
+	// keyring beside legitimately shared files.
+	for _, path := range secretHomePaths(home) {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			out = append(out, "--tmpfs", path)
+		} else if err == nil {
+			out = append(out, "--ro-bind", os.DevNull, path)
 		}
 	}
-	for _, rel := range hiddenFiles {
-		file := filepath.Join(home, rel)
-		if info, err := os.Stat(file); err == nil && !info.IsDir() {
-			out = append(out, "--ro-bind", os.DevNull, file)
-		}
-	}
+
 	out = append(out, agentSocketFlags()...)
 	out = append(out, sessionBusFlags()...)
+
+	// A tmpfs is writable, so without this the home directory would accept
+	// writes into a filesystem that evaporates: the real home stays untouched,
+	// but the command sees success and a later one finds nothing. Remounting
+	// read-only turns that into the refusal it should have been.
+	//
+	// It has to come after every mount placed inside home. Earlier, and
+	// bubblewrap cannot create the mountpoints for them.
+	out = append(out, "--remount-ro", home)
 
 	out = append(out,
 		"--unshare-user",

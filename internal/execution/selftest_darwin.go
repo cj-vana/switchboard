@@ -49,6 +49,13 @@ func darwinSelfTest() (bool, string) {
 			mustNotOutput: canaryToken,
 		},
 		{
+			// Nothing names this file. Under a deny-list policy it is readable,
+			// which is exactly the posture this replaces.
+			name:          "read an unlisted file in the home directory",
+			argv:          []string{"/bin/cat", env.UnlistedCanary},
+			mustNotOutput: canaryToken,
+		},
+		{
 			// securityd answers over mach IPC whether or not the keychain files
 			// are readable, so this is the check that catches a mach-lookup
 			// grant reopening the credential store.

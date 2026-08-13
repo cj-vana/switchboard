@@ -17,19 +17,52 @@ removed, and the sections below say which.
 
 Both platforms implement the same promise. A confined command may:
 
-- read almost anything on the machine, except the paths listed as hidden;
-- write inside the workspace, the temp directory, and a fixed set of build
-  caches;
+- read the system: `/usr`, `/opt`, `/etc`, and the rest of the filesystem
+  outside the home directory;
+- read the workspace, the build caches, and per-user toolchain installs;
+- write inside the workspace, the temp directory, and those build caches;
 - execute other programs, allocate terminals, and fork;
 - bind and connect to loopback addresses.
 
 It may not:
 
 - write anywhere else, including the home directory;
-- read the enumerated credential stores, or reach the daemon that hands out
-  credentials;
-- use the ssh agent;
+- **read anything else under the home directory**, whether or not anyone
+  thought to name it;
+- reach the daemon that hands out credentials, or use the ssh agent;
 - reach the network off the machine unless egress was granted for that command.
+
+### Reads follow the risk
+
+The read policy is deliberately asymmetric, and this is the one decision here
+most worth understanding.
+
+Outside the home directory, reads are broad. System directories hold no user
+secrets, and an allowlist over them would break every compiler for nothing.
+
+Inside the home directory, reads are closed by default and opened only where a
+build needs them. Home is where credentials actually live, and enumerating what
+leaks there is a race nobody wins. A survey of one ordinary developer machine
+found 51 top-level entries in home. A hand-written deny list covered six of
+them. Still readable were an npm registry auth token in `.npmrc`, shell history
+with whatever had been pasted into it, `Library/Application Support` for every
+installed application, `Documents`, and the credential directories of five
+separate CLI tools. Adding those six names would not have fixed it; the next
+tool installed would reopen the hole.
+
+So the home directory is denied wholesale and reopened for build caches,
+per-user toolchain installs, and `.gitconfig`. Version managers keep the actual
+compiler under home, so denying `.rustup` or `.nvm` removes the tool rather than
+protecting anything. A few paths are then denied again because they sit inside
+something reopened: cargo keeps registry tokens beside its package cache, and
+the XDG data directory holds the Linux keyring beside legitimately shared files.
+
+The lists are `homeReadable` and `homeSecrets` in
+`internal/execution/homepolicy.go`.
+
+The cost is real: a tool that reads config from an unlisted place under home
+will not find it, and the fix is to add the path rather than to widen the
+policy. That is the trade being made on purpose.
 
 ## Verification
 
@@ -89,7 +122,12 @@ build with `operation not permitted`. A rule written against a symlink is worse
 than a missing rule, because the profile still reads as strict.
 
 **Later rules win, so denies go last.** Moving a deny above the grant it is
-meant to override silently disables it.
+meant to override silently disables it. The home-directory rules are generated
+in Go and appended after the embedded profile, because their number depends on
+which toolchain directories exist on the machine. Paths there go into the policy
+text rather than into a `-D` parameter, so they are escaped: a workspace named
+with a quote would otherwise close the string literal and have the rest of its
+name read as policy.
 
 **`mach-lookup` is granted nowhere.** `securityd` answers keychain queries over
 mach IPC, so denying the keychain files accomplishes nothing on its own:
@@ -117,6 +155,13 @@ top, and empty mounts over what must not be readable.
 **Order is the policy.** Mounts apply in sequence, so writable binds must come
 after the read-only root and the deny mounts must come after those. A deny
 placed before a bind covering the same path silently does nothing.
+
+**A tmpfs is writable, so closing home takes two steps.** `--tmpfs $HOME` hides
+everything under it, and then accepts writes into a filesystem that evaporates:
+the real home is untouched, but the command sees success and a later one finds
+nothing. `--remount-ro` turns that into the refusal it should have been, and it
+has to come after every mount placed inside home, or bubblewrap cannot create
+their mountpoints.
 
 **A deny mount needs an existing mountpoint.** `--tmpfs` on a path that does not
 exist fails the entire invocation, because bubblewrap cannot create the
@@ -151,12 +196,14 @@ pid inside the namespace means nothing outside it.
 
 ## What this does not protect against
 
-**Reads leak by default.** Both platforms allow broad reads and subtract an
-enumerated list. Any secret whose location is not on that list is readable. A
-read allowlist is the safer shape and it breaks toolchains continuously, which
-is a maintenance cost this project does not currently absorb. This is the open
-question the design carries: it should be settled before v0.1, and the hidden
-list should grow whenever a new credential location becomes common.
+**Reads outside home are broad.** A secret stored outside the home directory,
+in `/etc` or a shared directory, is readable. The asymmetry is the point, but it
+is an asymmetry: this protects the place credentials normally live, not every
+place they could.
+
+**A reopened toolchain directory is trusted wholesale.** `.rustup` and `.nvm`
+are readable so their compilers work. A credential stashed inside one, beyond
+those in `homeSecrets`, is readable with it.
 
 **Cache directories are a persistence vector.** Granting writes to `~/.cargo`,
 `~/.npm`, and the rest is what makes a second build fast. It also lets a command
@@ -183,12 +230,15 @@ is the destination policy's job (§16, principle 6).
 When a tool fails confined:
 
 1. Run it under the confinement directly to see the refusal.
-2. If it needs to write outside the workspace, add its cache with a comment
+2. If it needs to read something under home, add it to `homeReadable` in
+   `internal/execution/homepolicy.go`. If the directory also holds credentials,
+   add those to `homeSecrets` in the same file.
+3. If it needs to write outside the workspace, add its cache with a comment
    naming the tool, and weigh the persistence cost above.
-3. If it needs a service the confinement blocks, grant that specific one, then
+4. If it needs a service the confinement blocks, grant that specific one, then
    re-run the credential assertions. A broad grant reopens the credential store
    on both platforms.
-4. Add it to `TestInstalledToolchainsWorkConfined` so the next change does not
+5. Add it to `TestInstalledToolchainsWorkConfined` so the next change does not
    silently break it.
 
 Editing either confinement changes its key, which invalidates cached

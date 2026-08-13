@@ -45,6 +45,13 @@ func linuxSelfTest() (bool, string) {
 			argv:          []string{"/bin/cat", env.Canary},
 			mustNotOutput: canaryToken,
 		},
+		{
+			// Nothing names this file. Under a deny-list policy it is readable,
+			// which is exactly the posture this replaces.
+			name:          "read an unlisted file in the home directory",
+			argv:          []string{"/bin/cat", env.UnlistedCanary},
+			mustNotOutput: canaryToken,
+		},
 	}
 
 	// Egress needs a real client. /dev/tcp is a bash builtin and /bin/sh is
