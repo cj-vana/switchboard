@@ -45,19 +45,19 @@ func detectPlatform() Capability {
 // bwrapPath is resolved once by detectPlatform. Tests set it directly.
 var bwrapPath = "bwrap"
 
-// writableCaches are build caches granted so a second build is not cold.
+// writableCaches are build caches granted so a second build is not cold. The
+// list holds what has actually been exercised under confinement; extending it
+// is documented in docs/sandbox.md.
 //
 // Granting them is also a persistence vector: a command can leave a config or a
 // compiled artifact here that a later, separately approved command executes.
 // Confinement is per command and is not a durable boundary between commands.
 var writableCaches = []string{
+	// The XDG base, which Go, pip, and uv all build on.
 	".cache",
 	".npm",
 	".cargo",
-	".gradle",
-	".m2",
 	filepath.Join("go", "pkg", "mod"),
-	filepath.Join(".local", "share", "virtualenvs"),
 }
 
 // hiddenPaths are covered with an empty mount. Anything not named here is
@@ -117,8 +117,12 @@ func wrapBubblewrap(p Policy, argv []string) ([]string, error) {
 	}
 	for _, rel := range writableCaches {
 		dir := filepath.Join(home, rel)
-		// --bind-try skips a cache the user does not have rather than failing
-		// the whole command.
+		// The directory has to exist before it can be bound. --bind-try would
+		// otherwise skip it, and the tool inside cannot create it either because
+		// the home directory is read-only by then: a user who has never run a Go
+		// build gets "mkdir ~/.cache: read-only file system" on their first
+		// confined command. Creating it empty is what the tool would do anyway.
+		os.MkdirAll(dir, 0o700)
 		out = append(out, "--bind-try", dir, dir)
 	}
 

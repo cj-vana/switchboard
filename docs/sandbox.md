@@ -164,6 +164,12 @@ plant a config or a compiled artifact that a later, separately approved command
 executes. Confinement is per command; it is not a durable boundary between
 commands.
 
+The granted list holds what has actually been exercised under confinement, so
+Java and Gradle are not covered yet. On Linux those directories are created
+empty if absent, because they cannot be created from inside: the home directory
+is read-only by then, and a user who has never run a build would otherwise meet
+`mkdir ~/.cache: read-only file system` on their very first confined command.
+
 **The temp directory is writable,** because build tools are unusable without it.
 A confined command can write anywhere in it, including files another process may
 later read.

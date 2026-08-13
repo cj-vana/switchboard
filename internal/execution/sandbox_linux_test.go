@@ -283,6 +283,49 @@ func TestUnapplicableConfinementRefusesToRun(t *testing.T) {
 	}
 }
 
+// A user who has never run a build has no ~/.cache. Binding it with --bind-try
+// silently skips it, and the tool inside cannot create it either, because the
+// home directory is read-only by then. The failure lands on the very first
+// confined command, which is the worst possible time for it.
+func TestFirstRunWithNoCacheDirectory(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+
+	// Not t.TempDir(): that lives under $TMPDIR, which the confinement binds
+	// writable, so a cache directory there would be creatable and the test
+	// would pass whether or not the bug was fixed. The fresh home has to sit
+	// somewhere the sandbox actually makes read-only.
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := os.MkdirTemp(realHome, ".switchboard-freshhome-")
+	if err != nil {
+		t.Skipf("cannot create a scratch home under %s: %v", realHome, err)
+	}
+	defer os.RemoveAll(fresh)
+
+	t.Setenv("HOME", fresh)
+	// Pinned rather than left to default resolution so the test does not
+	// inherit a GOCACHE from the environment running it. The path is the one
+	// the default would produce under this HOME.
+	t.Setenv("GOCACHE", filepath.Join(fresh, ".cache", "go-build"))
+
+	if _, err := os.Stat(filepath.Join(fresh, ".cache")); err == nil {
+		t.Fatal("the fresh home already has a cache directory; the test proves nothing")
+	}
+
+	ws := workspaceFor(t)
+	os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module m\n\ngo 1.26\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "main.go"), []byte("package main\nfunc main(){}\n"), 0o644)
+
+	res := runConfined(t, ws, NetworkLoopback, []string{"go", "build", "-o", "out", "."}, false)
+	if res.ExitCode != 0 {
+		t.Fatalf("first confined build in a fresh home failed: %s", res.Output)
+	}
+}
+
 func TestInstalledToolchainsWorkConfined(t *testing.T) {
 	if testing.Short() {
 		t.Skip("toolchain matrix is slow")
