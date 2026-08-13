@@ -1,0 +1,397 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/cjvana/switchboard/internal/permission"
+)
+
+func newRegistry(t *testing.T) (*Registry, string) {
+	t.Helper()
+	root := t.TempDir()
+	r, err := NewRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, r.Root()
+}
+
+func run(t *testing.T, r *Registry, tool string, input any) Result {
+	t.Helper()
+	res, err := tryRun(r, tool, input)
+	if err != nil {
+		t.Fatalf("%s: %v", tool, err)
+	}
+	return res
+}
+
+func tryRun(r *Registry, tool string, input any) (Result, error) {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return Result{}, err
+	}
+	tl, ok := r.Get(tool)
+	if !ok {
+		return Result{}, os.ErrNotExist
+	}
+	plan, err := tl.Plan(raw)
+	if err != nil {
+		return Result{}, err
+	}
+	return plan.Run(context.Background())
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadReturnsExactBytes(t *testing.T) {
+	r, root := newRegistry(t)
+	const content = "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n"
+	writeFile(t, filepath.Join(root, "main.go"), content)
+
+	res := run(t, r, "read", map[string]any{"path": "main.go"})
+	if res.IsError {
+		t.Fatalf("read failed: %s", res.Content)
+	}
+	// Exact bytes, with no line numbers: anything added here would end up
+	// pasted into an edit's old_string and fail to match.
+	if res.Content != content {
+		t.Errorf("read returned %q, want the file verbatim", res.Content)
+	}
+}
+
+func TestReadOffsetAndLimit(t *testing.T) {
+	r, root := newRegistry(t)
+	writeFile(t, filepath.Join(root, "lines.txt"), "one\ntwo\nthree\nfour\nfive\n")
+
+	res := run(t, r, "read", map[string]any{"path": "lines.txt", "offset": 2, "limit": 2})
+	if res.IsError {
+		t.Fatalf("read failed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "two\nthree") {
+		t.Errorf("content = %q, want lines two and three", res.Content)
+	}
+	if strings.Contains(res.Content, "four") {
+		t.Errorf("limit was not respected: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "[lines 2-3 of 6]") {
+		t.Errorf("a partial read must say which slice it returned: %q", res.Content)
+	}
+}
+
+func TestReadRejectsDirectoriesAndMissingFiles(t *testing.T) {
+	r, root := newRegistry(t)
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if res := run(t, r, "read", map[string]any{"path": "sub"}); !res.IsError {
+		t.Error("reading a directory should be a tool error")
+	}
+	if res := run(t, r, "read", map[string]any{"path": "nope.go"}); !res.IsError {
+		t.Error("reading a missing file should be a tool error")
+	}
+}
+
+func TestWorkspaceBoundary(t *testing.T) {
+	r, root := newRegistry(t)
+	outside := filepath.Join(filepath.Dir(root), "outside.txt")
+	writeFile(t, outside, "secret")
+
+	for _, path := range []string{"../outside.txt", outside, "sub/../../outside.txt"} {
+		if _, err := tryRun(r, "read", map[string]any{"path": path}); err == nil {
+			t.Errorf("path %q escaped the workspace", path)
+		}
+	}
+}
+
+// A symlink inside the workspace pointing out of it is the case a naive prefix
+// check misses: the literal path looks contained and the file it opens is not.
+func TestSymlinkEscapeIsRejected(t *testing.T) {
+	r, root := newRegistry(t)
+
+	outsideDir := t.TempDir()
+	secret := filepath.Join(outsideDir, "credentials")
+	writeFile(t, secret, "sk-live-key")
+
+	if err := os.Symlink(secret, filepath.Join(root, "innocent.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(root, "elsewhere")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := tryRun(r, "read", map[string]any{"path": "innocent.txt"}); err == nil {
+		t.Error("a symlink to a file outside the workspace was followed")
+	}
+	// Also covers writing through a symlinked directory to a path that does not
+	// exist yet, where only the ancestor can be resolved.
+	if _, err := tryRun(r, "write", map[string]any{"path": "elsewhere/planted.txt", "content": "x"}); err == nil {
+		t.Error("a write through a symlinked directory escaped the workspace")
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "planted.txt")); err == nil {
+		t.Error("the escaping write actually created a file outside the workspace")
+	}
+}
+
+func TestWriteRequiresAPriorReadOfAnExistingFile(t *testing.T) {
+	r, root := newRegistry(t)
+	path := filepath.Join(root, "existing.go")
+	writeFile(t, path, "original\n")
+
+	res := run(t, r, "write", map[string]any{"path": "existing.go", "content": "replaced\n"})
+	if !res.IsError {
+		t.Fatal("overwriting an unread file must fail")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "original\n" {
+		t.Fatal("the file was overwritten anyway")
+	}
+
+	run(t, r, "read", map[string]any{"path": "existing.go"})
+	if res := run(t, r, "write", map[string]any{"path": "existing.go", "content": "replaced\n"}); res.IsError {
+		t.Fatalf("write after read failed: %s", res.Content)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "replaced\n" {
+		t.Errorf("file = %q, want replaced", got)
+	}
+}
+
+func TestWriteCreatesNewFilesWithoutAPriorRead(t *testing.T) {
+	r, root := newRegistry(t)
+
+	res := run(t, r, "write", map[string]any{"path": "pkg/new.go", "content": "package pkg\n"})
+	if res.IsError {
+		t.Fatalf("creating a new file failed: %s", res.Content)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "pkg", "new.go"))
+	if err != nil || string(got) != "package pkg\n" {
+		t.Errorf("file = %q, err = %v", got, err)
+	}
+}
+
+// The staleness check exists for exactly this: something else touched the file
+// between the agent's read and its write.
+func TestConcurrentModificationBlocksTheWrite(t *testing.T) {
+	r, root := newRegistry(t)
+	path := filepath.Join(root, "raced.go")
+	writeFile(t, path, "version one\n")
+
+	run(t, r, "read", map[string]any{"path": "raced.go"})
+	writeFile(t, path, "someone else edited this\n")
+
+	res := run(t, r, "write", map[string]any{"path": "raced.go", "content": "agent's version\n"})
+	if !res.IsError {
+		t.Fatal("a write over a changed file must fail")
+	}
+	if !strings.Contains(res.Content, "changed since it was read") {
+		t.Errorf("the message must say why: %q", res.Content)
+	}
+
+	// Retrying without a fresh read must fail again, or the check is a speed
+	// bump rather than a guarantee.
+	if res := run(t, r, "write", map[string]any{"path": "raced.go", "content": "agent's version\n"}); !res.IsError {
+		t.Error("the retry succeeded without re-reading")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "someone else edited this\n" {
+		t.Errorf("the other change was clobbered: %q", got)
+	}
+}
+
+func TestEdit(t *testing.T) {
+	r, root := newRegistry(t)
+	path := filepath.Join(root, "app.go")
+	writeFile(t, path, "a := 1\nb := 2\na := 1\n")
+	run(t, r, "read", map[string]any{"path": "app.go"})
+
+	t.Run("ambiguous match is refused", func(t *testing.T) {
+		res := run(t, r, "edit", map[string]any{"path": "app.go", "old_string": "a := 1", "new_string": "a := 9"})
+		if !res.IsError {
+			t.Fatal("two matches without replace_all must fail")
+		}
+		if !strings.Contains(res.Content, "appears 2 times") {
+			t.Errorf("message = %q", res.Content)
+		}
+	})
+
+	t.Run("unique match with context", func(t *testing.T) {
+		res := run(t, r, "edit", map[string]any{
+			"path": "app.go", "old_string": "b := 2", "new_string": "b := 22",
+		})
+		if res.IsError {
+			t.Fatalf("edit failed: %s", res.Content)
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != "a := 1\nb := 22\na := 1\n" {
+			t.Errorf("file = %q", got)
+		}
+	})
+
+	t.Run("replace all", func(t *testing.T) {
+		res := run(t, r, "edit", map[string]any{
+			"path": "app.go", "old_string": "a := 1", "new_string": "a := 3", "replace_all": true,
+		})
+		if res.IsError {
+			t.Fatalf("edit failed: %s", res.Content)
+		}
+		got, _ := os.ReadFile(path)
+		if strings.Contains(string(got), "a := 1") {
+			t.Errorf("replace_all left occurrences behind: %q", got)
+		}
+	})
+
+	t.Run("no match explains why", func(t *testing.T) {
+		res := run(t, r, "edit", map[string]any{
+			"path": "app.go", "old_string": "not in the file", "new_string": "x",
+		})
+		if !res.IsError {
+			t.Fatal("a missing old_string must fail")
+		}
+		if !strings.Contains(res.Content, "byte for byte") {
+			t.Errorf("the message should say what exact matching means: %q", res.Content)
+		}
+	})
+}
+
+func TestEditPreservesFileMode(t *testing.T) {
+	r, root := newRegistry(t)
+	path := filepath.Join(root, "script.sh")
+	writeFile(t, path, "#!/bin/sh\necho old\n")
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, r, "read", map[string]any{"path": "script.sh"})
+
+	if res := run(t, r, "edit", map[string]any{
+		"path": "script.sh", "old_string": "echo old", "new_string": "echo new",
+	}); res.IsError {
+		t.Fatalf("edit failed: %s", res.Content)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode = %o, want 755; an edit must not make a script unexecutable", fi.Mode().Perm())
+	}
+}
+
+func TestEditRejectsDegenerateInput(t *testing.T) {
+	r, _ := newRegistry(t)
+	for name, input := range map[string]map[string]any{
+		"empty old_string": {"path": "x.go", "old_string": "", "new_string": "a"},
+		"identical":        {"path": "x.go", "old_string": "a", "new_string": "a"},
+	} {
+		if _, err := tryRun(r, "edit", input); err == nil {
+			t.Errorf("%s should be rejected at plan time", name)
+		}
+	}
+}
+
+func TestExecPlanDescribesThePermissionRequest(t *testing.T) {
+	r, _ := newRegistry(t)
+	tool, _ := r.Get("exec")
+
+	plan, err := tool.Plan(json.RawMessage(`{"command":["go","test","./..."]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := plan.Request
+	if req.Effect != permission.EffectExecute {
+		t.Errorf("effect = %s", req.Effect)
+	}
+	if req.Shell {
+		t.Error("argv mode must not be reported as shell mode")
+	}
+	if strings.Join(req.Argv, " ") != "go test ./..." {
+		t.Errorf("argv = %v", req.Argv)
+	}
+}
+
+func TestExecRuns(t *testing.T) {
+	r, root := newRegistry(t)
+	writeFile(t, filepath.Join(root, "marker.txt"), "x")
+
+	res := run(t, r, "exec", map[string]any{"command": []string{"ls"}})
+	if res.IsError {
+		t.Fatalf("exec failed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "marker.txt") {
+		t.Errorf("command did not run in the workspace: %q", res.Content)
+	}
+
+	failed := run(t, r, "exec", map[string]any{"command": []string{"false"}})
+	if !failed.IsError {
+		t.Error("a non-zero exit must be reported as a tool error")
+	}
+	if !strings.Contains(failed.Content, "exit status 1") {
+		t.Errorf("content = %q, want the exit status", failed.Content)
+	}
+}
+
+func TestExecRejectsBadInputAtPlanTime(t *testing.T) {
+	r, _ := newRegistry(t)
+	cases := map[string]map[string]any{
+		"empty command":        {"command": []string{}},
+		"shell with argv":      {"command": []string{"echo", "hi"}, "shell": true},
+		"timeout over ceiling": {"command": []string{"sleep", "1"}, "timeout_seconds": 100000},
+	}
+	for name, input := range cases {
+		if _, err := tryRun(r, "exec", input); err == nil {
+			t.Errorf("%s should be rejected at plan time", name)
+		}
+	}
+}
+
+// Tool definitions sit in the frozen zone of the context layout. A set that
+// reshuffles between requests would invalidate the cached prefix every turn.
+func TestDefinitionsAreDeterministic(t *testing.T) {
+	r, _ := newRegistry(t)
+
+	first := r.Definitions()
+	for range 5 {
+		next := r.Definitions()
+		for i := range first {
+			if first[i].Name != next[i].Name {
+				t.Fatalf("definition order changed: %s then %s", first[i].Name, next[i].Name)
+			}
+		}
+	}
+
+	var names []string
+	for _, d := range first {
+		names = append(names, d.Name)
+		if d.Description == "" {
+			t.Errorf("%s has no description", d.Name)
+		}
+		if !json.Valid(d.Schema) {
+			t.Errorf("%s has an invalid schema", d.Name)
+		}
+	}
+	if got := strings.Join(names, ","); got != "edit,exec,read,write" {
+		t.Errorf("tools = %s, want the four phase-0 tools", got)
+	}
+}
+
+func TestOnlyReadsAreParallelSafe(t *testing.T) {
+	r, _ := newRegistry(t)
+	for _, name := range []string{"read", "write", "edit", "exec"} {
+		tool, _ := r.Get(name)
+		want := name == "read"
+		if tool.ParallelSafe() != want {
+			t.Errorf("%s.ParallelSafe() = %v, want %v", name, tool.ParallelSafe(), want)
+		}
+	}
+}
