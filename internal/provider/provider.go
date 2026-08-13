@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -56,6 +57,11 @@ type Provider interface {
 	Probe(ctx context.Context, target RouteTarget) (ProbeResult, error)
 }
 
+// ErrStreamIncomplete reports that a stream ended without the provider's
+// terminal event. The turn produced real output, so the caller keeps it as an
+// incomplete message and decides whether to resume or re-issue (§10.3).
+var ErrStreamIncomplete = errors.New("stream ended before the provider signaled completion")
+
 // CapabilityError reports that a target cannot honor something the request
 // asked for. Adapters return it instead of degrading silently; whether to
 // emulate the capability is a decision for the visible policy layer, which can
@@ -89,9 +95,14 @@ func (e *ProtocolError) Error() string {
 
 func (e *ProtocolError) Unwrap() error { return e.Err }
 
-// APIError reports a non-success response. Retryable drives the loop's bounded
-// backoff; anything else fails the turn immediately rather than burning the
-// attempt budget on a request that cannot succeed.
+// APIError reports a provider-reported failure. Retryable drives the loop's
+// bounded backoff; anything else fails the turn immediately rather than burning
+// the attempt budget on a request that cannot succeed.
+//
+// StatusCode is 0 when the provider reported the error inside an already
+// successful response, as happens with an error object mid-stream. Such errors
+// are not retried, because nothing in the status distinguishes a transient
+// failure from a permanent one.
 type APIError struct {
 	Provider   string
 	StatusCode int
