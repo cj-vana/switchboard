@@ -207,6 +207,9 @@ surface = "subscription"
 sb auth oauth login openai/subscription
 ```
 
+Models are whatever the plan offers, and the slugs are not the developer API's
+names. `sb -tiers` will not guess them; the endpoint lists them.
+
 **Read this before using it.** The OAuth client this presents is the one
 OpenAI's own Codex CLI registers. Switchboard is not affiliated with or endorsed
 by OpenAI, and this is not a flow OpenAI publishes for third-party clients: it

@@ -12,8 +12,6 @@
 package openai
 
 import (
-	"errors"
-
 	"github.com/cjvana/switchboard/internal/credential"
 	"github.com/cjvana/switchboard/internal/provider"
 	"github.com/cjvana/switchboard/internal/provider/openaicompat"
@@ -87,10 +85,8 @@ var profiles = map[string]openaicompat.Profile{
 // New builds a client for a serving surface. An unknown surface falls back to
 // the developer API, which is the one that behaves like the documented format.
 //
-// Subscription is not served here. Signing in to it works and the token is
-// good, but the endpoint behind it does not speak this format, which was
-// established by asking it: /chat/completions returns an HTML error page, while
-// /responses answers semantically. See SubscriptionNotes.
+// Subscription is not served here and cannot be: that endpoint speaks the
+// Responses API, which is a different wire format. NewResponses serves it.
 func New(surface string, opts ...openaicompat.Option) *openaicompat.Client {
 	profile, ok := profiles[surface]
 	if !ok {
@@ -100,19 +96,9 @@ func New(surface string, opts ...openaicompat.Option) *openaicompat.Client {
 	return openaicompat.NewFor(surface, profile, opts...)
 }
 
-// ErrSubscriptionNeedsResponsesAPI reports that this surface is reachable and
-// authenticated but has no adapter yet.
-//
-// It is an error rather than a best effort because the alternative is sending a
-// chat-completions body to an endpoint that answers HTML, and "unexpected end
-// of JSON input" tells a user nothing about what to do.
-var ErrSubscriptionNeedsResponsesAPI = errors.New(
-	"openai/subscription speaks the Responses API, which this build has no adapter for yet.\n" +
-		"Signing in works and the token is valid; what is missing is the wire format.\n" +
-		"Use openai/first-party with an API key, or anthropic/first-party, until it exists")
-
-// SubscriptionNotes records what the endpoint actually wants, captured from it
-// rather than from documentation, so the adapter can be written from facts.
+// SubscriptionNotes records what the endpoint wants, captured from it rather
+// than from documentation. ResponsesClient is written against these, and they
+// are kept as the account of where each behaviour came from.
 //
 // The cache surface is the reason this is worth building: it reports written
 // and cached tokens separately, and unlike any other target here it accepts a

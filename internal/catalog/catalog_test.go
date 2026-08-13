@@ -349,3 +349,34 @@ func TestMoneyDisplay(t *testing.T) {
 		}
 	}
 }
+
+// A subscription is not a free target, even though both price at zero per
+// token. A local model is free because nothing meters it; a plan is metered by
+// quota rather than dollars, and it is the only target here that accepts a
+// cache routing key.
+func TestSubscriptionSurfaceIsMeteredDifferently(t *testing.T) {
+	c := load(t)
+	target := provider.RouteTarget{Provider: "openai", Surface: "subscription", ModelID: "gpt-5.4-mini"}
+
+	info, confidence, ok := c.Lookup(target)
+	if !ok {
+		t.Fatal("the subscription surface has no catalog entry, so a turn on it reports nothing at all")
+	}
+	if confidence != Prior {
+		t.Errorf("confidence = %s, want prior", confidence)
+	}
+	if !info.Cache.RoutingKeySupport {
+		t.Error("routing key support is the one thing this surface offers that no other does")
+	}
+	if info.Cache.UsageAccounting != AccountingSeparate {
+		t.Errorf("usage accounting = %q; this endpoint reports cached and written tokens separately",
+			info.Cache.UsageAccounting)
+	}
+
+	// The developer API on the same provider is a different target with real
+	// per-token rates, so the two must not collapse.
+	api := provider.RouteTarget{Provider: "openai", Surface: "first-party", ModelID: "gpt-5.4-mini"}
+	if api.ID() == target.ID() {
+		t.Error("the two openai surfaces produced one target id")
+	}
+}

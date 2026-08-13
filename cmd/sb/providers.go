@@ -33,6 +33,10 @@ type providers struct {
 
 	anthropic *anthropic.Client
 
+	// responses serves the subscription surface, which speaks a third wire
+	// format and cannot share the compatible client.
+	responses *openai.ResponsesClient
+
 	config *config.Config
 }
 
@@ -71,10 +75,20 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 
 	case openai.Name:
 		if target.Surface == openai.Subscription {
-			// Reachable and authenticated, but this endpoint does not speak the
-			// format this adapter sends. Saying so beats a decode failure on an
-			// HTML error page.
-			return nil, fmt.Errorf("%w\n%s", openai.ErrSubscriptionNeedsResponsesAPI, openai.SubscriptionNotes)
+			// A different wire format, so a different client. The compatible
+			// one cannot serve this endpoint at all.
+			if p.responses != nil {
+				return p.responses, nil
+			}
+			token, err := p.credential(target)
+			if err != nil {
+				return nil, err
+			}
+			p.responses = openai.NewResponses(
+				openai.WithResponsesToken(token),
+				openai.WithResponsesBaseURL(p.baseURL(openai.Name)),
+			)
+			return p.responses, nil
 		}
 		if c, ok := p.openai[target.Surface]; ok {
 			return c, nil

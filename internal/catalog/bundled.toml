@@ -110,6 +110,50 @@ source_urls = ["https://github.com/ollama/ollama/blob/main/docs/openai.md"]
   usage_accounting = "none"
 
 # --------------------------------------------------------------------------
+# OpenAI, reached through a ChatGPT plan.
+#
+# The per-token rates are zero because this surface is not billed per token: a
+# flat subscription pays for it. That is not the same claim as "free", and the
+# difference matters to a router. A local model is free because nothing meters
+# it; this is metered by rate limits and plan entitlements rather than by
+# dollars, so the scarce resource is quota rather than budget. Nothing here
+# models quota yet, so a cost estimate against this target is correct at zero
+# and silent about the thing that actually runs out.
+#
+# The cache mechanics are real and are the reason this entry exists. The
+# endpoint reports cached and written prompt tokens separately, and it accepts
+# a caller-supplied routing key, which no other target here does.
+# --------------------------------------------------------------------------
+
+[[surface_default]]
+provider = "openai"
+surface = "subscription"
+display_name = "ChatGPT plan model"
+context_window = 0        # not reported by the discovery endpoint
+max_output = 0
+tools = "parallel"
+vision = true
+reasoning = "effort"
+effort_levels = ["low", "medium", "high"]
+verified_at = 2026-08-13T00:00:00Z
+source_urls = ["https://chatgpt.com/backend-api/codex/models"]
+
+  [[surface_default.pricing]]
+  effective_at = 2026-08-13T00:00:00Z
+  input_per_mtok = "0"
+  output_per_mtok = "0"
+  cache_read_per_mtok = "0"
+
+  [surface_default.cache]
+  modes = ["automatic"]
+  default_mode = "automatic"
+  min_tokens = 0
+  max_breakpoints = 0
+  lookback_blocks = 0
+  routing_key_support = true
+  usage_accounting = "separate"
+
+# --------------------------------------------------------------------------
 # Anthropic, first-party API.
 #
 # No adapter binds these yet; they are here so the pricing and cache mechanics
