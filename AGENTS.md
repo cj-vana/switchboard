@@ -55,6 +55,17 @@ profile loses to a plain scalar, and §19.2 gates a learned router on beating
 heuristics after runtime and distribution costs. Running the heuristic is what
 produces the evidence to settle it.
 
+**A trigger that needs state the loop does not keep is absent, not guessed.**
+`internal/router` detects repeated tool calls, tool error spikes, new test
+failure signatures, and hedging, because the observer already carries what each
+needs. §8.3 also lists an edit reverted twice and a diff crossing a threshold;
+neither is emitted, because the loop keeps no edit history or running diff and
+approximating them would escalate on evidence that does not exist.
+
+A failure signature is the first line that looks like a failure, with digits
+stripped. Comparing whole outputs would make every retry look new, because
+timings and counts differ between two runs of the same broken thing.
+
 **Feasibility is not economics.** A target that cannot hold the context, lacks a
 capability, or is not an approved destination is infeasible, not expensive. The
 filter checks those before budget so that a target excluded by policy is never

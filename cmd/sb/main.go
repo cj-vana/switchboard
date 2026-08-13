@@ -149,6 +149,20 @@ func run() error {
 		System:   agent.SystemPrompt(workspace, mode, capability),
 	}
 
+	// The sticky primary starts wherever routing landed, and the watcher feeds
+	// it what happens inside a turn. Without that connection the escalation
+	// policy is built and never consulted.
+	startRank := 0
+	for i, t := range cfg.Tiers {
+		if t.ID == tier.ID {
+			startRank = i
+		}
+	}
+	sticky := route.NewSticky(route.Policy{}, startRank)
+	if opts.tier != "" || opts.model != "" {
+		sticky.Pin(startRank)
+	}
+
 	r := &repl{
 		loop:       loop,
 		out:        out,
@@ -163,6 +177,10 @@ func run() error {
 	if chosen.Source != "" {
 		r.route = &chosen
 	}
+	r.sticky = sticky
+	loop.Observer = newWatcher(out, out, sticky, len(cfg.Tiers)-1, r.moveTo)
+	r.watcher = loop.Observer.(*watcher)
+
 	r.banner(sess, resumed)
 
 	if opts.prompt != "" {

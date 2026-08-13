@@ -34,7 +34,31 @@ type repl struct {
 	// route is what chose the starting target, when a router chose it. §8.1
 	// renders this rather than logging it, because principle 3 requires the
 	// user can see why.
-	route *route.Decision
+	route   *route.Decision
+	sticky  *route.Sticky
+	watcher *watcher
+}
+
+// moveTo rebinds the loop after the escalation policy changed the primary.
+//
+// A move that cannot be served leaves the target where it is: reporting a
+// switch and then not making it would be worse than staying, because every
+// later line would describe the wrong target.
+func (r *repl) moveTo(rank int, why string) {
+	if rank < 0 || rank >= len(r.config.Tiers) {
+		return
+	}
+	tier := r.config.Tiers[rank]
+
+	probed, client, err := r.providers.probeTier(context.Background(), tier)
+	if err != nil {
+		r.out.Notice("warn", "staying on "+r.tier.ID+": "+err.Error())
+		return
+	}
+	r.tier = probed
+	r.loop.Target = probed.Target
+	r.loop.Provider = client
+	r.out.line(r.out.style(dim, "  now on "+r.tierLine()))
 }
 
 func (r *repl) banner(sess *session.Session, resumed bool) {
@@ -145,6 +169,9 @@ func (r *repl) turn(ctx context.Context, input string) error {
 		}
 	}()
 
+	if r.watcher != nil {
+		r.watcher.StartTurn()
+	}
 	err := r.loop.Turn(turnCtx, input)
 	r.out.endTurn()
 	return err
