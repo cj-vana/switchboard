@@ -38,6 +38,7 @@ func (t *execTool) Schema() json.RawMessage {
       "description": "Program and arguments, for example [\"go\",\"test\",\"./...\"]. When shell is true, pass exactly one element holding the whole script."
     },
     "shell": {"type": "boolean", "description": "Run the single command element through /bin/sh. Only needed for pipes, redirection, or expansion."},
+    "network": {"type": "boolean", "description": "Request access to the internet. Off by default: commands can reach localhost but nothing beyond this machine, so package installs and git fetch need this set. It always requires the user's approval."},
     "timeout_seconds": {"type": "integer", "description": "Wall-clock limit. Defaults to 120."}
   },
   "required": ["command"]
@@ -47,6 +48,7 @@ func (t *execTool) Schema() json.RawMessage {
 type execInput struct {
 	Command        []string `json:"command"`
 	Shell          bool     `json:"shell"`
+	Network        bool     `json:"network"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
 }
 
@@ -71,12 +73,18 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 			in.TimeoutSeconds, maxExecTimeout)
 	}
 
+	network := execution.NetworkLoopback
+	if in.Network {
+		network = execution.NetworkFull
+	}
+
 	return Plan{
 		Request: permission.Request{
-			Tool:   t.Name(),
-			Effect: permission.EffectExecute,
-			Argv:   in.Command,
-			Shell:  in.Shell,
+			Tool:    t.Name(),
+			Effect:  permission.EffectExecute,
+			Argv:    in.Command,
+			Shell:   in.Shell,
+			Network: in.Network,
 		},
 		Run: func(ctx context.Context) (Result, error) {
 			res, err := execution.Run(ctx, execution.Command{
@@ -84,6 +92,14 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 				Shell:   in.Shell,
 				Dir:     t.r.root,
 				Timeout: timeout,
+				// The confinement and the permission decision come from one
+				// capability, so a command approved as contained cannot then run
+				// unconfined.
+				Confine: t.r.capability.Confinement(),
+				Policy: execution.Policy{
+					Workspace: t.r.root,
+					Network:   network,
+				},
 			})
 			if err != nil {
 				// A context error is the user cancelling, which the loop handles

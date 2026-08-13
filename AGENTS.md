@@ -37,9 +37,15 @@ provider.
 
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by
-prompting. `execution.Capability` separates "the mechanism exists" from "we have
-verified a policy that actually contains a build" and the permission engine only
-trusts the second (design principle 4, §11).
+prompting (design principle 4, §11).
+
+There is deliberately no exported boolean for this. `execution.Capability`
+carries a `*Confinement`, which is produced only by a self-test that passed on
+this machine and is also the thing that wraps the command. Do not add a
+`Verified bool` beside it and do not let a caller consult one without applying
+the other: "we verified containment" and "we applied containment" have to be the
+same fact, or the product reports a sandbox it is not using. `Run` fails closed
+when a confinement is set and cannot be applied. See `docs/sandbox-macos.md`.
 
 **The prefix is append-only.** Context layout exists to keep provider caches
 warm. Anything that rewrites history is a cache-invalidating event and is

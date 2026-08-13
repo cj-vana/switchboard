@@ -2,7 +2,8 @@
 // isolation the host can actually provide.
 //
 // The report is deliberately pessimistic. A permission prompt is not a sandbox,
-// so anything this package cannot demonstrate, it denies (design principle 4).
+// so anything this package cannot demonstrate on this machine, it denies
+// (design principle 4).
 package execution
 
 import "runtime"
@@ -21,33 +22,37 @@ const (
 // confuse.
 //
 // MechanismPresent asks whether the OS primitive exists on this machine.
-// PolicyVerified asks whether Switchboard has a profile, tested against real
-// toolchains, that confines a build to the workspace while denying credential
-// stores, agent sockets, and network egress.
+// The confinement asks whether a profile has been demonstrated, here, now, to
+// confine a command: writes stay in the workspace, credential stores are
+// unreadable, and egress is refused.
 //
-// Only the second may gate automatic execution. A present-but-unverified
-// mechanism is worth exactly as much as no mechanism: shipping automatic
-// execution on isolation nobody has confirmed would present a prompt as
-// containment, which §11 forbids.
+// Only the second may gate automatic execution, and it is not a boolean. It is
+// the wrapper itself, so "we verified containment" and "we applied containment"
+// cannot come apart.
 type Capability struct {
 	Platform         string
 	Mechanism        Mechanism
 	MechanismPresent bool
-	PolicyVerified   bool
 	Detail           string
+
+	confinement *Confinement
 }
 
 // AutomaticExecutionAllowed is the only question the permission engine asks of
 // this type.
-func (c Capability) AutomaticExecutionAllowed() bool { return c.PolicyVerified }
+func (c Capability) AutomaticExecutionAllowed() bool { return c.confinement != nil }
+
+// Confinement returns the wrapper to hand to Run, or nil when this host has
+// none. Callers pass it through rather than consulting the boolean separately.
+func (c Capability) Confinement() *Confinement { return c.confinement }
 
 // Summary is one line for the status display and the first-run notice. On a
-// platform without verified containment it has to be plain, because a user who
+// host without verified containment it has to be plain, because a user who
 // discovers the limitation by hitting it will reasonably read it as a bug
 // (§19.3).
 func (c Capability) Summary() string {
-	if c.PolicyVerified {
-		return string(c.Mechanism) + " sandbox active"
+	if c.confinement != nil {
+		return string(c.Mechanism) + " sandbox verified on this host"
 	}
 	return "no verified sandbox: every command needs approval (" + c.Detail + ")"
 }
@@ -55,9 +60,22 @@ func (c Capability) Summary() string {
 func Detect() Capability {
 	c := detectPlatform()
 	c.Platform = runtime.GOOS
-	// No profile has passed the §11 spike on any platform yet, so nothing here
-	// may claim verification. This is the single line that changes when the
-	// macOS and Linux spikes land.
-	c.PolicyVerified = false
 	return c
+}
+
+// TestingVerifiedCapability builds a Capability that reports containment,
+// wrapping nothing. It exists so tests in other packages can exercise the
+// allowed path. Production capability comes only from Detect, which runs the
+// self-test.
+func TestingVerifiedCapability() Capability {
+	return Capability{
+		Platform:         runtime.GOOS,
+		Mechanism:        MechanismNone,
+		MechanismPresent: true,
+		Detail:           "test double",
+		confinement: &Confinement{
+			mechanism: MechanismNone,
+			wrap:      func(_ Policy, argv []string) ([]string, error) { return argv, nil },
+		},
+	}
 }

@@ -35,6 +35,16 @@ type Command struct {
 	Dir       string
 	Timeout   time.Duration
 	MaxOutput int
+
+	// Confine, when non-nil, confines the command. It comes from
+	// Capability.Confinement, which is the same value that decides whether
+	// automatic execution was allowed, so a command cannot be approved as
+	// contained and then run unconfined.
+	//
+	// If it is set and cannot be applied, Run fails. It never falls back to
+	// running the command unconfined.
+	Confine *Confinement
+	Policy  Policy
 }
 
 type Result struct {
@@ -79,6 +89,17 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	name, args := c.Argv[0], c.Argv[1:]
 	if c.Shell {
 		name, args = shellCommand(c.Argv[0])
+	}
+
+	if c.Confine != nil {
+		wrapped, err := c.Confine.apply(c.Policy, append([]string{name}, args...))
+		if err != nil {
+			// Failing closed is the whole point. A sandbox that quietly falls
+			// back to running the command is worse than no sandbox, because the
+			// UI goes on reporting containment.
+			return Result{}, fmt.Errorf("refusing to run unconfined: %w", err)
+		}
+		name, args = wrapped[0], wrapped[1:]
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, c.Timeout)

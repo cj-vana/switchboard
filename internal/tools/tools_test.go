@@ -8,13 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjvana/switchboard/internal/execution"
 	"github.com/cjvana/switchboard/internal/permission"
 )
 
 func newRegistry(t *testing.T) (*Registry, string) {
 	t.Helper()
 	root := t.TempDir()
-	r, err := NewRegistry(root)
+	r, err := NewRegistry(root, execution.Capability{})
 	if err != nil {
 		t.Fatal(err)
 	}

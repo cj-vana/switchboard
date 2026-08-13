@@ -1,0 +1,90 @@
+(version 1)
+(deny default)
+
+;; Switchboard workspace confinement profile.
+;;
+;; Every rule here was arrived at by running it, not by reading documentation.
+;; docs/sandbox-macos.md records what each one is for and what breaks without
+;; it. Four properties are load-bearing and easy to undo by accident:
+;;
+;;   1. Paths must be pre-resolved. Seatbelt fully resolves a path before
+;;      matching, so a rule naming /tmp or /var never fires. The renderer
+;;      resolves every parameter through EvalSymlinks first.
+;;   2. Later rules win, so the deny block sits at the bottom.
+;;   3. mach-lookup is granted nowhere. securityd answers keychain queries over
+;;      mach IPC whether or not the keychain files are readable, so a broad
+;;      grant here makes "credential stores are denied" false while the profile
+;;      still looks strict.
+;;   4. Binding a listener needs network-inbound as well as network-bind.
+;;      network-bind alone fails, which reads like a kernel refusal rather than
+;;      a missing rule.
+
+(allow process-fork)
+(allow process-exec)
+(allow sysctl-read)
+(allow signal (target same-sandbox))
+
+; Test runners, REPLs, and anything that shells out allocate a terminal.
+(allow pseudo-tty)
+
+; Reads are broad and narrowed by the deny block below.
+;
+; This leaks by default: any secret whose location is not enumerated down there
+; is readable. A read allowlist is the safer shape and it breaks toolchains
+; continuously, which is a maintenance cost a solo project does not survive.
+; The tradeoff is recorded rather than hidden, and it is the open question this
+; profile carries into phase 3.
+(allow file-read*)
+
+(allow file-write*
+  (subpath (param "WORKSPACE"))
+  (subpath (param "TMPDIR")))
+
+; Build caches. Granting these is what lets a second build be fast, and it is
+; also a persistence vector: a command can plant a config or a compiled
+; artifact here that a later, differently-approved command will execute. The
+; alternative is a cold toolchain on every call.
+(allow file-write*
+  (subpath (param "CACHE_GO_BUILD"))
+  (subpath (param "CACHE_GO_MOD"))
+  (subpath (param "CACHE_NPM"))
+  (subpath (param "CACHE_CARGO"))
+  (subpath (param "CACHE_XDG"))
+  (subpath (param "CACHE_LIBRARY")))
+
+(allow file-write-data
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/dtracehelper")
+  (literal "/dev/tty"))
+
+; Loopback only. A test suite that stands up a fixture server on an ephemeral
+; port has to work, or the sandbox is unusable for the thing agents do most.
+; Egress off the machine is denied by rule rather than by DNS failing, which
+; was verified by connecting to a raw address with no name lookup involved.
+(allow network-bind)
+(allow network-inbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-bind (local unix-socket))
+(allow network-outbound (remote unix-socket))
+
+;; ---------------------------------------------------------------------------
+;; Denies last: these override every grant above.
+;; ---------------------------------------------------------------------------
+
+(deny file-read* (subpath (param "DENY_SSH")))
+(deny file-read* (subpath (param "DENY_AWS")))
+(deny file-read* (subpath (param "DENY_GCLOUD")))
+(deny file-read* (subpath (param "DENY_KUBE")))
+(deny file-read* (subpath (param "DENY_DOCKER")))
+(deny file-read* (subpath (param "DENY_GNUPG")))
+(deny file-read* (subpath (param "DENY_KEYCHAINS")))
+(deny file-read* (subpath (param "DENY_KEYCHAINS_SYS")))
+(deny file-read* (subpath (param "DENY_CONFIG_SSH")))
+
+; Switchboard's own session logs hold prompts, diffs, and file contents from
+; every workspace on this machine. A command run for one project has no
+; business reading another project's transcript.
+(deny file-read* (subpath (param "DENY_SWITCHBOARD")))

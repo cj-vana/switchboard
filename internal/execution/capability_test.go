@@ -7,14 +7,16 @@ import (
 
 func TestCapabilityNeverClaimsUnverifiedContainment(t *testing.T) {
 	c := Detect()
-	if c.PolicyVerified {
-		t.Fatal("no sandbox profile has passed the §11 spike; claiming otherwise would gate automatic execution on nothing")
+	// Confinement is the only thing that may grant automatic execution, and it
+	// is the wrapper itself, so there is no boolean that can disagree with it.
+	if c.AutomaticExecutionAllowed() != (c.Confinement() != nil) {
+		t.Fatal("automatic execution and the wrapper must be the same fact")
 	}
-	if c.AutomaticExecutionAllowed() {
-		t.Fatal("automatic execution must follow PolicyVerified, not MechanismPresent")
+	if !c.AutomaticExecutionAllowed() && !strings.Contains(c.Summary(), "no verified sandbox") {
+		t.Errorf("an unverified host must say so plainly, got %q", c.Summary())
 	}
-	if !strings.Contains(c.Summary(), "no verified sandbox") {
-		t.Errorf("the summary must say plainly that there is no sandbox, got %q", c.Summary())
+	if c.AutomaticExecutionAllowed() && !strings.Contains(c.Summary(), "verified") {
+		t.Errorf("a verified host should say so, got %q", c.Summary())
 	}
 	if c.Platform == "" {
 		t.Error("capability report did not name the platform")

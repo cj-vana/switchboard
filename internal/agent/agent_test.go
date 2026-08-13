@@ -139,7 +139,7 @@ func newHarness(t *testing.T, mode permission.Mode, turns ...scriptTurn) *harnes
 	t.Helper()
 
 	root := t.TempDir()
-	registry, err := tools.NewRegistry(root)
+	registry, err := tools.NewRegistry(root, execution.Capability{})
 	if err != nil {
 		t.Fatal(err)
 	}

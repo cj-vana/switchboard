@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cjvana/switchboard/internal/execution"
 	"github.com/cjvana/switchboard/internal/permission"
 	"github.com/cjvana/switchboard/internal/provider"
 )
@@ -57,13 +58,18 @@ type Tool interface {
 
 // Registry holds the tool suite for one workspace.
 type Registry struct {
-	root     string
-	versions *fileVersions
-	tools    map[string]Tool
-	order    []string
+	root       string
+	capability execution.Capability
+	versions   *fileVersions
+	tools      map[string]Tool
+	order      []string
 }
 
-func NewRegistry(workspace string) (*Registry, error) {
+// NewRegistry binds the suite to a workspace and to whatever confinement this
+// host provides. The capability is carried rather than re-detected so that the
+// wrapper the exec tool applies is the same one the permission engine consulted
+// when it decided whether approval was needed.
+func NewRegistry(workspace string, capability execution.Capability) (*Registry, error) {
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
 		return nil, err
@@ -76,9 +82,10 @@ func NewRegistry(workspace string) (*Registry, error) {
 	}
 
 	r := &Registry{
-		root:     root,
-		versions: &fileVersions{seen: map[string]string{}},
-		tools:    map[string]Tool{},
+		root:       root,
+		capability: capability,
+		versions:   &fileVersions{seen: map[string]string{}},
+		tools:      map[string]Tool{},
 	}
 	r.add(&readTool{r})
 	r.add(&writeTool{r})

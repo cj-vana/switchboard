@@ -51,26 +51,38 @@ Inside a session: `/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit`.
 Ctrl-C cancels the current turn and returns you to the prompt; the session
 stays resumable.
 
-## There is no sandbox yet, and that matters
+## What the sandbox does and does not do
 
-Switchboard will not present a permission prompt as though it were isolation.
-No profile has passed the containment spike on any platform, so **every command
-requires per-action approval**, in every mode, including `bypass`. File edits
-can be auto-approved with `-mode acceptEdits`; commands cannot.
+Switchboard will not present a permission prompt as though it were isolation. A
+mode can only grant automatic execution on a host where confinement has been
+demonstrated, and "demonstrated" means a self-test passed on that machine, at
+that OS build, against that profile.
 
-This is not an oversight to be worked around. A sandbox has to be shown to
-confine a real build while denying credential stores, agent sockets, and
-network egress, against the toolchains developers actually run. Until that is
-demonstrated, automatic execution is not offered, because shipping it on
-isolation nobody has verified is exactly the substitution the design forbids.
+**macOS** confines commands with a Seatbelt profile. A confined command writes
+only inside the workspace, `$TMPDIR`, and build caches; cannot read the
+credential stores or reach the Keychain API; cannot use the ssh agent; and
+cannot reach the network beyond loopback. Loopback is allowed because test
+suites stand up fixture servers, and that is most of what an agent runs. With
+that verified, `-mode bypass` runs commands without prompting.
 
-Commands run with the harness's own provider credentials stripped from their
-environment. That is credential hygiene, not containment, and it does not
-change anything above.
+Network access off the machine is a separate grant that always prompts, even
+when confinement is verified. The sandbox governs what a command reads and
+writes; it cannot judge whether sending your workspace to the internet is what
+you meant.
 
-On Windows there is additionally no process-group cleanup, so a timed-out
-command may leave descendants running. Windows is a plan-and-approve
-environment until native containment meets the same bar as the other platforms.
+`docs/sandbox-macos.md` documents the profile, including what it deliberately
+does not protect against: reads leak by default outside an enumerated deny
+list, and writable build caches are a persistence vector between commands.
+
+**Linux and Windows** have no verified profile yet, so every command there
+requires per-action approval in every mode, `bypass` included. On Windows there
+is additionally no process-group cleanup, so a timed-out command may leave
+descendants running. Both are plan-and-approve environments until their
+containment meets the same bar.
+
+Commands everywhere run with the harness's own provider credentials stripped
+from their environment. That is credential hygiene rather than containment, and
+it is not what any of the above rests on.
 
 ## Working on it
 

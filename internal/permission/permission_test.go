@@ -3,24 +3,20 @@ package permission
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/cjvana/switchboard/internal/execution"
 )
 
 var (
+	// A host where the mechanism exists but no profile has been demonstrated.
 	noSandbox = execution.Capability{
 		Platform:         "darwin",
 		Mechanism:        execution.MechanismSeatbelt,
 		MechanismPresent: true,
-		PolicyVerified:   false,
 	}
-	verifiedSandbox = execution.Capability{
-		Platform:         "linux",
-		Mechanism:        execution.MechanismBubblewrap,
-		MechanismPresent: true,
-		PolicyVerified:   true,
-	}
+	verifiedSandbox = execution.TestingVerifiedCapability()
 )
 
 func read() Request  { return Request{Tool: "read", Effect: EffectRead, Path: "main.go"} }
@@ -101,6 +97,35 @@ func TestAllowRuleForExecutionIsStillGatedOnTheSandbox(t *testing.T) {
 	})
 	if got := verified.Check(exec()).Decision; got != Allow {
 		t.Errorf("with containment the same rule should allow, got %s", got)
+	}
+}
+
+// A sandbox confines what a command reads and writes. It cannot judge whether
+// sending this workspace to the internet is what the user meant, so egress is
+// approved separately even on a verified host (§11).
+func TestNetworkAccessIsApprovedSeparately(t *testing.T) {
+	e := NewEngine(ModeBypass, verifiedSandbox)
+
+	offline := exec()
+	if got := e.Check(offline).Decision; got != Allow {
+		t.Fatalf("a confined offline command = %s, want allow", got)
+	}
+
+	online := offline
+	online.Network = true
+	out := e.Check(online)
+	if out.Decision != Ask {
+		t.Errorf("a command asking for egress = %s, want ask", out.Decision)
+	}
+	if !strings.Contains(out.Reason, "network") {
+		t.Errorf("the reason must name what is being granted, got %q", out.Reason)
+	}
+
+	// The two forms are different requests, so approving the offline one must
+	// not silently approve the networked one.
+	e.Remember(offline, true)
+	if got := e.Check(online).Decision; got != Ask {
+		t.Errorf("an offline approval was reused for a networked command: %s", got)
 	}
 }
 

@@ -73,6 +73,12 @@ type Request struct {
 	// interpreter or package manager runs arbitrary code either way (§10.2).
 	Argv  []string
 	Shell bool
+
+	// Network asks for egress off the machine. §11 grants it separately from
+	// filesystem access, so it is a distinct field rather than an argv pattern:
+	// a command that can reach the internet can send the workspace anywhere,
+	// which is a different decision from letting it run at all.
+	Network bool
 }
 
 type Rule struct {
@@ -183,7 +189,7 @@ func (e *Engine) Check(req Request) Outcome {
 		if !remembered {
 			return Outcome{Decision: Deny, Reason: "you declined this exact request earlier in the session"}
 		}
-		return e.gateExecution(Outcome{
+		return e.gate(Outcome{
 			Decision: Allow,
 			Reason:   "approved earlier in this session",
 		}, req, alreadyApproved)
@@ -191,11 +197,11 @@ func (e *Engine) Check(req Request) Outcome {
 
 	for _, r := range e.rules {
 		if r.Decision != Deny && r.matches(req) {
-			return e.gateExecution(Outcome{Decision: r.Decision, Reason: "matched a rule"}, req, gateNormally)
+			return e.gate(Outcome{Decision: r.Decision, Reason: "matched a rule"}, req, gateNormally)
 		}
 	}
 
-	return e.gateExecution(e.modeDefault(mode, req), req, gateNormally)
+	return e.gate(e.modeDefault(mode, req), req, gateNormally)
 }
 
 func (e *Engine) modeDefault(mode Mode, req Request) Outcome {
@@ -242,6 +248,29 @@ func (e *Engine) gateExecution(out Outcome, req Request, kind gateKind) Outcome 
 		out.Reason = "no verified sandbox on this host, so every command needs approval"
 	}
 	return out
+}
+
+// gateNetwork prompts for egress even on a host with verified containment. The
+// sandbox confines what a command can read and write; it cannot judge whether
+// sending this workspace to the internet is what the user wanted.
+func (e *Engine) gateNetwork(out Outcome, req Request, kind gateKind) Outcome {
+	if !req.Network || req.Effect != EffectExecute {
+		return out
+	}
+	if out.Decision != Allow || kind == alreadyApproved {
+		return out
+	}
+	return Outcome{
+		Decision:      Ask,
+		Reason:        "this command asks for network access, which can send the workspace off this machine",
+		SandboxAbsent: out.SandboxAbsent,
+	}
+}
+
+// gate is the single path to an allowed execution. Both conditions run here so
+// no caller can satisfy one and forget the other.
+func (e *Engine) gate(out Outcome, req Request, kind gateKind) Outcome {
+	return e.gateNetwork(e.gateExecution(out, req, kind), req, kind)
 }
 
 // Remember records an answer for the rest of the session.
@@ -319,6 +348,9 @@ func rememberKey(req Request) string {
 	b.WriteByte('\x00')
 	if req.Shell {
 		b.WriteString("shell")
+	}
+	if req.Network {
+		b.WriteString("+net")
 	}
 	for _, a := range req.Argv {
 		b.WriteByte('\x00')

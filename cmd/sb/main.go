@@ -96,11 +96,12 @@ func run() error {
 	}
 	defer sess.Close()
 
-	registry, err := tools.NewRegistry(workspace)
+	capability := execution.Detect()
+
+	registry, err := tools.NewRegistry(workspace, capability)
 	if err != nil {
 		return err
 	}
-	capability := execution.Detect()
 
 	out := newRenderer(os.Stdout)
 	in := bufio.NewReader(os.Stdin)
