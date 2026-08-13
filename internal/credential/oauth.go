@@ -43,6 +43,16 @@ type OAuthSettings struct {
 	// which RFC 8252 permits and which avoids a collision with whatever else
 	// is listening.
 	RedirectPort int
+
+	// RedirectURI overrides the redirect entirely, host and path included.
+	//
+	// RFC 8252 says a native client should use the literal 127.0.0.1 and may
+	// use any port, and this program does that by default. A fixed client
+	// registration overrides the specification in practice: the authorization
+	// server compares the redirect against what was registered as a string, so
+	// "localhost" and "127.0.0.1" are different values and a random port is
+	// simply wrong. When a registration pins one, it goes here verbatim.
+	RedirectURI string
 }
 
 func (s OAuthSettings) configured() bool {
@@ -96,6 +106,15 @@ type OAuthStore struct {
 
 	// Store holds the token document. Nil uses the platform store.
 	Store Writer
+
+	// Browser opens the consent page. Nil means the URL is printed and nothing
+	// is launched.
+	//
+	// Opening a window is a side effect on somebody's desktop, so a library does
+	// not do it unless asked. The nil default also keeps a test suite from
+	// spawning browser windows pointed at whatever ephemeral port it happened to
+	// bind, which is exactly what this did before the field existed.
+	Browser func(string)
 
 	// Now and HTTP exist so the refresh path can be tested without a clock or a
 	// network.
@@ -208,14 +227,19 @@ func (s *OAuthStore) Login(ctx context.Context, ref Ref, prompt func(url string)
 		return err
 	}
 
-	// 127.0.0.1 rather than localhost: RFC 8252 calls for the literal address,
-	// because localhost can resolve to an interface the flow did not intend.
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.Settings.RedirectPort))
+	listenAddr, redirectURI, err := s.redirect()
 	if err != nil {
-		return fmt.Errorf("opening a loopback port for the redirect: %w", err)
+		return err
+	}
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("opening %s for the redirect: %w\n"+
+			"a fixed registration cannot use another port, so whatever holds this one has to be stopped first", listenAddr, err)
 	}
 	defer listener.Close()
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", listener.Addr().(*net.TCPAddr).Port)
+	if redirectURI == "" {
+		redirectURI = fmt.Sprintf("http://127.0.0.1:%d/callback", listener.Addr().(*net.TCPAddr).Port)
+	}
 
 	codes := make(chan string, 1)
 	failures := make(chan error, 1)
@@ -250,7 +274,9 @@ func (s *OAuthStore) Login(ctx context.Context, ref Ref, prompt func(url string)
 	if prompt != nil {
 		prompt(authURL)
 	}
-	openBrowser(authURL)
+	if s.Browser != nil {
+		s.Browser(authURL)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -264,6 +290,36 @@ func (s *OAuthStore) Login(ctx context.Context, ref Ref, prompt func(url string)
 		}
 		return s.write(ctx, ref, tokens)
 	}
+}
+
+// redirect resolves where to listen and what to send.
+//
+// The two are not the same string. The authorization server compares the
+// redirect it is sent against a registration, so that value has to be exact;
+// the listener only needs the host and port out of it.
+func (s *OAuthStore) redirect() (listenAddr, redirectURI string, err error) {
+	if s.Settings.RedirectURI == "" {
+		// 127.0.0.1 rather than localhost: RFC 8252 calls for the literal
+		// address, because localhost can resolve to an interface the flow did
+		// not intend.
+		return fmt.Sprintf("127.0.0.1:%d", s.Settings.RedirectPort), "", nil
+	}
+
+	parsed, err := url.Parse(s.Settings.RedirectURI)
+	if err != nil {
+		return "", "", fmt.Errorf("the configured redirect_uri is not a URL: %w", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", "", errors.New("the configured redirect_uri names no host")
+	}
+	port := parsed.Port()
+	if port == "" {
+		return "", "", errors.New("the configured redirect_uri names no port, and a loopback redirect needs one to listen on")
+	}
+	// Bind the loopback interface whatever name the registration uses for it.
+	// Listening on "localhost" would depend on how the machine resolves it.
+	return net.JoinHostPort("127.0.0.1", port), s.Settings.RedirectURI, nil
 }
 
 func (s *OAuthStore) authorizeURL(redirectURI, state, challenge string) string {
@@ -376,10 +432,11 @@ func randomString(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// openBrowser is best effort. The URL is printed either way, because a headless
-// machine has no browser to open and the flow still has to be completable by
-// pasting it somewhere that does.
-func openBrowser(target string) {
+// OpenInBrowser is best effort, and a caller opts into it by assigning it to
+// Browser. The URL is printed either way, because a headless machine has no
+// browser to open and the flow still has to be completable by pasting it
+// somewhere that does.
+func OpenInBrowser(target string) {
 	var cmd string
 	switch runtime.GOOS {
 	case "darwin":

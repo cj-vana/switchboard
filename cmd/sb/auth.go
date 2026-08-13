@@ -253,7 +253,9 @@ func runOAuth(ctx context.Context, args []string, cfg *config.Config) error {
 	if settings.ClientID == "" && ref.Provider == openai.Name {
 		settings = openai.DefaultOAuth(ref.Account)
 	}
-	store := &credential.OAuthStore{Settings: settings}
+	// The command line is where opening a browser is wanted, so it is asked for
+	// here rather than assumed by the package.
+	store := &credential.OAuthStore{Settings: settings, Browser: credential.OpenInBrowser}
 
 	switch args[0] {
 	case "login":

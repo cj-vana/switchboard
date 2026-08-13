@@ -490,3 +490,84 @@ func TestFullLoginThenResolveThroughTheChain(t *testing.T) {
 		t.Errorf("err = %v; the tokens survived a logout", err)
 	}
 }
+
+// A fixed client registration is compared as a string, so the redirect has to
+// be sent exactly as registered even where that contradicts RFC 8252's advice
+// to use the literal loopback address and any free port. Getting it wrong comes
+// back as a generic authentication error that names none of those things.
+func TestPinnedRedirectIsSentVerbatimAndListenedOnLoopback(t *testing.T) {
+	s := &OAuthStore{Settings: OAuthSettings{
+		ClientID:     "c",
+		AuthorizeURL: "https://x/a",
+		TokenURL:     "https://x/t",
+		RedirectURI:  "http://localhost:1455/auth/callback",
+	}}
+
+	listenAddr, redirectURI, err := s.redirect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redirectURI != "http://localhost:1455/auth/callback" {
+		t.Errorf("redirect_uri = %q; a registration is matched as a string and this one would be rejected", redirectURI)
+	}
+	// The listener binds the loopback interface directly rather than depending
+	// on how this machine happens to resolve "localhost".
+	if listenAddr != "127.0.0.1:1455" {
+		t.Errorf("listen address = %q, want the loopback interface on the registered port", listenAddr)
+	}
+}
+
+func TestUnpinnedRedirectPicksAFreePort(t *testing.T) {
+	s := &OAuthStore{Settings: OAuthSettings{ClientID: "c", AuthorizeURL: "https://x/a", TokenURL: "https://x/t"}}
+
+	listenAddr, redirectURI, err := s.redirect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redirectURI != "" {
+		t.Errorf("redirect_uri = %q; without a registration it is derived from whichever port was granted", redirectURI)
+	}
+	if listenAddr != "127.0.0.1:0" {
+		t.Errorf("listen address = %q, want a free port on the loopback interface", listenAddr)
+	}
+}
+
+func TestMalformedPinnedRedirectIsRejected(t *testing.T) {
+	for _, raw := range []string{"http://localhost/auth/callback", "not-a-url", "http:///callback"} {
+		s := &OAuthStore{Settings: OAuthSettings{ClientID: "c", AuthorizeURL: "a", TokenURL: "t", RedirectURI: raw}}
+		if _, _, err := s.redirect(); err == nil {
+			t.Errorf("redirect_uri %q was accepted; a loopback redirect needs a host and a port to listen on", raw)
+		}
+	}
+}
+
+// Running the test suite must not open browser windows on whoever's machine is
+// running it. The default is nil rather than the real opener precisely so that
+// forgetting to override it is harmless.
+func TestLoginOpensNoBrowserUnlessAsked(t *testing.T) {
+	var opened []string
+	s := &OAuthStore{
+		Settings: OAuthSettings{ClientID: "c", AuthorizeURL: "https://x/a", TokenURL: "https://x/t"},
+		Store:    newMemStore(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = s.Login(ctx, oauthRef(), func(string) {}) }()
+	<-ctx.Done()
+
+	if len(opened) != 0 {
+		t.Fatalf("a browser was opened without being asked for: %v", opened)
+	}
+
+	// And when a caller does ask, it is used instead of anything global.
+	s.Browser = func(url string) { opened = append(opened, url) }
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	go func() { _ = s.Login(ctx2, oauthRef(), nil) }()
+	<-ctx2.Done()
+
+	if len(opened) == 0 {
+		t.Error("an explicitly supplied browser was never called")
+	}
+}

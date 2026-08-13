@@ -53,6 +53,11 @@ var SubscriptionOAuth = credential.OAuthSettings{
 	AuthorizeURL: "https://auth.openai.com/oauth/authorize",
 	TokenURL:     "https://auth.openai.com/oauth/token",
 	Scopes:       []string{"openid", "profile", "email", "offline_access"},
+
+	// The registration pins this exactly: a different port, a different path,
+	// or the literal 127.0.0.1 in place of "localhost" is rejected with an
+	// authentication error that names none of those things.
+	RedirectURI: "http://localhost:1455/auth/callback",
 }
 
 // profiles record what each endpoint actually does.
