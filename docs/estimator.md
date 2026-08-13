@@ -85,6 +85,17 @@ If the estimator, the system prompt, or the tool schemas change enough to move
 the ratio, that test fails and this document is what has to be updated. The
 number and the code cannot drift apart quietly.
 
+## Where the error is now used
+
+`internal/costmodel` widens its upper bound by this measurement rather than by a
+guess, and only upward, because the estimator has never been observed to
+overcount. A target that answers exactly carries no widening at all, which today
+means Anthropic and nothing else.
+
+That is the whole reason the number is written down. A bound derived from a
+measurement can be defended and re-measured; one picked to look reasonable
+cannot.
+
 ## What to do about it
 
 Nothing consumes `CountTokens` yet, which is why the answer for now is to write
