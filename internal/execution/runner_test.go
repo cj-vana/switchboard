@@ -105,7 +105,11 @@ func TestTimeoutKillsDescendants(t *testing.T) {
 		t.Fatalf("parsing grandchild pid from %q: %v", rest, err)
 	}
 
-	// Signal 0 asks whether the process exists without delivering anything.
+	// Signal 0 asks whether the process exists without delivering anything. It
+	// cannot tell a live process from a zombie, so this needs something to reap
+	// orphans: in a container without an init process the killed grandchild
+	// lingers, the probe keeps succeeding, and the failure reads as a leak that
+	// is not there. See AGENTS.md on `--init`.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {

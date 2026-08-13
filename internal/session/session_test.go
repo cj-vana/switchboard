@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjvana/switchboard/internal/provider"
 )
@@ -270,6 +271,63 @@ func TestLatestAndListOrdering(t *testing.T) {
 	}
 	if infos[0].ID != ids[2] {
 		t.Errorf("most recent = %s, want %s", infos[0].ID, ids[2])
+	}
+
+	latest, err := store.Latest(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer latest.Close()
+	if latest.ID() != ids[2] {
+		t.Errorf("Latest = %s, want %s", latest.ID(), ids[2])
+	}
+}
+
+// A filesystem can stamp several files in the same tick, and on a fast one it
+// routinely does. When it happens, mtime carries no ordering and the id is the
+// only thing left to sort by, so `--continue` resuming the right session comes
+// down to whether the id encodes when it was made.
+//
+// The timestamps are forced here rather than raced for, so the tiebreak is
+// exercised on every platform instead of only on whichever machine happens to
+// be fast enough.
+func TestOrderingSurvivesIdenticalTimestamps(t *testing.T) {
+	store, workspace := newStore(t)
+
+	var ids []string
+	for range 3 {
+		s, err := store.Create(workspace, "t", "test-revision")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AppendMessage(provider.UserText("hello")); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, s.ID())
+		s.Close()
+	}
+
+	infos, err := store.List(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	for _, info := range infos {
+		if err := os.Chtimes(info.Path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	infos, err = store.List(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 3 {
+		t.Fatalf("listed %d sessions, want 3", len(infos))
+	}
+	if infos[0].ID != ids[2] {
+		t.Errorf("with identical timestamps the most recent is %s, want %s; "+
+			"the id has to carry the ordering that mtime lost", infos[0].ID, ids[2])
 	}
 
 	latest, err := store.Latest(workspace)

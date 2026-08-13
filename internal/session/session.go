@@ -215,7 +215,18 @@ func (s *Store) List(workspace string) ([]Info, error) {
 			Size:     fi.Size(),
 		})
 	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].Modified.After(infos[j].Modified) })
+	// Modification time first, then the id, because a filesystem can stamp two
+	// files in the same tick and mtime alone would then leave `--continue`
+	// resuming whichever one the directory happened to be read in. The id
+	// tiebreak makes the answer stable; it does not make it right, because the
+	// id only carries seconds, so two sessions started inside one second are
+	// ordered by the random suffix rather than by which came first.
+	sort.Slice(infos, func(i, j int) bool {
+		if !infos[i].Modified.Equal(infos[j].Modified) {
+			return infos[i].Modified.After(infos[j].Modified)
+		}
+		return infos[i].ID > infos[j].ID
+	})
 	return infos, nil
 }
 
@@ -427,7 +438,12 @@ func newID() (string, error) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return "", err
 	}
-	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(suffix[:]), nil
+	// Microseconds, not seconds. The id is what orders a directory of sessions
+	// when the filesystem stamps two of them in the same tick, and a
+	// second-resolution id carries no ordering information at exactly the
+	// moment ordering is needed. The random suffix keeps two sessions started
+	// in the same microsecond from colliding; it is not what orders them.
+	return time.Now().UTC().Format("20060102T150405.000000") + "-" + hex.EncodeToString(suffix[:]), nil
 }
 
 // binaryVersion records what produced a session so a historical decision can be

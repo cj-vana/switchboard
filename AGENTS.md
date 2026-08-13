@@ -112,15 +112,23 @@ The Linux confinement cannot be exercised from macOS, so changes to it are
 verified in a container:
 
     docker build -f Dockerfile.linuxdev -t sb-linuxdev .
-    docker run --rm --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
+    docker run --rm --init --privileged -v "$PWD:/src" -w /src sb-linuxdev go test ./...
 
 `--privileged` is needed because Docker's kernel blocks the unprivileged user
 namespaces bubblewrap depends on. See `docs/sandbox.md`.
 
+`--init` is needed for a subtler reason, and dropping it produces a failure that
+looks like a real one. Without an init process to reap orphans, a descendant the
+runner has already killed stays a zombie, and the liveness probe that
+`TestTimeoutKillsDescendants` uses -- signal 0, which asks whether a pid exists
+-- keeps succeeding against it. The test then reports that the process group was
+never signalled when in fact it was. If that test fails, check the flag before
+reading the kill path.
+
 The same image carries a Secret Service, so the Linux credential store is
 verified against a real keyring rather than a description of one:
 
-    docker run --rm -v "$PWD:/src" -w /src sb-linuxdev bash -c '
+    docker run --rm --init -v "$PWD:/src" -w /src sb-linuxdev bash -c '
       eval "$(dbus-launch --sh-syntax)"; export DBUS_SESSION_BUS_ADDRESS
       printf "p\n" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1 &
       sleep 2; SB_LIVE=1 go test ./internal/credential/'
