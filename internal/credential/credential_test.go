@@ -334,3 +334,35 @@ func (s unavailableStore) Name() string { return s.name }
 func (s unavailableStore) Get(context.Context, Ref) (Secret, error) {
 	return Secret{}, &Unavailable{Store: s.name, Reason: s.reason}
 }
+
+// The macOS tool reads one command per line, so a newline anywhere that gets
+// interpolated ends the intended command and has the rest parsed as another.
+// Confirmed against the real tool: it created a second keychain item from the
+// tail of an injected value.
+//
+// The reference is validated rather than escaped, because the split happens
+// before quoting is considered and no quoting can undo it.
+func TestControlCharactersAreRefusedEverywhereTheyWouldInject(t *testing.T) {
+	injection := "x\nadd-generic-password -a attacker -s attacker -U -w pwned"
+
+	refs := map[string]Ref{
+		"provider": {Provider: injection},
+		"account":  {Provider: "anthropic", Account: injection},
+	}
+	for field, ref := range refs {
+		if err := ref.valid(); err == nil {
+			t.Errorf("a newline in the %s was accepted, so it would reach the credential tool", field)
+		}
+	}
+
+	// Ordinary references still work; the guard must not reject real names.
+	for _, ok := range []Ref{
+		{Provider: "anthropic", Account: "first-party"},
+		{Provider: "openai", Account: "subscription#oauth"},
+		{Provider: "openaicompat", Account: "ollama"},
+	} {
+		if err := ok.valid(); err != nil {
+			t.Errorf("a legitimate reference %s was refused: %v", ok, err)
+		}
+	}
+}

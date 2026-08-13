@@ -17,9 +17,17 @@ import (
 // processes with a narrow protocol; this is that shape applied to the platform
 // store itself.
 //
-// The secret never appears in argv. `security add-generic-password -w` with no
-// value prompts twice on standard input, so the value is piped, which keeps it
-// out of `ps` and out of any process listing a shared machine exposes.
+// The secret never appears in argv. Writes go through `security -i`, where the
+// whole command arrives on standard input, so a process listing on a shared
+// machine sees only "security -i". Reads and deletes take ordinary arguments,
+// because neither carries a secret.
+//
+// That parser splits on unquoted spaces, unescapes backslashes, and reads one
+// command per line. It expands nothing else: command substitution, backticks,
+// variables, semicolons, and pipes are all stored literally, which was checked
+// rather than assumed. So arguments are quoted for the first two, and the line
+// split is handled by refusing control characters outright, since no quoting
+// survives it.
 type OSStore struct {
 	// bin exists for tests. Empty means `security` on PATH.
 	bin string
@@ -81,10 +89,13 @@ func (s *OSStore) Set(ctx context.Context, ref Ref, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return errors.New("refusing to store an empty credential")
 	}
-	if strings.ContainsAny(value, "\r\n") {
-		// The command reads the value as a line, so an embedded newline would
-		// store a truncated secret and report success.
-		return errors.New("a credential containing a newline cannot be stored")
+	if err := printable(value, "value"); err != nil {
+		// The tool reads one command per line. A newline in the value ends the
+		// intended command and has the remainder parsed as another, which was
+		// confirmed against the real tool: it created a second keychain item
+		// from the tail of an injected value. Quoting does not help, because
+		// the split happens before quotes are considered.
+		return err
 	}
 
 	// The command is fed through the tool's own interactive mode rather than

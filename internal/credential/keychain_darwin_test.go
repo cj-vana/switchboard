@@ -291,3 +291,28 @@ func TestLiveKeychainStoresAwkwardValues(t *testing.T) {
 		})
 	}
 }
+
+// End to end through Set: a value carrying a newline and a second command must
+// not reach the tool at all. The fake records every invocation, so a second
+// command would show up in the log.
+func TestKeychainRefusesAnInjectedCommand(t *testing.T) {
+	store, argvLog := fakeSecurity(t)
+
+	payload := "harmless\nadd-generic-password -a attacker -s attacker -U -w pwned"
+	err := store.Set(context.Background(), Ref{Provider: "anthropic"}, payload)
+	if err == nil {
+		t.Fatal("a value containing a command was accepted")
+	}
+	if body, readErr := os.ReadFile(argvLog); readErr == nil && strings.Contains(string(body), "attacker") {
+		t.Errorf("the injected command reached the tool:\n%s", body)
+	}
+
+	// The same payload in a reference, which is built from configuration rather
+	// than from a credential and was previously interpolated unchecked.
+	if err := store.Set(context.Background(), Ref{Provider: payload}, "ok-value"); err == nil {
+		t.Error("a provider name containing a command was accepted")
+	}
+	if err := store.Set(context.Background(), Ref{Provider: "anthropic", Account: payload}, "ok-value"); err == nil {
+		t.Error("an account name containing a command was accepted")
+	}
+}

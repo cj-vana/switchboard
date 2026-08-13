@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // ErrNotFound means a source was consulted and held nothing. It is not a
@@ -49,6 +50,28 @@ func (r Ref) String() string {
 func (r Ref) valid() error {
 	if strings.TrimSpace(r.Provider) == "" {
 		return errors.New("credential reference names no provider")
+	}
+	if err := printable(r.Provider, "provider"); err != nil {
+		return err
+	}
+	return printable(r.Account, "account")
+}
+
+// printable rejects control characters in anything that will be interpolated
+// into a command for a platform credential tool.
+//
+// A newline is the one that matters: the macOS tool reads one command per line,
+// so a reference carrying one ends the intended command and has whatever
+// follows parsed as another. That was confirmed against the real tool, which
+// happily created a second keychain item from the tail of an injected value.
+// The rest are refused with it because no legitimate provider or surface name
+// contains a control character, and enumerating which ones are harmless is a
+// worse bet than allowing none.
+func printable(s, field string) error {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("credential %s contains a control character (%q), which cannot be passed to a credential store safely", field, r)
+		}
 	}
 	return nil
 }
