@@ -38,6 +38,9 @@ type spec struct {
 	prompt string
 	pkg    string
 	breaks []breakage
+	// goos constrains the task to one platform: a breakage to a file the
+	// running platform never compiles cannot fail its verifier there.
+	goos string
 	// mustContain re-checks a property the test suite alone would not catch, so
 	// a task cannot be solved by deleting the test.
 	mustContain map[string]string
@@ -98,6 +101,7 @@ var specs = []spec{
 		id:     "keychain-argv",
 		prompt: "The keychain write is putting the credential somewhere it can be read by other processes. Fix it so the tests pass.",
 		pkg:    "./internal/credential/",
+		goos:   "darwin",
 		breaks: []breakage{{"internal/credential/keychain_darwin.go", `cmd := exec.CommandContext(ctx, s.tool(), "-i")`, `cmd := exec.CommandContext(ctx, s.tool(), "add-generic-password", "-s", service(ref), "-a", account(ref), "-U", "-w", value)`}},
 	},
 	{

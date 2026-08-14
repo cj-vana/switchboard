@@ -3,6 +3,7 @@ package eval
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,11 @@ func TestTasksBreakWhatTheyClaimAndPassWhenRestored(t *testing.T) {
 
 	for _, s := range specs {
 		t.Run(s.id, func(t *testing.T) {
+			if s.goos != "" && s.goos != runtime.GOOS {
+				// A breakage to a file this platform never compiles cannot fail
+				// here, so the task would pass its verifier untouched.
+				t.Skipf("task targets %s-only code", s.goos)
+			}
 			t.Parallel()
 			dir := t.TempDir()
 
