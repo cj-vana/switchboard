@@ -109,9 +109,12 @@ func TestLiveBaselineRuns(t *testing.T) {
 	// A router that always picks the same rung is a baseline under another
 	// name, and a comparison against it would be measuring nothing.
 	used := TargetsUsed(runs)
-	t.Logf("the router chose: %v", used)
-	if len(used) == 1 && len(arms) > 1 {
-		t.Logf("note: every routed run went to one target, so this comparison is a baseline against itself")
+	moved, totalRouted := Escalations(runs)
+	t.Logf("the routed arm ended on: %v", used)
+	t.Logf("escalated on %d of %d routed runs", moved, totalRouted)
+	if moved == 0 && len(arms) > 1 {
+		t.Logf("note: no routed run ever changed target, so this arm is a fixed baseline " +
+			"under another name and the comparison answers nothing")
 	}
 
 	report(t, runs)

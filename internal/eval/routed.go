@@ -74,7 +74,14 @@ func (r RoutedArmFor) Pick(task Task) (Arm, router.Decision, error) {
 	return Arm{}, decision, context.Canceled
 }
 
-// RunRouted attempts a task with the router choosing the target.
+// Run attempts a task with the router choosing the target and the escalation
+// policy allowed to change it mid-task.
+//
+// The escalation is the point. §8.3 says the opening choice is worth less than
+// the mid-task adjustments because one message produces dozens of model calls,
+// and a routed arm that picks once and never revises is a fixed target wearing
+// a different name. Measuring that against a fixed target would answer a
+// question nobody asked.
 func (r RoutedArmFor) Run(ctx context.Context, runner Runner, task Task, seed int) Run {
 	arm, decision, err := r.Pick(task)
 	if err != nil {
@@ -84,9 +91,23 @@ func (r RoutedArmFor) Run(ctx context.Context, runner Runner, task Task, seed in
 		}
 	}
 
-	out := runner.Run(ctx, task, arm, seed)
+	startRank := 0
+	for i, a := range r.Ladder {
+		if a.Name == decision.Tier {
+			startRank = i
+		}
+	}
+	escalation := &escalator{
+		sticky:  router.NewSticky(router.Policy{}, startRank),
+		detect:  router.NewDetector(),
+		ladder:  r.Ladder,
+		catalog: r.Catalog,
+	}
+
+	out := runner.run(ctx, task, arm, seed, escalation)
 	out.Arm = RoutedArm
-	out.Target = arm.Target.ID()
+	out.Target = escalation.finalTarget(arm)
+	out.Escalations = escalation.moves
 
 	// §7.1 requires estimate against actual per target, and the estimate has to
 	// be the one that was actually used to decide rather than one computed
@@ -106,4 +127,20 @@ func TargetsUsed(runs []Run) map[provider.RouteTargetID]int {
 		}
 	}
 	return out
+}
+
+// Escalations reports how many times a routed run changed target, which is the
+// number that says whether the arm under test was actually doing anything a
+// fixed baseline could not.
+func Escalations(runs []Run) (moved, total int) {
+	for _, r := range runs {
+		if r.Arm != RoutedArm {
+			continue
+		}
+		total++
+		if r.Escalations > 0 {
+			moved++
+		}
+	}
+	return moved, total
 }

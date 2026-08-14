@@ -65,6 +65,17 @@ func (r Runner) timeout() time.Duration {
 // It reports a Run whatever happens. A crashed attempt is an unsolved attempt
 // with a reason, because dropping it would quietly improve the arm's solve rate.
 func (r Runner) Run(ctx context.Context, task Task, arm Arm, seed int) Run {
+	return r.run(ctx, task, arm, seed, nil)
+}
+
+// escalation is the hook a routed arm supplies so the primary can move
+// mid-task. A fixed baseline passes nil and never moves, which is what makes it
+// a baseline.
+type escalation interface {
+	attach(*agent.Loop)
+}
+
+func (r Runner) run(ctx context.Context, task Task, arm Arm, seed int, esc escalation) Run {
 	out := Run{
 		TaskID:     task.ID,
 		Provenance: task.Provenance,
@@ -86,10 +97,10 @@ func (r Runner) Run(ctx context.Context, task Task, arm Arm, seed int) Run {
 	}
 
 	started := time.Now()
-	usage, rounds, runErr := r.attempt(ctx, task, arm, dir)
+	usage, rounds, runErr := r.attempt(ctx, task, arm, dir, esc)
 	out.Duration = time.Since(started)
 	out.Usage = usage
-	out.Escalations = rounds
+	_ = rounds
 
 	if info, _, ok := r.Catalog.Lookup(arm.Target); ok {
 		if cost, _, priced := info.Cost(usage); priced {
@@ -115,7 +126,7 @@ func (r Runner) Run(ctx context.Context, task Task, arm Arm, seed int) Run {
 	return out
 }
 
-func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string) (provider.Usage, int, error) {
+func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc escalation) (provider.Usage, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
 
@@ -158,6 +169,10 @@ func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string) (pr
 		Catalog:       r.Catalog,
 		System:        agent.SystemPrompt(dir, mode, capability),
 		MaxToolRounds: r.rounds(),
+	}
+
+	if esc != nil {
+		esc.attach(loop)
 	}
 
 	err = loop.Turn(ctx, task.Prompt)
