@@ -357,7 +357,22 @@ func (g Gate) Evaluate(tasks []Task, runs []Run, pins Pins) Verdict {
 		if candidate.Solved == 0 {
 			continue
 		}
-		if best.Arm == "" || candidate.MedianCostPerSolved < best.MedianCostPerSolved {
+		// Cheapest wins, and a tie is broken by solve rate rather than by map
+		// order. On a ladder where every arm bills the same -- which is every
+		// plan-metered ladder -- the cost comparison never separates them, and
+		// leaving it there picked whichever arm the map yielded first. That
+		// chose a baseline solving 58% over one solving 97% and reported the
+		// routed arm as ahead when it was well behind.
+		//
+		// "Best" has to mean the strongest competitor. Beating a weak one is
+		// not the claim §7.1 is asking about.
+		switch {
+		case best.Arm == "":
+			best = candidate
+		case candidate.MedianCostPerSolved < best.MedianCostPerSolved:
+			best = candidate
+		case candidate.MedianCostPerSolved == best.MedianCostPerSolved &&
+			candidate.SolveRate > best.SolveRate:
 			best = candidate
 		}
 	}
@@ -392,9 +407,14 @@ func (g Gate) Evaluate(tasks []Task, runs []Run, pins Pins) Verdict {
 	}
 
 	if safetyOK {
-		v.Reasons = append(v.Reasons, fmt.Sprintf(
-			"verified solve rate moved %.1f points, inside the %.0f point allowance",
-			-v.SolveRateDrop*100, g.maxSolveRateDrop()*100))
+		if v.SolveRateDrop < 0 {
+			v.Reasons = append(v.Reasons, fmt.Sprintf(
+				"verified solve rate rose %.1f points against %s", -v.SolveRateDrop*100, best.Arm))
+		} else {
+			v.Reasons = append(v.Reasons, fmt.Sprintf(
+				"verified solve rate fell %.1f points, inside the %.0f point allowance",
+				v.SolveRateDrop*100, g.maxSolveRateDrop()*100))
+		}
 	} else {
 		v.Reasons = append(v.Reasons, fmt.Sprintf(
 			"verified solve rate fell %.1f points, past the %.0f point allowance",

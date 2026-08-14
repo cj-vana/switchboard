@@ -1,66 +1,89 @@
-# Phase 2b measurement, 2026-08-13
+# Phase 2b measurement, 2026-08-14
 
-What the eval harness has actually established, and what it has not. §8.6 keeps
-the harness from shipping a verdict before its corpus is populated; this records
-where that stands rather than leaving the numbers in a terminal.
+The §7.1 falsification gate has been run. It **failed**, and the failure is
+about the ladder rather than the thesis. This records both, because §7.1 says a
+failure narrows the product rather than being a reason to look away from it.
 
-## The corpus
+## Corpus
 
-Thirty hand-written tier-1 tasks against this repository. Each breaks a real
-invariant and asks for it back, verified by the repository's own test suite
-scoped to the affected package. Every task is checked to fail before it is
-attempted, so none can be handed out already solved, and several re-check a
-property the suite alone would miss so a task cannot be "solved" by deleting
-what fails.
+Thirty hand-written tier-1 tasks against this repository, each breaking a real
+invariant and verified by the repository's own suite. Every task is checked to
+fail before it is attempted, so none is handed out already solved; that check
+caught four that were.
 
-## What was measured
+Twenty tasks at three seeds were run per arm.
 
-One arm, complete: `claude-haiku-4-5` with no cache markers placed, over twenty
-tasks at three seeds each.
+## The verdict
+
+| arm | solved | median latency |
+|---|---|---|
+| `always-lowest` (kimi-for-coding-highspeed) | 66/68 (97%) | 156s |
+| `always-highest` (k3-256k) | 38/65 (58%) | 301s |
+| `routed` | 52/68 (76%) | 192s |
+
+The routed arm escalated on 47 of 68 runs.
+
+Against the best fixed baseline, verified solve rate fell 20.6 points, well past
+the two-point allowance. The gate fails.
+
+## Why it failed: the ladder is upside down
+
+The rung assumed to be stronger solves less. On 13 of 20 tasks `k3-256k` did
+worse than `kimi-for-coding-highspeed`, and it is also roughly twice as slow.
+
+So escalating was actively harmful: every escalation moved work from a model
+that solves 97% to one that solves 58%.
+
+§3.1 says the ladder is the user's intent and not a claim that capability is
+globally one-dimensional, and §8.6 says tier labels are derived by running
+pinned targets and finding the Pareto front, "not assigned from model
+reputation". This ladder was assigned from reputation, because a model called
+k3 sounds stronger than one called highspeed. The measurement falsified that in
+the first run.
+
+That is the harness doing its job. A ladder ordered wrongly makes routing worse
+than not routing, and nothing short of running the corpus would have shown it.
+
+## What this does not establish
+
+The cost half of §7.1 is unmeasured. Both rungs are plan-metered, so every arm
+bills zero, cost per solved task is zero for all three, and the cost condition
+cannot separate them. A saving reported on this ladder would be an artefact of
+metering.
+
+The cost condition needs two paid models. One paid arm was measured before the
+credit ran out:
 
 | | |
 |---|---|
-| solved | 48/60 (80%) |
+| `claude-haiku-4-5`, no cache markers | 48/60 solved |
 | median cost per solved task | $0.2296 |
-| cost spread | $0.0875 to $0.9067 |
-| median latency | 41s |
-| cache reads | 0 |
+| spread | $0.0875 to $0.9067 |
+| cache reads | 0 (control arm, correctly) |
 
-The zero is the control working: this arm places no markers, so it reads nothing
-back, and any later comparison has a clean baseline to sit against.
+## What to do next
 
-Tasks unsolved at least once: breakpoint-automatic, cache-alarm-threshold, cache-silent-target, routing-key-scope, tool-sort-determinism.
+Derive the ladder empirically instead of assuming it. §8.6 already says how:
+run the pinned targets across the corpus and read the Pareto front off the
+result. That data now exists for these two rungs, and it says the order should
+be reversed.
 
-## What was not measured, and why
-
-The §7.1 gate needs a second arm. The cache-aware arm on the same model over the
-same corpus was queued and never ran: the Anthropic credit balance was exhausted
-by the first arm, and every subsequent attempt returned a 400 immediately.
-
-So this establishes a baseline and nothing about the thesis. The gate is refused
-rather than failed, and the harness reports it that way, because a gate that
-could not be measured has not been failed.
-
-## What it would cost to finish
-
-The cache comparison is the cheap one and the one §7 is named for: same model,
-same corpus, and the only difference is whether §6 places markers. At the
-observed $0.23 per solved attempt, sixty attempts is
-roughly $14.
-
-A tier comparison needs two paid models and roughly a hundred dollars, which is
-why it has not been run. A ladder with a free or plan-metered rung cannot be
-used as a substitute: those arms bill zero, so cost per solved task is zero and
-they win §7.1's cost condition unconditionally. That is an artefact of metering
-rather than a result, and the harness says so rather than printing the number.
+The cache comparison remains the cheapest experiment that tests the thesis §7 is
+named for: one model, one corpus, and the only difference is whether §6 places
+markers. At the observed rate that is roughly $14.
 
 ## Reproducing
 
 ```
-SB_LIVE=1 SB_EVAL_LADDER=cache SB_EVAL_TASKS=20 SB_EVAL_SEEDS=3 \
-  go test ./internal/eval/ -run TestLiveBaselineRuns -v -timeout 170m
+SB_LIVE=1 SB_EVAL_TASKS=20 SB_EVAL_SEEDS=3 SB_EVAL_WORKERS=6 \
+  SB_EVAL_JOURNAL=free-ladder.jsonl \
+  go test ./internal/eval/ -run TestLiveBaselineRuns -v -timeout 240m
 ```
 
-Each attempt is written to `eval-runs.jsonl` as it finishes. A run that dies
-half way through leaves half a measurement, which is what happened to an earlier
-three hour run that left nothing at all.
+Every attempt is written and synced as it finishes, so a run that dies leaves a
+partial measurement rather than nothing. A verdict can be recomputed from a
+recorded run without paying for the corpus again:
+
+```
+SB_EVAL_JOURNAL=free-ladder.jsonl go test ./internal/eval/ -run TestReportJournal -v
+```

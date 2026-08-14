@@ -45,17 +45,24 @@ plain scalar, and gates a learned router on beating heuristics once runtime and
 distribution costs are counted. Running the heuristic is what produces the
 evidence to settle it.
 
-Phase 2b's harness is built: a thirty-task hand-written corpus with executable
-verifiers, a runner, and the §7.1 gate. The gate refuses a verdict rather than
-producing one below twenty tier-1 tasks, because confident numbers about an
-empty corpus are worse than none.
+**Phase 2b is run, and the gate failed.** A thirty-task hand-written corpus
+with executable verifiers, twenty tasks at three seeds across three arms, and
+the verdict is recorded in [docs/eval.md](docs/eval.md).
 
-One arm is measured and recorded in [docs/eval.md](docs/eval.md); the
-comparison it needs is not, because the credit ran out. The gate reports itself
-refused rather than failed, which are different states.
+The failure is about the ladder, not the thesis. The rung assumed to be
+stronger solves less on 13 of 20 tasks and is twice as slow, so every escalation
+moved work from a model solving 97% to one solving 58%. §8.6 says tier labels
+are derived from the Pareto front and "not assigned from model reputation";
+this ladder was assigned from reputation and the first run falsified it.
 
-Next: finish the gate measurement, then MCP, hooks, the Bubble Tea interface,
-and telemetry. **The routing this is named for
+That is the harness working. A ladder ordered wrongly makes routing worse than
+not routing, and nothing short of running the corpus would have shown it.
+
+The cost half of the gate is still unmeasured: both rungs are plan-metered, so
+every arm bills zero and the cost condition cannot separate them.
+
+Next: derive the ladder empirically from the data now in hand, then MCP, hooks,
+the Bubble Tea interface, and telemetry. **The routing this is named for
 does not exist yet** - tiers are selected by hand.
 
 ## Running it

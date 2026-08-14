@@ -245,3 +245,28 @@ func TestOverlappingIntervalsAreDetectable(t *testing.T) {
 		t.Error("plainly separated samples were reported as overlapping")
 	}
 }
+
+// On a ladder where every arm bills the same, cost never separates them, and
+// leaving the choice there picked whichever arm a map yielded first. That
+// chose a baseline solving 58% over one solving 97% and reported the routed arm
+// as ahead when it was well behind.
+func TestTheBestBaselineIsDeterministicWhenCostsTie(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+
+	var all []Run
+	all = append(all, runs(RoutedArm, 25, 3, true, 0)...)
+	// Two free baselines: one strong, one weak. Cost cannot separate them.
+	for i, r := range runs("weak-baseline", 25, 3, true, 0) {
+		r.Solved = i%2 == 0
+		all = append(all, r)
+	}
+	all = append(all, runs("strong-baseline", 25, 3, true, 0)...)
+
+	for range 5 {
+		v := Gate{}.Evaluate(tasks, all, pins())
+		if v.Baseline.Arm != "strong-baseline" {
+			t.Fatalf("baseline = %q, want the strongest competitor; beating a weak one is not the claim",
+				v.Baseline.Arm)
+		}
+	}
+}
