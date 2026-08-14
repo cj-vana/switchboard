@@ -59,6 +59,7 @@ func (r *repl) moveTo(rank int, why string) {
 	r.tier = probed
 	r.loop.Target = probed.Target
 	r.loop.Provider = client
+	r.loop.Cache = cacheFor(probed.Target, r.catalog)
 	r.out.line(r.out.style(dim, "  now on "+r.tierLine()))
 }
 
@@ -339,8 +340,12 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 
 	r.tier = probed
 	r.loop.Target = probed.Target
-	// A tier may cross providers, so the adapter moves with the target.
+	// A tier may cross providers, so the adapter moves with the target. So does
+	// the cache: markers, minimums, and observed state all belong to a target,
+	// and carrying one target's tracker onto another would attribute its cache
+	// to a server that never held it.
 	r.loop.Provider = client
+	r.loop.Cache = cacheFor(probed.Target, r.catalog)
 	r.out.line("  now on " + r.tierLine())
 
 	// Cache state is scoped to a target, so a switch abandons whatever was warm

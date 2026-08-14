@@ -3,10 +3,14 @@ package main
 import (
 	"fmt"
 
+	"github.com/cjvana/switchboard/internal/agent"
+	"github.com/cjvana/switchboard/internal/breakpoint"
+	"github.com/cjvana/switchboard/internal/cachestate"
 	"github.com/cjvana/switchboard/internal/catalog"
 	"github.com/cjvana/switchboard/internal/config"
 	"github.com/cjvana/switchboard/internal/costmodel"
 	"github.com/cjvana/switchboard/internal/prefix"
+	"github.com/cjvana/switchboard/internal/provider"
 	route "github.com/cjvana/switchboard/internal/router"
 )
 
@@ -76,4 +80,24 @@ func describeRoute(d route.Decision) []string {
 		lines = append(lines, "  ruled out  "+why)
 	}
 	return lines
+}
+
+// cacheFor builds the cache controller for a target, or nil when the catalog
+// knows nothing about it.
+//
+// A nil controller is a cache-unaware loop, which is the right answer for a
+// target whose caching behaviour has not been recorded: placing markers on a
+// guess would spend writes to learn nothing, and §6.3 would then have
+// observations it could not interpret.
+func cacheFor(target provider.RouteTarget, cat *catalog.Catalog) *agent.Cache {
+	info, _, ok := cat.Lookup(target)
+	if !ok {
+		return nil
+	}
+	return &agent.Cache{
+		Manager: &breakpoint.Manager{Policy: info.Cache, Target: target.ID()},
+		Tracker: cachestate.New(),
+		Policy:  info.Cache,
+		Target:  target.ID(),
+	}
 }

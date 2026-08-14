@@ -137,6 +137,11 @@ func run() error {
 	out := newRenderer(os.Stdout)
 	in := bufio.NewReader(os.Stdin)
 
+	// §6 is only live if something wires it. The loop assembles a request from
+	// the session by default, so without this the zones, the breakpoint
+	// manager, and the tracker are all present and never consulted.
+	cache := cacheFor(tier.Target, cat)
+
 	loop := &agent.Loop{
 		Provider: client,
 		Target:   tier.Target,
@@ -146,6 +151,7 @@ func run() error {
 		Session:  sess,
 		Observer: out,
 		Catalog:  cat,
+		Cache:    cache,
 		System:   agent.SystemPrompt(workspace, mode, capability),
 	}
 
