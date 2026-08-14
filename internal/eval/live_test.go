@@ -39,6 +39,16 @@ func armsFor(t *testing.T) []Arm {
 	}
 
 	switch os.Getenv("SB_EVAL_LADDER") {
+	case "cache":
+		// §7.1's second condition, and the cheapest experiment that tests the
+		// thesis this project is named for: one model, one corpus, and the only
+		// difference is whether §6 places markers at all.
+		client := anthropic.New(anthropic.WithAPIKey(key(anthropic.Name, anthropic.Surface)))
+		return []Arm{
+			{Name: "cache-unaware", Target: anthropic.Target("claude-haiku-4-5"), Provider: client},
+			{Name: "cache-aware", Target: anthropic.Target("claude-haiku-4-5"), Provider: client, CacheAware: true},
+		}
+
 	case "money":
 		// Two paid models on one provider, which §19.3 allows explicitly and
 		// which is the only shape where a cost comparison is about money.

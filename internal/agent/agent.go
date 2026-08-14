@@ -51,6 +51,11 @@ type Loop struct {
 	// which is different from recording them as zero.
 	Catalog *catalog.Catalog
 
+	// Cache places cache markers and records what the provider reported. A nil
+	// Cache is a cache-unaware loop, which is the control arm §7.1 compares
+	// against.
+	Cache *Cache
+
 	System        []provider.Block
 	MaxToolRounds int
 	MaxAttempts   int
@@ -166,12 +171,18 @@ func (l *Loop) callModel(ctx context.Context) (provider.Message, provider.StopRe
 		Tools:    l.Tools.Definitions(),
 		Messages: l.Session.State().Messages,
 	}
+	req.CachePlan = l.Cache.plan(req.System, req.Tools, req.Messages)
 
 	var lastMsg provider.Message
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		msg, stop, usage, err := l.streamOnce(ctx, req)
 		if err == nil {
+			// Recorded from what came back, never from what was sent (§6.3).
+			// A retried attempt is not recorded: its usage belongs to a request
+			// that failed, and folding it in would report a cache miss for a
+			// turn the provider never finished.
+			l.Cache.observe(usage, time.Now())
 			return msg, stop, usage, attempt, nil
 		}
 		lastMsg, lastErr = msg, err

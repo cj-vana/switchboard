@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/cjvana/switchboard/internal/agent"
+	"github.com/cjvana/switchboard/internal/breakpoint"
+	"github.com/cjvana/switchboard/internal/cachestate"
 	"github.com/cjvana/switchboard/internal/catalog"
 	"github.com/cjvana/switchboard/internal/execution"
 	"github.com/cjvana/switchboard/internal/permission"
@@ -22,6 +24,12 @@ type Arm struct {
 	Name     string
 	Target   provider.RouteTarget
 	Provider provider.Provider
+
+	// CacheAware places cache markers. Off is the control arm §7.1 compares
+	// against when it asks whether the interval against an otherwise identical
+	// cache-unaware router excludes zero: same model, same corpus, same tools,
+	// and the one difference is whether §6 runs at all.
+	CacheAware bool
 }
 
 // Runner executes tasks.
@@ -192,6 +200,16 @@ func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc
 	}
 
 	collector.loop = loop
+	if arm.CacheAware {
+		if info, _, ok := r.Catalog.Lookup(arm.Target); ok {
+			loop.Cache = &agent.Cache{
+				Manager: &breakpoint.Manager{Policy: info.Cache, Target: arm.Target.ID()},
+				Tracker: cachestate.New(),
+				Policy:  info.Cache,
+				Target:  arm.Target.ID(),
+			}
+		}
+	}
 	if esc != nil {
 		esc.attach(loop)
 	}
