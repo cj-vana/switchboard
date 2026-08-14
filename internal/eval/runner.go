@@ -2,8 +2,8 @@ package eval
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cjvana/switchboard/internal/agent"
@@ -97,14 +97,22 @@ func (r Runner) run(ctx context.Context, task Task, arm Arm, seed int, esc escal
 	}
 
 	started := time.Now()
-	usage, rounds, runErr := r.attempt(ctx, task, arm, dir, esc)
+	perTarget, denials, runErr := r.attempt(ctx, task, arm, dir, esc)
 	out.Duration = time.Since(started)
-	out.Usage = usage
-	_ = rounds
+	out.Denials = denials
 
-	if info, _, ok := r.Catalog.Lookup(arm.Target); ok {
+	// Cost follows the tokens, not the arm. A routed run that escalates spends
+	// on the target it moved to, and pricing the whole run against the rung it
+	// started on reports an escalation to a paid target as free, which would let
+	// any cost gate pass trivially and wrongly.
+	for target, usage := range perTarget {
+		out.Usage = out.Usage.Add(usage)
+		info, _, ok := r.Catalog.Lookup(targetOf(r.Catalog, target))
+		if !ok {
+			continue
+		}
 		if cost, _, priced := info.Cost(usage); priced {
-			out.Cost = cost
+			out.Cost += cost
 		}
 	}
 
@@ -126,24 +134,35 @@ func (r Runner) run(ctx context.Context, task Task, arm Arm, seed int, esc escal
 	return out
 }
 
-func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc escalation) (provider.Usage, int, error) {
+// targetOf reconstructs a route target from its id, so usage recorded against
+// a target the run moved to can still be priced.
+func targetOf(cat *catalog.Catalog, id provider.RouteTargetID) provider.RouteTarget {
+	parts := strings.SplitN(string(id), "/", 3)
+	if len(parts) < 3 {
+		return provider.RouteTarget{}
+	}
+	model, _, _ := strings.Cut(parts[2], "+")
+	return provider.RouteTarget{Provider: parts[0], Surface: parts[1], ModelID: model}
+}
+
+func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc escalation) (map[provider.RouteTargetID]provider.Usage, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
 
 	store, err := session.NewStore(dir + "/.sessions")
 	if err != nil {
-		return provider.Usage{}, 0, err
+		return nil, 0, err
 	}
 	sess, err := store.Create(dir, arm.Target.ID(), r.Catalog.Revision)
 	if err != nil {
-		return provider.Usage{}, 0, err
+		return nil, 0, err
 	}
 	defer sess.Close()
 
 	capability := execution.Detect()
 	registry, err := tools.NewRegistry(dir, capability)
 	if err != nil {
-		return provider.Usage{}, 0, err
+		return nil, 0, err
 	}
 
 	// Bypass, because every task has to run the test suite and acceptEdits
@@ -156,14 +175,15 @@ func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc
 	// engine downgrades bypass back to asking, and this will fail loudly rather
 	// than run unprotected, which is the behaviour design principle 4 wants.
 	mode := permission.ModeBypass
-	collector := &usageCollector{}
+	asker := &denyingAsker{}
+	collector := &usageCollector{byTarget: map[provider.RouteTargetID]provider.Usage{}}
 
 	loop := &agent.Loop{
 		Provider:      arm.Provider,
 		Target:        arm.Target,
 		Tools:         registry,
 		Perms:         permission.NewEngine(mode, capability),
-		Asker:         refusingAsker{},
+		Asker:         asker,
 		Session:       sess,
 		Observer:      collector,
 		Catalog:       r.Catalog,
@@ -171,34 +191,41 @@ func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc
 		MaxToolRounds: r.rounds(),
 	}
 
+	collector.loop = loop
 	if esc != nil {
 		esc.attach(loop)
 	}
 
 	err = loop.Turn(ctx, task.Prompt)
-	return collector.total, collector.turns, err
+	return collector.byTarget, asker.denied, err
 }
 
+// usageCollector attributes each turn's usage to the target that served it,
+// which is the only way an escalating run can be priced correctly.
 type usageCollector struct {
 	agent.NopObserver
-	total provider.Usage
-	turns int
+	loop     *agent.Loop
+	byTarget map[provider.RouteTargetID]provider.Usage
 }
 
 func (c *usageCollector) TurnUsage(u session.Usage) {
-	c.total = c.total.Add(u.Usage)
-	c.turns++
+	id := provider.RouteTargetID("unknown")
+	if c.loop != nil {
+		id = c.loop.Target.ID()
+	}
+	c.byTarget[id] = c.byTarget[id].Add(u.Usage)
 }
 
-// refusingAsker fails rather than blocking. Anything reaching it is a request
-// the corpus should not have produced, and a harness that silently approved it
-// would be measuring a different run than the one it reports.
-type refusingAsker struct{}
+// denyingAsker refuses a request and lets the turn continue, which is what an
+// unattended session does. Erroring instead would end a run on its first
+// network request, so a task the model could have finished another way would be
+// recorded as unsolvable.
+//
+// The count matters: a corpus that trips approvals constantly is a corpus that
+// needs looking at, and a silent denial hides that.
+type denyingAsker struct{ denied int }
 
-func (refusingAsker) Ask(_ context.Context, req permission.Request, outcome permission.Outcome) (permission.Response, error) {
-	// Naming the request and the reason turns an unsolved run into a fixable
-	// one. "The corpus should not need an approval prompt" says nothing about
-	// which prompt, and a corpus that trips one is a corpus bug.
-	return permission.Response{}, fmt.Errorf(
-		"stopped for approval: %s wanted %s (%s)", req.Tool, req.Effect, outcome.Reason)
+func (a *denyingAsker) Ask(_ context.Context, _ permission.Request, _ permission.Outcome) (permission.Response, error) {
+	a.denied++
+	return permission.Response{Approved: false}, nil
 }

@@ -100,7 +100,12 @@ type Run struct {
 	EstimatedCost catalog.Money
 
 	Escalations int
-	Seed        int
+
+	// Denials counts approval requests the harness refused. A run with many is
+	// a run that spent its rounds asking for things policy will never grant.
+	Denials int
+
+	Seed int
 }
 
 // Pins are what makes a report reproducible. §8.6 requires every one of these,

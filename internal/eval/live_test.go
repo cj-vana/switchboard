@@ -81,8 +81,16 @@ func TestLiveBaselineRuns(t *testing.T) {
 		if !got.Solved {
 			status = "unsolved"
 		}
-		t.Logf("%-28s %-16s %-8s %8s %6.1fs  %s",
-			got.TaskID, arm, status, got.Cost, got.Duration.Seconds(), firstLine(got.Detail))
+		denials := ""
+		if got.Denials > 0 {
+			denials = fmt.Sprintf(" %dd", got.Denials)
+		}
+		moves := ""
+		if got.Escalations > 0 {
+			moves = fmt.Sprintf(" %d^", got.Escalations)
+		}
+		t.Logf("%-28s %-16s %-8s %9s %6.1fs%s%s  %s",
+			got.TaskID, arm, status, got.Cost, got.Duration.Seconds(), moves, denials, firstLine(got.Detail))
 	}
 
 	var runs []Run
