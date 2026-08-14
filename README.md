@@ -45,8 +45,17 @@ plain scalar, and gates a learned router on beating heuristics once runtime and
 distribution costs are counted. Running the heuristic is what produces the
 evidence to settle it.
 
-Next: the eval harness and the §7.1 falsification gate, then MCP, hooks, the
-Bubble Tea interface, and telemetry. **The routing this is named for
+Phase 2b's harness is built: a thirty-task hand-written corpus with executable
+verifiers, a runner, and the §7.1 gate. The gate refuses a verdict rather than
+producing one below twenty tier-1 tasks, because confident numbers about an
+empty corpus are worse than none.
+
+One arm is measured and recorded in [docs/eval.md](docs/eval.md); the
+comparison it needs is not, because the credit ran out. The gate reports itself
+refused rather than failed, which are different states.
+
+Next: finish the gate measurement, then MCP, hooks, the Bubble Tea interface,
+and telemetry. **The routing this is named for
 does not exist yet** - tiers are selected by hand.
 
 ## Running it
