@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/cjvana/switchboard/internal/agent"
 	"github.com/cjvana/switchboard/internal/catalog"
@@ -172,9 +173,63 @@ func (r *repl) turn(ctx context.Context, input string) error {
 	if r.watcher != nil {
 		r.watcher.StartTurn()
 	}
+
+	before := r.loop.Session.State()
+	startedOn := r.tier
+	started := time.Now()
+
 	err := r.loop.Turn(turnCtx, input)
 	r.out.endTurn()
+	r.recordRoute(input, startedOn, before, started, err)
 	return err
+}
+
+// recordRoute writes §8.4's training signal for the turn that just ended.
+//
+// It is written from ordinary sessions rather than only from eval runs, because
+// a corpus of deliberate measurements is a corpus of tasks somebody thought to
+// write down, and the distribution that matters is the one the user actually
+// works in.
+//
+// The outcome is recorded raw. §8.4 is explicit that an escalation is not a
+// negative label and a clean completion is weak evidence of sufficiency and none
+// of necessity, so turning any of this into a label is a decision for whoever
+// trains on it, not one to bake in here.
+func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.State, started time.Time, turnErr error) {
+	after := r.loop.Session.State()
+
+	rec := session.Route{
+		TurnDepth:    len(before.Messages),
+		PromptChars:  len(prompt),
+		Tier:         startedOn.ID,
+		Target:       startedOn.Target.ID(),
+		Source:       "manual",
+		Usage:        after.Usage.Sub(before.Usage),
+		CostMicroUSD: after.CostMicroUSD - before.CostMicroUSD,
+		WallTimeMS:   time.Since(started).Milliseconds(),
+		Outcome:      string(route.Completed),
+	}
+	if r.route != nil {
+		rec.Source = string(r.route.Source)
+		rec.Rationale = r.route.Rationale
+	}
+	if r.sticky != nil && r.tier.ID != startedOn.ID {
+		rec.Escalations = 1
+		rec.EndedOn = r.tier.Target.ID()
+	}
+	switch {
+	case errors.Is(turnErr, context.Canceled):
+		// A cancelled turn is abandonment, which §8.4 censors rather than
+		// counting against the target: the user walked away and told you
+		// nothing about the choice.
+		rec.Outcome = string(route.Abandoned)
+	case turnErr != nil:
+		rec.Outcome = string(route.Escalated)
+	}
+
+	if err := r.loop.Session.AppendRoute(rec); err != nil {
+		r.out.Notice("warn", "the routing record for this turn was not saved: "+err.Error())
+	}
 }
 
 // command handles a slash command and reports whether the REPL should exit.

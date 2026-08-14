@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,15 +104,36 @@ type recordingObserver struct {
 	thinking strings.Builder
 	notices  []string
 	toolEnds []string
+
+	// The loop runs a turn's tool calls in parallel, so an observer that
+	// appends without guarding races. This one did, which is the same mistake
+	// the production detector made and the reason -race is worth running.
+	mu sync.Mutex
 }
 
-func (o *recordingObserver) ThinkingDelta(s string)               { o.thinking.WriteString(s) }
-func (o *recordingObserver) TextDelta(s string)                   { o.text.WriteString(s) }
+func (o *recordingObserver) ThinkingDelta(s string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.thinking.WriteString(s)
+}
+
+func (o *recordingObserver) TextDelta(s string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.text.WriteString(s)
+}
+
 func (o *recordingObserver) ToolStart(string, permission.Request) {}
+
 func (o *recordingObserver) ToolEnd(name string, res tools.Result, _ time.Duration) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.toolEnds = append(o.toolEnds, name)
 }
+
 func (o *recordingObserver) Notice(level, text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.notices = append(o.notices, level+": "+text)
 }
 func (o *recordingObserver) TurnUsage(session.Usage) {}

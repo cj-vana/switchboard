@@ -545,29 +545,41 @@ func TestMalformedPinnedRedirectIsRejected(t *testing.T) {
 // running it. The default is nil rather than the real opener precisely so that
 // forgetting to override it is harmless.
 func TestLoginOpensNoBrowserUnlessAsked(t *testing.T) {
-	var opened []string
-	s := &OAuthStore{
-		Settings: OAuthSettings{ClientID: "c", AuthorizeURL: "https://x/a", TokenURL: "https://x/t"},
-		Store:    newMemStore(),
-	}
+	settings := OAuthSettings{ClientID: "c", AuthorizeURL: "https://x/a", TokenURL: "https://x/t"}
 
+	// Two stores rather than one mutated in place: the first Login is still
+	// running when the second is set up, so assigning Browser on a shared store
+	// races with the goroutine reading it.
+	silent := &OAuthStore{Settings: settings, Store: newMemStore()}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	go func() { _ = s.Login(ctx, oauthRef(), func(string) {}) }()
+	go func() { _ = silent.Login(ctx, oauthRef(), func(string) {}) }()
 	<-ctx.Done()
 
-	if len(opened) != 0 {
-		t.Fatalf("a browser was opened without being asked for: %v", opened)
+	var mu sync.Mutex
+	var opened []string
+	asked := &OAuthStore{
+		Settings: settings,
+		Store:    newMemStore(),
+		Browser: func(url string) {
+			mu.Lock()
+			defer mu.Unlock()
+			opened = append(opened, url)
+		},
 	}
-
-	// And when a caller does ask, it is used instead of anything global.
-	s.Browser = func(url string) { opened = append(opened, url) }
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	go func() { _ = s.Login(ctx2, oauthRef(), nil) }()
+	go func() { _ = asked.Login(ctx2, oauthRef(), nil) }()
 	<-ctx2.Done()
 
+	mu.Lock()
+	defer mu.Unlock()
 	if len(opened) == 0 {
 		t.Error("an explicitly supplied browser was never called")
+	}
+	// The silent store had no Browser and could not have opened anything, which
+	// is the property: forgetting to override it is harmless.
+	if silent.Browser != nil {
+		t.Error("a store with no browser configured acquired one")
 	}
 }

@@ -48,7 +48,59 @@ const (
 	RecordUsage        RecordType = "usage"
 	RecordPermission   RecordType = "permission"
 	RecordNote         RecordType = "note"
+
+	// RecordRoute carries §8.4's training signal: what a turn looked like, what
+	// was chosen, why, and how it ended. It is written from ordinary sessions
+	// rather than only from eval runs, because a corpus of deliberate
+	// measurements is a corpus of tasks somebody thought to write down, and the
+	// distribution that matters is the one people actually work in.
+	RecordRoute RecordType = "route"
 )
+
+// Route is one turn's routing decision and outcome.
+//
+// §8.4 is precise about what each field is worth as evidence, and the reader of
+// this record has to be too. An escalation is not a negative label: provider
+// failure, a planned phase change, and a bad escalation rule all produce one. A
+// clean completion is weak evidence of sufficiency and none of necessity, which
+// is the main way a naive router learns to over-provision. Nothing here is a
+// label; it is what happened.
+type Route struct {
+	// The features the decision was made from, so a later reading can tell a
+	// good decision from a lucky one.
+	TurnDepth      int      `json:"turn_depth"`
+	PriorFailures  int      `json:"prior_failures"`
+	FilesInContext int      `json:"files_in_context"`
+	DiffSize       int      `json:"diff_size"`
+	TestsInvolved  bool     `json:"tests_involved"`
+	PromptChars    int      `json:"prompt_chars"`
+	Languages      []string `json:"languages,omitempty"`
+
+	Tier      string                 `json:"tier"`
+	Target    provider.RouteTargetID `json:"target"`
+	Source    string                 `json:"source"`
+	Rationale string                 `json:"rationale"`
+
+	// Escalations is how many times the primary moved during the turn, and
+	// EndedOn is where it finished. §8.3 says the mid-task adjustments are
+	// worth more than the opening choice, so recording only the opening one
+	// would keep the less useful half.
+	Escalations int                    `json:"escalations"`
+	EndedOn     provider.RouteTargetID `json:"ended_on,omitempty"`
+
+	// Outcome is one of §8.4's five, and it is recorded raw. Turning it into a
+	// label is a decision for whoever trains on this, made with the caveats
+	// above in front of them.
+	Outcome string `json:"outcome"`
+
+	// Verified is whether a task-specific check confirmed the result, which
+	// §8.4 calls stronger evidence than the harness's own completion signal.
+	Verified bool `json:"verified"`
+
+	Usage        provider.Usage `json:"usage"`
+	CostMicroUSD int64          `json:"cost_micro_usd"`
+	WallTimeMS   int64          `json:"wall_time_ms"`
+}
 
 type Record struct {
 	Seq     int             `json:"seq"`

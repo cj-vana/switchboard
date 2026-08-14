@@ -338,8 +338,9 @@ func (s *Session) apply(rec Record) error {
 		s.state.Usage = s.state.Usage.Add(p.Usage)
 		s.state.CostMicroUSD += p.CostMicroUSD
 		s.state.Calls++
-	case RecordPermission, RecordNote:
-		// Recorded for audit; they carry no conversation state.
+	case RecordPermission, RecordNote, RecordRoute:
+		// Recorded for audit and for §8.4's training signal; none of them carry
+		// conversation state, so replay skips them without losing anything.
 	default:
 		// An unknown type from a same-schema log is forward-compatible padding,
 		// not corruption. A newer schema is refused before replay reaches here.
@@ -390,6 +391,13 @@ func (s *Session) AppendUsage(u Usage) error {
 	s.state.CostMicroUSD += u.CostMicroUSD
 	s.state.Calls++
 	return nil
+}
+
+// AppendRoute records §8.4's training signal for one turn.
+func (s *Session) AppendRoute(r Route) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.append(RecordRoute, r)
 }
 
 func (s *Session) AppendPermission(p Permission) error {

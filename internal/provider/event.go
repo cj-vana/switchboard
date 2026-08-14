@@ -58,6 +58,24 @@ type Usage struct {
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
+// Sub reports what one turn added, given a running total before and after. It
+// clamps at zero rather than reporting a negative count, because a resumed
+// session replays a total the current turn did not produce.
+func (u Usage) Sub(o Usage) Usage {
+	nonNegative := func(a, b int) int {
+		if a-b < 0 {
+			return 0
+		}
+		return a - b
+	}
+	return Usage{
+		InputTokens:      nonNegative(u.InputTokens, o.InputTokens),
+		OutputTokens:     nonNegative(u.OutputTokens, o.OutputTokens),
+		CacheReadTokens:  nonNegative(u.CacheReadTokens, o.CacheReadTokens),
+		CacheWriteTokens: nonNegative(u.CacheWriteTokens, o.CacheWriteTokens),
+	}
+}
+
 func (u Usage) Add(o Usage) Usage {
 	return Usage{
 		InputTokens:      u.InputTokens + o.InputTokens,

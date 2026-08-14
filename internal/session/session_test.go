@@ -424,3 +424,43 @@ func TestSessionsAreNotWorldReadable(t *testing.T) {
 		t.Errorf("session mode = %o; logs hold prompts and code and must stay owner-only", perm)
 	}
 }
+
+// §8.4's training signal is written from ordinary sessions rather than only
+// from eval runs, because a corpus of deliberate measurements is a corpus of
+// tasks somebody thought to write down, and the distribution that matters is
+// the one people work in.
+func TestRouteRecordsSurviveReplay(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "t/s/m", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	route := Route{
+		TurnDepth: 2, PriorFailures: 1, TestsInvolved: true,
+		Tier: "t1", Target: "t/s/m", Source: "heuristic",
+		Rationale: "following a test failure", Escalations: 1,
+		EndedOn: "t/s/other", Outcome: "completed", Verified: true,
+		Usage: provider.Usage{InputTokens: 100, OutputTokens: 20}, WallTimeMS: 4200,
+	}
+	if err := sess.AppendRoute(route); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendMessage(provider.UserText("hello")); err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	sess.Close()
+
+	// A route record carries no conversation state, so replay has to skip it
+	// without either losing the messages around it or refusing the log.
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatalf("a log containing route records could not be replayed: %v", err)
+	}
+	defer reopened.Close()
+
+	if got := len(reopened.State().Messages); got != 1 {
+		t.Errorf("replayed %d messages, want the one that was written", got)
+	}
+}
