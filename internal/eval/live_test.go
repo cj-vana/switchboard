@@ -58,13 +58,28 @@ func armsFor(t *testing.T) []Arm {
 			{Name: "always-highest", Target: anthropic.Target("claude-opus-5"), Provider: client},
 		}
 
-	default:
-		// Free and plan-metered. Nothing here bills per token, so the cost half
-		// of the gate cannot be measured and the report says so rather than
-		// reporting a saving that is an artefact of the ladder.
+	case "local":
+		// A genuinely free ladder. It is also slow: the local model serialises
+		// on one machine and an attempt takes minutes, so a corpus this size
+		// does not finish in an afternoon.
 		return []Arm{
 			{Name: "always-lowest", Target: ollama.Target("qwen3.5:9b-mlx"), Provider: ollama.New()},
 			{Name: "always-highest", Target: kimi.Target("k3-256k"), Provider: kimi.New(key(kimi.Name, kimi.Surface))},
+		}
+
+	default:
+		// Two plan-metered models on one provider, which is the ladder that can
+		// actually be run: both rungs are fast and neither bills per token.
+		//
+		// That last part is the limit. Nothing here bills per token, so §7.1's
+		// cost condition cannot be measured on this ladder at all. What it does
+		// measure is everything else §8.6 asks for: solve rate, latency per
+		// solved task, and whether escalation recovers what the cheap rung
+		// misses.
+		client := kimi.New(key(kimi.Name, kimi.Surface))
+		return []Arm{
+			{Name: "always-lowest", Target: kimi.Target("kimi-for-coding-highspeed"), Provider: client},
+			{Name: "always-highest", Target: kimi.Target("k3-256k"), Provider: client},
 		}
 	}
 }
@@ -160,19 +175,17 @@ func TestLiveBaselineRuns(t *testing.T) {
 		fmt.Sscanf(n, "%d", &workers)
 	}
 
+	// Interleaved by task rather than grouped by arm. A run this long is
+	// frequently cut short, and grouping means the first arm completes while the
+	// others have nothing at all: a partial result covering one arm answers no
+	// comparison. Interleaved, whatever finishes covers every arm evenly.
 	type job func() Run
 	var jobs []job
-	for _, arm := range arms {
-		for _, task := range tasks {
-			for seed := range seeds {
-				jobs = append(jobs, func() Run { return runner.Run(ctx, task, arm, seed) })
-			}
-		}
-	}
-	// The arm under test: same corpus, same tools, same verifier, and the router
-	// choosing the target instead of it being fixed.
 	for _, task := range tasks {
 		for seed := range seeds {
+			for _, arm := range arms {
+				jobs = append(jobs, func() Run { return runner.Run(ctx, task, arm, seed) })
+			}
 			jobs = append(jobs, func() Run { return routed.Run(ctx, runner, task, seed) })
 		}
 	}

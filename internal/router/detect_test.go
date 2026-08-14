@@ -1,6 +1,10 @@
 package router
 
-import "testing"
+import (
+	"fmt"
+	"sync"
+	"testing"
+)
 
 func has(signals []Signal, want Signal) bool {
 	for _, s := range signals {
@@ -173,4 +177,47 @@ func TestUnsupportedTriggersAreNotGuessedAt(t *testing.T) {
 			t.Errorf("%q was emitted from state the loop does not track", unsupported)
 		}
 	}
+}
+
+// The agent loop runs a turn's tool calls in parallel goroutines, so every
+// method here is called concurrently. That was documented as untrue in a
+// comment and crashed a real corpus run on a concurrent map write after nine
+// hundred seconds of work.
+//
+// Run with -race, which is what would have caught it.
+func TestDetectorSurvivesConcurrentUse(t *testing.T) {
+	d := NewDetector()
+
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 32 {
+				d.ToolCall("read", fmt.Appendf(nil, `{"path":"%d"}`, (i+j)%5))
+				d.ToolResult("exec", "go test ./...", "--- FAIL: Test", j%3 == 0)
+				d.AssistantText("I'm not sure about this")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestStickySurvivesConcurrentUse(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 2}, 0)
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 32 {
+				s.Observe(RepeatedToolCall)
+				s.AfterCall(3)
+				_ = s.Rank()
+				_ = s.EscalatedLastTurn()
+			}
+		}()
+	}
+	wg.Wait()
 }

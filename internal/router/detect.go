@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Detector turns what happens inside a turn into the signals §8.3 escalates on.
@@ -16,8 +17,13 @@ import (
 // a guess in their place would be worse than emitting nothing, because the
 // policy would escalate on evidence that does not exist.
 //
-// It is not safe for concurrent use; the loop drives one call at a time.
+// It is safe for concurrent use, which is not optional: the agent loop runs a
+// turn's tool calls in parallel goroutines, so every one of these methods is
+// called concurrently. Assuming otherwise crashed a real run on a concurrent
+// map write, and the assumption was written in a comment rather than tested.
 type Detector struct {
+	mu sync.Mutex
+
 	// ErrorSpikeAt is how many failed tool calls in one turn count as a spike.
 	// Tools fail routinely, so one is not news.
 	ErrorSpikeAt int
@@ -51,6 +57,8 @@ func (d *Detector) spikeAt() int {
 // counts consecutive failures within one, and carrying them across would
 // escalate a fresh turn for something already dealt with.
 func (d *Detector) Reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.calls = map[string]int{}
 	d.failures = map[string]bool{}
 	d.repeated = map[string]bool{}
@@ -61,6 +69,8 @@ func (d *Detector) Reset() {
 
 // ToolCall reports a call about to run.
 func (d *Detector) ToolCall(name string, input []byte) []Signal {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	key := name + "\x00" + string(input)
 	d.calls[key]++
 
@@ -76,6 +86,8 @@ func (d *Detector) ToolCall(name string, input []byte) []Signal {
 
 // ToolResult reports what a call produced.
 func (d *Detector) ToolResult(name, argv, output string, failed bool) []Signal {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if !failed {
 		return nil
 	}
@@ -104,6 +116,8 @@ func (d *Detector) ToolResult(name, argv, output string, failed bool) []Signal {
 // turn: §8.3 makes it a weak signal, and repeating it would let volume stand in
 // for evidence.
 func (d *Detector) AssistantText(text string) []Signal {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.uncertain || !hedging(text) {
 		return nil
 	}
