@@ -4,13 +4,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/permission"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/router"
-	"github.com/cjvana/switchboard/internal/session"
-	"github.com/cjvana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/agent"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 // escalator lets the routed arm change its target mid-task.

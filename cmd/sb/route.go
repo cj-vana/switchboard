@@ -3,15 +3,15 @@ package main
 import (
 	"fmt"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/breakpoint"
-	"github.com/cjvana/switchboard/internal/cachestate"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/config"
-	"github.com/cjvana/switchboard/internal/costmodel"
-	"github.com/cjvana/switchboard/internal/prefix"
-	"github.com/cjvana/switchboard/internal/provider"
-	route "github.com/cjvana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/agent"
+	"github.com/cj-vana/switchboard/internal/breakpoint"
+	"github.com/cj-vana/switchboard/internal/cachestate"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/costmodel"
+	"github.com/cj-vana/switchboard/internal/prefix"
+	"github.com/cj-vana/switchboard/internal/provider"
+	route "github.com/cj-vana/switchboard/internal/router"
 )
 
 // candidatesFor turns the configured ladder into what the router scores.

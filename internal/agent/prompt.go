@@ -5,9 +5,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/execution"
-	"github.com/cjvana/switchboard/internal/permission"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // SystemPrompt builds the frozen-zone system blocks.

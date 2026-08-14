@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // ResponsesClient serves the subscription surface.

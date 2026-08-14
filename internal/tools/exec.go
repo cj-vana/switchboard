@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/execution"
-	"github.com/cjvana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/permission"
 )
 
 const maxExecTimeout = 10 * time.Minute

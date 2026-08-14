@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/breakpoint"
-	"github.com/cjvana/switchboard/internal/cachestate"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/breakpoint"
+	"github.com/cj-vana/switchboard/internal/cachestate"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func explicitPolicy() catalog.CachePolicy {

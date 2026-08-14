@@ -17,8 +17,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Provenance is where a task came from, which decides how much its result is

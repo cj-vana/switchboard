@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func sys(text string) []provider.Block { return []provider.Block{provider.Text{Text: text}} }

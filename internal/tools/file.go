@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/permission"
 )
 
 const maxReadBytes = 256 << 10

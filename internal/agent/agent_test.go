@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/execution"
-	"github.com/cjvana/switchboard/internal/permission"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/session"
-	"github.com/cjvana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 // scriptTurn is one canned model call.

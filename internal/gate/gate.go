@@ -23,7 +23,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // MinRatio and MaxRatio bound estimate-over-actual for the targets this build

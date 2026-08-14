@@ -1,9 +1,8 @@
 // Command sb is Switchboard's terminal entry point.
 //
-// This is the phase-0 REPL: a plain line-oriented shell over the agent library,
-// built to exercise the loop and nothing more. The Bubble Tea interface arrives
-// in phase 3, after the routing thesis has been measured, so that neither the
-// measurement nor the decision to continue depends on it (§19.2).
+// Interactive sessions open the Bubble Tea TUI; the phase-0 line-oriented REPL
+// remains behind -repl and is what the phase gates and single-prompt (-p) runs
+// use, because both need a scriptable surface.
 package main
 
 import (
@@ -16,16 +15,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/config"
-	"github.com/cjvana/switchboard/internal/execution"
-	"github.com/cjvana/switchboard/internal/permission"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/provider/ollama"
-	route "github.com/cjvana/switchboard/internal/router"
-	"github.com/cjvana/switchboard/internal/session"
-	"github.com/cjvana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/agent"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider/ollama"
+	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 func main() {
@@ -50,6 +49,8 @@ type options struct {
 	cont      bool
 	list      bool
 	showTiers bool
+	repl      bool
+	version   bool
 }
 
 func run() error {
@@ -76,7 +77,18 @@ func run() error {
 	flag.BoolVar(&opts.cont, "continue", false, "resume the most recent session for this workspace")
 	flag.BoolVar(&opts.list, "sessions", false, "list sessions for this workspace and exit")
 	flag.BoolVar(&opts.showTiers, "tiers", false, "list the configured tiers and exit")
+	flag.BoolVar(&opts.repl, "repl", false, "use the line-oriented REPL instead of the TUI")
+	flag.BoolVar(&opts.version, "version", false, "print the version and exit")
 	flag.Parse()
+
+	if opts.version {
+		v := currentVersion()
+		if v == "" {
+			v = "dev"
+		}
+		fmt.Println("sb " + v)
+		return nil
+	}
 
 	ctx := context.Background()
 
@@ -134,9 +146,6 @@ func run() error {
 		return err
 	}
 
-	out := newRenderer(os.Stdout)
-	in := bufio.NewReader(os.Stdin)
-
 	// §6 is only live if something wires it. The loop assembles a request from
 	// the session by default, so without this the zones, the breakpoint
 	// manager, and the tracker are all present and never consulted.
@@ -147,9 +156,7 @@ func run() error {
 		Target:   tier.Target,
 		Tools:    registry,
 		Perms:    permission.NewEngine(mode, capability),
-		Asker:    &terminalAsker{in: in, out: out},
 		Session:  sess,
-		Observer: out,
 		Catalog:  cat,
 		Cache:    cache,
 		System:   agent.SystemPrompt(workspace, mode, capability),
@@ -169,6 +176,24 @@ func run() error {
 		sticky.Pin(startRank)
 	}
 
+	var routeDec *route.Decision
+	if chosen.Source != "" {
+		routeDec = &chosen
+	}
+
+	// The TUI is the default interactive surface; the REPL remains for
+	// scripting, for gates, and for terminals that are not terminals. A single
+	// -p prompt keeps the plain renderer either way.
+	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck)
+	}
+
+	out := newRenderer(os.Stdout)
+	in := bufio.NewReader(os.Stdin)
+	loop.Asker = &terminalAsker{in: in, out: out}
+	loop.Observer = out
+
 	r := &repl{
 		loop:       loop,
 		out:        out,
@@ -180,11 +205,9 @@ func run() error {
 		tier:       tier,
 		providers:  reg,
 	}
-	if chosen.Source != "" {
-		r.route = &chosen
-	}
+	r.route = routeDec
 	r.sticky = sticky
-	loop.Observer = newWatcher(out, out, sticky, len(cfg.Tiers)-1, r.moveTo)
+	loop.Observer = newWatcher(out, sticky, len(cfg.Tiers)-1, r.moveTo)
 	r.watcher = loop.Observer.(*watcher)
 
 	r.banner(sess, resumed)
@@ -193,6 +216,11 @@ func run() error {
 		return r.once(ctx, opts.prompt)
 	}
 	return r.interactive(ctx)
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // openSession resolves the session and the starting tier together, because a

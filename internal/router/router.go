@@ -25,9 +25,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/costmodel"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/costmodel"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Source records what made a decision. §8.1 is explicit that this and Rationale

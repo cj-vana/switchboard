@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cjvana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/execution"
 )
 
 type Mode string

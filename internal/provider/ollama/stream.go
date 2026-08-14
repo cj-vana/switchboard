@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // stream decodes Ollama's newline-delimited chat response. json.Decoder reads

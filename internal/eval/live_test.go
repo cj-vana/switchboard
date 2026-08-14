@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/credential"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/provider/anthropic"
-	"github.com/cjvana/switchboard/internal/provider/kimi"
-	"github.com/cjvana/switchboard/internal/provider/ollama"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider/anthropic"
+	"github.com/cj-vana/switchboard/internal/provider/kimi"
+	"github.com/cj-vana/switchboard/internal/provider/ollama"
 )
 
 // armsFor builds the ladder, lowest rung first. The baselines are its ends.

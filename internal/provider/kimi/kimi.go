@@ -12,8 +12,8 @@
 package kimi
 
 import (
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/provider/anthropic"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider/anthropic"
 )
 
 const (

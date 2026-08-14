@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/costmodel"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/costmodel"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func candidate(tier string, rank int, opts ...func(*Candidate)) Candidate {

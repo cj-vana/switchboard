@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // ErrSessionLocked reports that another process is appending to this session.

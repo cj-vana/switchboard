@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Money is an amount in micro-USD, a millionth of a dollar.

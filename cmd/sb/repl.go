@@ -11,13 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/config"
-	"github.com/cjvana/switchboard/internal/execution"
-	"github.com/cjvana/switchboard/internal/permission"
-	route "github.com/cjvana/switchboard/internal/router"
-	"github.com/cjvana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/agent"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
+	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/session"
 )
 
 type repl struct {
@@ -198,7 +199,16 @@ func (r *repl) turn(ctx context.Context, input string) error {
 // trains on it, not one to bake in here.
 func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.State, started time.Time, turnErr error) {
 	after := r.loop.Session.State()
+	err := appendRouteRecord(r.loop.Session, prompt, startedOn, r.tier, before, after, started, turnErr, r.route, r.sticky)
+	if err != nil {
+		r.out.Notice("warn", "the routing record for this turn was not saved: "+err.Error())
+	}
+}
 
+// appendRouteRecord is the UI-independent half of recordRoute, shared with the
+// TUI: it derives the record and appends it, leaving error reporting to the
+// caller's surface.
+func appendRouteRecord(sess *session.Session, prompt string, startedOn, endedOn config.Tier, before, after session.State, started time.Time, turnErr error, routeDec *route.Decision, sticky *route.Sticky) error {
 	rec := session.Route{
 		TurnDepth:    len(before.Messages),
 		PromptChars:  len(prompt),
@@ -210,13 +220,13 @@ func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.
 		WallTimeMS:   time.Since(started).Milliseconds(),
 		Outcome:      string(route.Completed),
 	}
-	if r.route != nil {
-		rec.Source = string(r.route.Source)
-		rec.Rationale = r.route.Rationale
+	if routeDec != nil {
+		rec.Source = string(routeDec.Source)
+		rec.Rationale = routeDec.Rationale
 	}
-	if r.sticky != nil && r.tier.ID != startedOn.ID {
+	if sticky != nil && endedOn.ID != startedOn.ID {
 		rec.Escalations = 1
-		rec.EndedOn = r.tier.Target.ID()
+		rec.EndedOn = endedOn.Target.ID()
 	}
 	switch {
 	case errors.Is(turnErr, context.Canceled):
@@ -228,9 +238,7 @@ func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.
 		rec.Outcome = string(route.Escalated)
 	}
 
-	if err := r.loop.Session.AppendRoute(rec); err != nil {
-		r.out.Notice("warn", "the routing record for this turn was not saved: "+err.Error())
-	}
+	return sess.AppendRoute(rec)
 }
 
 // command handles a slash command and reports whether the REPL should exit.
@@ -362,25 +370,32 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 // figure is an estimate against a named catalog revision and a reconciliation
 // aid, never a substitute for the provider's invoice (§15).
 func (r *repl) summary() {
-	state := r.loop.Session.State()
+	for _, line := range summaryLines(r.loop.Session.State(), r.catalog, r.loop.Target) {
+		r.out.line(r.out.style(dim, line))
+	}
+	r.out.flush()
+}
 
+// summaryLines is the UI-independent half of the cost report, shared with the
+// TUI's /cost.
+func summaryLines(state session.State, cat *catalog.Catalog, target provider.RouteTarget) []string {
 	line := fmt.Sprintf("  %d model calls, %d tokens in, %d tokens out",
 		state.Calls, state.Usage.InputTokens, state.Usage.OutputTokens)
 	if state.Usage.CacheReadTokens > 0 || state.Usage.CacheWriteTokens > 0 {
 		line += fmt.Sprintf(", %d cache read, %d cache write",
 			state.Usage.CacheReadTokens, state.Usage.CacheWriteTokens)
 	}
-	r.out.line(r.out.style(dim, line))
+	lines := []string{line}
 
-	info, _, ok := r.catalog.Lookup(r.loop.Target)
+	info, _, ok := cat.Lookup(target)
 	switch {
 	case !ok:
-		r.out.line(r.out.style(dim, "  no catalog entry for this target, so nothing was priced"))
+		lines = append(lines, "  no catalog entry for this target, so nothing was priced")
 	case info.Free():
-		r.out.line(r.out.style(dim, "  runs locally, so there is nothing to bill"))
+		lines = append(lines, "  runs locally, so there is nothing to bill")
 	default:
-		r.out.line(r.out.style(dim, fmt.Sprintf("  estimated %s against catalog %s",
-			catalog.Money(state.CostMicroUSD), state.CatalogRevision)))
+		lines = append(lines, fmt.Sprintf("  estimated %s against catalog %s",
+			catalog.Money(state.CostMicroUSD), state.CatalogRevision))
 	}
-	r.out.flush()
+	return lines
 }

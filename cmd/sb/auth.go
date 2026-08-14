@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/config"
-	"github.com/cjvana/switchboard/internal/credential"
-	"github.com/cjvana/switchboard/internal/provider/openai"
+	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/cj-vana/switchboard/internal/provider/openai"
 )
 
 const authUsage = `usage:

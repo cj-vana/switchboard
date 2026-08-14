@@ -18,8 +18,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/cjvana/switchboard/internal/credential"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 const FileName = "config.toml"
@@ -57,6 +57,12 @@ type Config struct {
 
 	// Providers holds per-provider endpoint overrides, keyed by provider name.
 	Providers map[string]ProviderSettings
+
+	// UpdateCheck controls the release check the TUI runs at startup. It is
+	// operational traffic, not telemetry (§16/§18): one request naming only the
+	// running version. Default on; [updates] check = false or
+	// SB_NO_UPDATE_CHECK=1 turns it off.
+	UpdateCheck bool
 
 	Path string
 }
@@ -102,6 +108,13 @@ type file struct {
 	Slots     map[string]string        `toml:"slots"`
 	Auth      map[string]authEntry     `toml:"auth"`
 	Providers map[string]providerEntry `toml:"providers"`
+	Updates   updatesEntry             `toml:"updates"`
+}
+
+// updatesEntry holds the release-check toggle. It is a *bool so "absent" and
+// "explicitly off" are different facts: the default is on.
+type updatesEntry struct {
+	Check *bool `toml:"check"`
 }
 
 // providerEntry redirects a provider at a different endpoint. A gateway, an
@@ -153,9 +166,10 @@ func Load() (*Config, error) {
 	path, err := Path()
 	if err != nil {
 		return &Config{
-			Slots:     map[string]string{},
-			Auth:      map[string]credential.Settings{},
-			Providers: map[string]ProviderSettings{},
+			Slots:       map[string]string{},
+			Auth:        map[string]credential.Settings{},
+			Providers:   map[string]ProviderSettings{},
+			UpdateCheck: true,
 		}, nil
 	}
 	return LoadFile(path)
@@ -163,10 +177,11 @@ func Load() (*Config, error) {
 
 func LoadFile(path string) (*Config, error) {
 	c := &Config{
-		Slots:     map[string]string{},
-		Auth:      map[string]credential.Settings{},
-		Providers: map[string]ProviderSettings{},
-		Path:      path,
+		Slots:       map[string]string{},
+		Auth:        map[string]credential.Settings{},
+		Providers:   map[string]ProviderSettings{},
+		UpdateCheck: true,
+		Path:        path,
 	}
 
 	data, err := os.ReadFile(path)
@@ -212,6 +227,9 @@ func LoadFile(path string) (*Config, error) {
 	}
 	for k, v := range f.Providers {
 		c.Providers[k] = ProviderSettings{BaseURL: v.BaseURL}
+	}
+	if f.Updates.Check != nil {
+		c.UpdateCheck = *f.Updates.Check
 	}
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err

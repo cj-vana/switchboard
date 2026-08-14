@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // The log is a header line followed by framed records:

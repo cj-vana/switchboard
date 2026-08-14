@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/breakpoint"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/credential"
-	"github.com/cjvana/switchboard/internal/prefix"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/provider/anthropic"
+	"github.com/cj-vana/switchboard/internal/breakpoint"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/cj-vana/switchboard/internal/prefix"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider/anthropic"
 )
 
 // The whole §6 chain against a real provider: zones lay out a prefix, the

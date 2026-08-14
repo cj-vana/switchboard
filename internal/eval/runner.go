@@ -6,15 +6,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/breakpoint"
-	"github.com/cjvana/switchboard/internal/cachestate"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/execution"
-	"github.com/cjvana/switchboard/internal/permission"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/session"
-	"github.com/cjvana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/agent"
+	"github.com/cj-vana/switchboard/internal/breakpoint"
+	"github.com/cj-vana/switchboard/internal/cachestate"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 // Arm is one thing being measured: a fixed target used as a baseline, or the

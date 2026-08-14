@@ -4,29 +4,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/permission"
-	route "github.com/cjvana/switchboard/internal/router"
-	"github.com/cjvana/switchboard/internal/session"
-	"github.com/cjvana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/agent"
+	"github.com/cj-vana/switchboard/internal/permission"
+	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 // watcher feeds the escalation policy from what the loop is already reporting.
 //
-// It wraps the renderer rather than changing the loop, because the observer
+// It wraps the observer rather than changing the loop, because the observer
 // already carries everything §8.3's detectable triggers need: which tool ran,
 // with what arguments, whether it failed, and what the model said. Threading a
 // second callback through the loop for the same events would be two things to
 // keep in step.
 //
-// Every method passes through to the renderer first. A watcher that swallowed
-// output while deciding what to escalate would trade the thing the user is
-// watching for a decision they cannot see.
+// Every method passes through to the inner observer first. A watcher that
+// swallowed output while deciding what to escalate would trade the thing the
+// user is watching for a decision they cannot see.
 type watcher struct {
 	inner    agent.Observer
 	detector *route.Detector
 	sticky   *route.Sticky
-	out      *renderer
 
 	// maxRank is the top of the configured ladder, so a move that would run off
 	// the end is reported rather than silently ignored.
@@ -41,12 +40,11 @@ type watcher struct {
 	pendingArgv map[string]string
 }
 
-func newWatcher(inner agent.Observer, out *renderer, sticky *route.Sticky, maxRank int, onMove func(int, string)) *watcher {
+func newWatcher(inner agent.Observer, sticky *route.Sticky, maxRank int, onMove func(int, string)) *watcher {
 	return &watcher{
 		inner:       inner,
 		detector:    route.NewDetector(),
 		sticky:      sticky,
-		out:         out,
 		maxRank:     maxRank,
 		onMove:      onMove,
 		pendingArgv: map[string]string{},
@@ -108,7 +106,7 @@ func (w *watcher) assess() {
 		if move.Direction < 0 {
 			direction = "stepped down"
 		}
-		w.out.Notice("route", direction+": "+move.Rationale)
+		w.inner.Notice("route", direction+": "+move.Rationale)
 		if w.onMove != nil {
 			w.onMove(w.sticky.Rank(), move.Rationale)
 		}
@@ -117,6 +115,6 @@ func (w *watcher) assess() {
 		// Saying that a switch was warranted and held is worth as much as the
 		// switch itself: otherwise the dwell looks like the policy doing
 		// nothing.
-		w.out.Notice("route", move.Rationale)
+		w.inner.Notice("route", move.Rationale)
 	}
 }

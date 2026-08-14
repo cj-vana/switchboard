@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Token estimate error, measured rather than assumed. docs/estimator.md records

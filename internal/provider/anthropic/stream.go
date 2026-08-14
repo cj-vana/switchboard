@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // maxLineBytes bounds one event. A single event carrying large tool arguments

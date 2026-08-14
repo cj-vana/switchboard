@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // liveModel is small enough to answer quickly and advertises tool support.

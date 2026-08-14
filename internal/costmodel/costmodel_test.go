@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func infoFor(t *testing.T, p, surface, model string) (provider.RouteTarget, catalog.ModelInfo) {

@@ -25,7 +25,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Name is the provider component of a RouteTarget bound to this adapter.

@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/agent"
-	"github.com/cjvana/switchboard/internal/permission"
-	route "github.com/cjvana/switchboard/internal/router"
-	"github.com/cjvana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/permission"
+	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 func testWatcher(t *testing.T, policy route.Policy) (*watcher, *bytes.Buffer, *int) {
@@ -20,7 +19,7 @@ func testWatcher(t *testing.T, policy route.Policy) (*watcher, *bytes.Buffer, *i
 
 	moved := 0
 	sticky := route.NewSticky(policy, 0)
-	w := newWatcher(agent.NopObserver{}, out, sticky, 2, func(int, string) { moved++ })
+	w := newWatcher(out, sticky, 2, func(int, string) { moved++ })
 	return w, &buf, &moved
 }
 

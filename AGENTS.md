@@ -6,7 +6,7 @@ authoritative and this file only says how to work inside it.
 
 ## Where things are
 
-    cmd/sb/              CLI entry point and the phase-0 REPL
+    cmd/sb/              CLI entry point, the phase-0 REPL, and the phase-3 TUI
     internal/provider/   canonical message types, Provider interface, adapters
     internal/session/    append-only event log, replay, resume
     internal/execution/  process runner and sandbox capability reporting
@@ -17,8 +17,10 @@ authoritative and this file only says how to work inside it.
 ## Constraints that are not negotiable
 
 **The core knows nothing about terminals.** Nothing under `internal/` may import
-a TUI library, write to stdout, or assume a tty. The REPL in `cmd/sb` is a
-consumer of the library, and it is the first of several. Retrofitting this is
+a TUI library, write to stdout, or assume a tty. The TUI and the REPL in `cmd/sb`
+are consumers of the library: the TUI talks to the loop through `agent.Observer`
+and `permission.Asker`, and every turn event crosses as a Bubble Tea message, so
+the loop's goroutine never touches UI state directly. Retrofitting this is
 expensive, which is why it holds from the first commit (design principle 1).
 
 **Adapters never silently drop requested semantics.** When a provider cannot do
@@ -155,8 +157,13 @@ permission model, sandbox capability report, crash-safe session log, one
 provider, minimal REPL. The exit gate is that a small verified task corpus
 completes safely and sessions resume after forced interruption.
 
-Deliberately absent until their phases: the target catalog, cache and
-breakpoint machinery, tiers and routing, MCP, hooks, the TUI, telemetry, and the
+Phase 3's TUI is built and is the default surface. Its phase-3 obligations from
+§14 hold: streaming text renders through a plain fast path and is re-rendered
+once per completed block through glamour, completed entries cache per width so
+repaints never re-render markdown, and diffs highlight once at load. Keep it
+that way.
+
+Deliberately absent until their phases: MCP, hooks, and the
 `glob`/`grep`/`todo`/`delegate` tools.
 
 ## Working here

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // TestReportJournal recomputes the gate from a recorded run, so a verdict can be

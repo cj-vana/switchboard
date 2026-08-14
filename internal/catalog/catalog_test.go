@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func load(t *testing.T) *Catalog {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func newStore(t *testing.T) (*Store, string) {

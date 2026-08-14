@@ -62,12 +62,20 @@ The cost half of the gate is still unmeasured: both rungs are plan-metered, so
 every arm bills zero and the cost condition cannot separate them.
 
 Next: derive the ladder empirically from the data now in hand, then MCP, hooks,
-the Bubble Tea interface, and telemetry. **The routing this is named for
+and telemetry. The Bubble Tea interface is built: phase 3's TUI is the default
+surface, with the REPL behind `-repl`. **The routing this is named for
 does not exist yet** - tiers are selected by hand.
 
 ## Running it
 
-Needs Go 1.26 and a local [Ollama](https://ollama.com) server.
+Install the latest release (macOS and Linux; verifies the release checksums
+and installs to `~/.local/bin`):
+
+```
+curl -fsSL https://raw.githubusercontent.com/cj-vana/switchboard/main/install.sh | bash
+```
+
+Or build from source. Needs Go 1.26 and a local [Ollama](https://ollama.com) server.
 
 ```
 go build -o sb ./cmd/sb
@@ -141,6 +149,7 @@ sb                         start on the lowest tier
 sb -tiers                  show the ladder and what each tier costs
 sb -tier t2                start on a specific tier
 sb -model <model>          bind an Ollama model directly, bypassing tiers
+sb -repl                   the line-oriented shell instead of the TUI
 sb --continue              resume the most recent session here
 sb --resume <id>           resume a specific session
 sb --sessions              list sessions for this directory
@@ -260,10 +269,31 @@ risk is yours and it is not hypothetical.
 A client you register yourself always wins. Anything under
 `[auth.openai.oauth]` overrides the bundled one.
 
-Inside a session: `/t1` and `/t2` switch tier, `/tiers` shows the ladder, and
-`/help`, `/mode`, `/cost`, `/session`, `/sandbox`, `/exit` do what they say.
-Ctrl-C cancels the current turn and returns you to the prompt; the session
-stays resumable.
+Inside a session the default surface is the TUI: streaming markdown, a
+virtualized transcript, an always-on status line with the tier, target,
+permission mode, session cost, and a context-window gauge, and interactive
+permission prompts. Router decisions render inline, collapsed to one line;
+ctrl-o expands the last route or tool entry.
+
+Commands: `/help` lists them all. `/t1`, `/t2`, … switch tier, and
+`/t2 <prompt>` runs one prompt on a tier and returns. `/tiers` shows the
+ladder, `/mode`, `/cost`, `/session`, `/sandbox` do what they say, `/resume`
+picks up an earlier session, `/clear` starts fresh, `/diff` reviews
+uncommitted changes, `/copy` puts the last response on the clipboard,
+`/theme` switches dark and light, `/update` self-updates, `/exit` leaves.
+Typing `/` opens autocomplete. Shift-tab cycles the permission mode, ctrl-t
+opens the tier picker, esc interrupts the turn, ctrl-c twice exits, and
+sending a message mid-turn queues it. The line-oriented REPL remains behind
+`-repl` for scripting and gates; `-p` keeps the plain renderer either way.
+
+The TUI checks for a newer release once at startup and says so in the
+transcript when one exists. The check names nothing but the running version,
+and `[updates] check = false` in the config or `SB_NO_UPDATE_CHECK=1` turns it
+off. `/update` downloads the build for this platform, verifies it against the
+release's checksums, and replaces the binary atomically; installs managed by a
+package manager defer to it. Signed update metadata is §18's bar and arrives
+with the release pipeline — until then the checksum proves integrity, not
+authenticity.
 
 ## What the sandbox does and does not do
 

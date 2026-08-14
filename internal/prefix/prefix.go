@@ -24,7 +24,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Zone names a region of the request. The order is the order they are sent in,

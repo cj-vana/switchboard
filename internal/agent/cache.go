@@ -3,11 +3,11 @@ package agent
 import (
 	"time"
 
-	"github.com/cjvana/switchboard/internal/breakpoint"
-	"github.com/cjvana/switchboard/internal/cachestate"
-	"github.com/cjvana/switchboard/internal/catalog"
-	"github.com/cjvana/switchboard/internal/prefix"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/breakpoint"
+	"github.com/cj-vana/switchboard/internal/cachestate"
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/prefix"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // Cache connects §6 to the loop.

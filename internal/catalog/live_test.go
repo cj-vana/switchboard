@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/credential"
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // The catalog claims cache minimums that are not monotonic across model

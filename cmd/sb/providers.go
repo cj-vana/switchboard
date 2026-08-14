@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cjvana/switchboard/internal/config"
-	"github.com/cjvana/switchboard/internal/credential"
-	"github.com/cjvana/switchboard/internal/provider"
-	"github.com/cjvana/switchboard/internal/provider/anthropic"
-	"github.com/cjvana/switchboard/internal/provider/kimi"
-	"github.com/cjvana/switchboard/internal/provider/ollama"
-	"github.com/cjvana/switchboard/internal/provider/openai"
-	"github.com/cjvana/switchboard/internal/provider/openaicompat"
+	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider/anthropic"
+	"github.com/cj-vana/switchboard/internal/provider/kimi"
+	"github.com/cj-vana/switchboard/internal/provider/ollama"
+	"github.com/cj-vana/switchboard/internal/provider/openai"
+	"github.com/cj-vana/switchboard/internal/provider/openaicompat"
 )
 
 // providers binds a route target to the adapter that can serve it.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 const liveModel = "qwen3.5:9b-mlx"

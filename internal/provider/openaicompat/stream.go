@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // maxLineBytes bounds one SSE line. A single chunk carrying large tool

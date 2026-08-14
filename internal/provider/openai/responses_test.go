@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func serveResponses(t *testing.T, handler http.HandlerFunc) *ResponsesClient {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjvana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func serve(t *testing.T, handler http.HandlerFunc) *Client {
