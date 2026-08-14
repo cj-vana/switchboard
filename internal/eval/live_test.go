@@ -177,6 +177,19 @@ func TestLiveBaselineRuns(t *testing.T) {
 		}
 	}
 
+	// Results are durable as they happen. A run this long dies to a deadline
+	// often enough that holding them in memory loses the whole measurement.
+	journalPath := os.Getenv("SB_EVAL_JOURNAL")
+	if journalPath == "" {
+		journalPath = "eval-runs.jsonl"
+	}
+	journal, err := NewJournal(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	t.Logf("recording each attempt to %s as it finishes", journalPath)
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var runs []Run
@@ -188,6 +201,9 @@ func TestLiveBaselineRuns(t *testing.T) {
 			defer wg.Done()
 			for j := range queue {
 				got := j()
+				if err := journal.Append(got); err != nil {
+					t.Errorf("recording an attempt failed: %v", err)
+				}
 				mu.Lock()
 				runs = append(runs, got)
 				log(got, got.Arm)

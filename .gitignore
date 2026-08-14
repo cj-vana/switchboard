@@ -18,3 +18,4 @@
 /.codex/
 
 .DS_Store
+/eval-runs.jsonl
