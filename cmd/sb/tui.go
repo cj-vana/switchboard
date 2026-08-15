@@ -757,12 +757,39 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		}
 	}
 
+	// Auto-compaction runs ahead of the queue: a queued prompt sent into a
+	// nearly-full window would inherit the failure this exists to prevent,
+	// and the queue survives the swap (onSessionSwap drains it).
+	if m.shouldAutoCompact() {
+		pct := m.callTokens * 100 / m.ctxWindow
+		m.addNotice("", fmt.Sprintf("context at %d%% of %s tokens; compacting automatically (/compact auto off disables this)",
+			pct, compact(m.ctxWindow)))
+		return cmdCompact(m, "")
+	}
+
 	if len(m.queue) > 0 {
 		next := m.queue[0]
 		m.queue = m.queue[1:]
 		return m.startTurn(next, "")
 	}
 	return nil
+}
+
+// shouldAutoCompact decides at turn end. callTokens is the size of the last
+// request the provider actually saw — input plus cache reads and writes —
+// which is the honest measure of occupancy, and the reason this waits for a
+// turn boundary rather than trusting a mid-turn estimate the estimator is
+// known to undercount (docs/estimator.md).
+func (m *tuiModel) shouldAutoCompact() bool {
+	cfg := m.app.config
+	if !cfg.CompactAuto || m.ctxWindow <= 0 || m.callTokens <= 0 {
+		return false
+	}
+	at := cfg.CompactAtPercent
+	if at == 0 {
+		at = 85
+	}
+	return m.callTokens >= m.ctxWindow*at/100
 }
 
 // restoreCmd returns to the tier a /tN override borrowed, once the turn that
@@ -828,6 +855,17 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	m.mode = m.app.loop.Perms.Mode()
 	m.refreshCost(msg.sess.State())
 	m.refreshCtxWindow()
+	// The old session's occupancy does not describe the new one, and leaving
+	// it would re-trigger the auto-compaction that produced this swap.
+	m.callTokens = 0
+
+	// Prompts queued behind the turn that triggered an auto-compaction run
+	// now, in the fresh context they were waiting for.
+	if len(m.queue) > 0 && !m.busy {
+		next := m.queue[0]
+		m.queue = m.queue[1:]
+		return m.startTurn(next, "")
+	}
 	return nil
 }
 

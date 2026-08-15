@@ -145,6 +145,23 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
+	var compact compactEntry
+	if !c.CompactAuto {
+		off := false
+		compact.Auto = &off
+	}
+	if c.CompactAtPercent != 0 && c.CompactAtPercent != 85 {
+		compact.AtPercent = c.CompactAtPercent
+	}
+	if compact.Auto != nil || compact.AtPercent != 0 {
+		if err := encode(&buf, struct {
+			Compact compactEntry `toml:"compact"`
+		}{compact}); err != nil {
+			return nil, err
+		}
+		buf.WriteString("\n")
+	}
+
 	if c.Theme != "" {
 		if err := encode(&buf, struct {
 			UI uiEntry `toml:"ui"`

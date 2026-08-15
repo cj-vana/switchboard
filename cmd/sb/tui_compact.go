@@ -10,17 +10,25 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 const compactSystem = `You are summarizing a coding session so it can continue in a fresh context window. Write for the model that continues the work, not for a human. Capture: the task and its current state; what was tried and what failed, so nothing is repeated; decisions made and their reasons; file paths touched and what changed in each; exact commands, errors, and identifiers worth keeping; and what remains to be done, most immediate first. Plain text, no preamble, no headers about being a summary. Length proportional to what actually happened.`
 
+const compactUsage = "usage: /compact [guidance], /compact auto [on|off], or /compact at <50–95>"
+
 func cmdCompact(m *tuiModel, args string) tea.Cmd {
+	if cmd, handled := compactSettings(m, args); handled {
+		return cmd
+	}
+
 	state := m.app.loop.Session.State()
 	if len(state.Messages) == 0 {
 		return noticeCmd("", "nothing to compact yet")
@@ -59,6 +67,52 @@ func cmdCompact(m *tuiModel, args string) tea.Cmd {
 		}
 		return sessionSwapMsg{sess: sess, tier: app.tier, client: app.loop.Provider, fresh: false}
 	}
+}
+
+// compactSettings is /compact auto and /compact at: the automatic-compaction
+// posture, set from inside the TUI and persisted like every other setting.
+// Anything else is guidance for a manual compaction and is not handled here.
+func compactSettings(m *tuiModel, args string) (tea.Cmd, bool) {
+	what, value, _ := strings.Cut(strings.TrimSpace(args), " ")
+	value = strings.TrimSpace(value)
+	cfg := m.app.config
+	switch what {
+	case "auto":
+		switch value {
+		case "":
+			state := "on"
+			if !cfg.CompactAuto {
+				state = "off"
+			}
+			return noticeCmd("", "auto-compaction is "+state+", at "+itoa(compactThreshold(cfg))+"% of the window"), true
+		case "on", "off":
+			cfg.CompactAuto = value == "on"
+			if err := cfg.Save(); err != nil {
+				return noticeCmd("error", "saving the setting failed: "+err.Error()), true
+			}
+			return noticeCmd("", "auto-compaction is now "+value), true
+		default:
+			return noticeCmd("error", compactUsage), true
+		}
+	case "at":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 50 || n > 95 {
+			return noticeCmd("error", compactUsage), true
+		}
+		cfg.CompactAtPercent = n
+		if err := cfg.Save(); err != nil {
+			return noticeCmd("error", "saving the threshold failed: "+err.Error()), true
+		}
+		return noticeCmd("", "auto-compaction now triggers at "+value+"% of the window"), true
+	}
+	return nil, false
+}
+
+func compactThreshold(cfg *config.Config) int {
+	if cfg.CompactAtPercent == 0 {
+		return 85
+	}
+	return cfg.CompactAtPercent
 }
 
 // summarize is a one-shot request outside the loop: no tools, no session

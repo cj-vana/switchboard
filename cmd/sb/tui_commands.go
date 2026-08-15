@@ -38,7 +38,7 @@ func commands() []commandItem {
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, desc: "tokens and cost for this session", busySafe: true, run: cmdCost},
-		{name: "compact", usage: "[guidance]", desc: "summarize the session into a fresh context", run: cmdCompact},
+		{name: "compact", usage: "[guidance|auto|at]", desc: "summarize into a fresh context; auto-compacts near the window", run: cmdCompact},
 		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
 		{name: "init", desc: "write an AGENTS.md for this repository", run: cmdInit},
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},

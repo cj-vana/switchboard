@@ -44,6 +44,10 @@ base_url = "http://10.0.0.5:11434"
 [updates]
 check = false
 
+[compact]
+auto = false
+at_percent = 70
+
 [ui]
 theme = "light"
 `)
@@ -73,6 +77,9 @@ theme = "light"
 	}
 	if after.UpdateCheck {
 		t.Error("check = false did not survive the rewrite")
+	}
+	if after.CompactAuto || after.CompactAtPercent != 70 {
+		t.Errorf("compact settings changed across a rewrite: auto=%v at=%d", after.CompactAuto, after.CompactAtPercent)
 	}
 	if after.Theme != "light" {
 		t.Errorf("theme %q did not survive the rewrite", after.Theme)

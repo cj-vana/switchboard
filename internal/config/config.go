@@ -74,6 +74,16 @@ type Config struct {
 	// (prereleases count too).
 	UpdateChannel string
 
+	// CompactAuto summarizes the session into a fresh context automatically
+	// when the window crosses CompactAtPercent. Default on: the alternative
+	// is a session that works until the moment it cannot, with the failure
+	// arriving as a provider error instead of a visible handoff.
+	CompactAuto bool
+
+	// CompactAtPercent is how full the window gets before auto-compaction,
+	// as a percentage. Default 85.
+	CompactAtPercent int
+
 	// Theme is the TUI color theme, persisted so /theme survives a restart.
 	// Empty means the built-in default; the TUI owns what names are valid.
 	Theme string
@@ -123,7 +133,15 @@ type file struct {
 	Auth      map[string]authEntry     `toml:"auth"`
 	Providers map[string]providerEntry `toml:"providers"`
 	Updates   updatesEntry             `toml:"updates"`
+	Compact   compactEntry             `toml:"compact"`
 	UI        uiEntry                  `toml:"ui"`
+}
+
+// compactEntry holds the auto-compaction settings. Auto is a *bool so
+// "absent" and "explicitly off" are different facts: the default is on.
+type compactEntry struct {
+	Auto      *bool `toml:"auto,omitempty"`
+	AtPercent int   `toml:"at_percent,omitempty"`
 }
 
 // uiEntry holds presentation settings. They live in the config rather than a
@@ -190,11 +208,13 @@ func Load() (*Config, error) {
 	path, err := Path()
 	if err != nil {
 		return &Config{
-			Slots:       map[string]string{},
-			Auth:        map[string]credential.Settings{},
-			Providers:   map[string]ProviderSettings{},
-			UpdateCheck: true,
-			UpdateAuto:  true,
+			Slots:            map[string]string{},
+			Auth:             map[string]credential.Settings{},
+			Providers:        map[string]ProviderSettings{},
+			UpdateCheck:      true,
+			UpdateAuto:       true,
+			CompactAuto:      true,
+			CompactAtPercent: 85,
 		}, nil
 	}
 	return LoadFile(path)
@@ -202,12 +222,14 @@ func Load() (*Config, error) {
 
 func LoadFile(path string) (*Config, error) {
 	c := &Config{
-		Slots:       map[string]string{},
-		Auth:        map[string]credential.Settings{},
-		Providers:   map[string]ProviderSettings{},
-		UpdateCheck: true,
-		UpdateAuto:  true,
-		Path:        path,
+		Slots:            map[string]string{},
+		Auth:             map[string]credential.Settings{},
+		Providers:        map[string]ProviderSettings{},
+		UpdateCheck:      true,
+		UpdateAuto:       true,
+		CompactAuto:      true,
+		CompactAtPercent: 85,
+		Path:             path,
 	}
 
 	data, err := os.ReadFile(path)
@@ -267,6 +289,17 @@ func LoadFile(path string) (*Config, error) {
 		// The §16/§18 posture on configuration mistakes: a value that is
 		// silently ignored is a setting the user believes is in effect.
 		return nil, fmt.Errorf("%s: updates.channel %q is not stable or beta", path, f.Updates.Channel)
+	}
+	if f.Compact.Auto != nil {
+		c.CompactAuto = *f.Compact.Auto
+	}
+	if f.Compact.AtPercent != 0 {
+		if f.Compact.AtPercent < 50 || f.Compact.AtPercent > 95 {
+			// Below half the window it would compact constantly; above 95 it
+			// would fire after the request that already failed.
+			return nil, fmt.Errorf("%s: compact.at_percent %d is outside 50–95", path, f.Compact.AtPercent)
+		}
+		c.CompactAtPercent = f.Compact.AtPercent
 	}
 	c.Theme = f.UI.Theme
 	if err := c.buildTiers(f.Tiers, path); err != nil {

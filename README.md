@@ -328,8 +328,11 @@ opens all of them in a picker. The distinctive ones:
 - `/models`, `/login`, `/logout` — discovery, binding, and credentials
   without leaving the TUI.
 - `/compact [guidance]` — summarize the session into a fresh context using
-  the current target; the old log stays on disk untouched. `/context` shows
-  the window filling before it is fatal.
+  the current target; the old log stays on disk untouched. This also happens
+  automatically when the last request crosses 85% of the target's window,
+  measured from what the provider actually saw rather than an estimate;
+  `/compact auto off` disables it and `/compact at 70` moves the threshold.
+  `/context` shows the window filling before it is fatal.
 - `/t1`, `/t2`, … switch tier; `/t2 <prompt>` runs one prompt there and
   returns. `/tiers` shows the ladder.
 - `/init` writes an AGENTS.md for the repository; the system prompt reads it
