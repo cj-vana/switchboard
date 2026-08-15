@@ -132,6 +132,17 @@ func run() error {
 
 	reg := newProviders(opts.host, cfg)
 
+	// An empty ladder on an interactive terminal is the first run, not an
+	// error: walk through binding t1 before anything needs a target. Every
+	// non-interactive path still gets the explanatory error from resolveTier,
+	// because a wizard on a pipe would hang whatever is driving it.
+	if len(cfg.Tiers) == 0 && opts.model == "" && opts.resume == "" && !opts.cont &&
+		!opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+		if err := runOnboarding(reg, cat, cfg); err != nil {
+			return err
+		}
+	}
+
 	var chosen route.Decision
 	sess, tier, client, resumed, err := openSession(ctx, store, reg, cfg, cat, workspace, &opts, &chosen)
 	if err != nil {

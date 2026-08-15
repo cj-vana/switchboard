@@ -32,39 +32,46 @@ type modelChoice struct {
 
 const removeRungID = "\x00remove"
 
+// gatherModelChoices assembles everything bindable: live local models first,
+// then the catalog. Shared by /models and first-run setup, which are the same
+// question asked at different moments.
+func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalog) ([]pickerItem, map[string]modelChoice) {
+	choices := map[string]modelChoice{}
+	var items []pickerItem
+	add := func(c modelChoice) {
+		id := c.ref + " " + c.surface
+		if _, dup := choices[id]; dup {
+			return
+		}
+		choices[id] = c
+		items = append(items, pickerItem{id: id, label: c.ref, desc: c.desc})
+	}
+
+	local, err := reg.ollama.Models(ctx)
+	if err == nil {
+		sort.Strings(local)
+		for _, name := range local {
+			add(modelChoice{ref: "ollama/" + name, surface: "local", desc: "pulled locally"})
+		}
+	}
+	for _, info := range cat.Entries() {
+		add(modelChoice{
+			ref:          info.Provider + "/" + info.ProviderModelID,
+			surface:      info.Surface,
+			desc:         catalogDesc(info),
+			effortLevels: info.EffortLevels,
+		})
+	}
+	return items, choices
+}
+
 func cmdModels(m *tuiModel, args string) tea.Cmd {
 	reg, cat, cfg := m.app.providers, m.app.catalog, m.app.config
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		choices := map[string]modelChoice{}
-		var items []pickerItem
-		add := func(c modelChoice) {
-			id := c.ref + " " + c.surface
-			if _, dup := choices[id]; dup {
-				return
-			}
-			choices[id] = c
-			items = append(items, pickerItem{id: id, label: c.ref, desc: c.desc})
-		}
-
-		local, err := reg.ollama.Models(ctx)
-		if err == nil {
-			sort.Strings(local)
-			for _, name := range local {
-				add(modelChoice{ref: "ollama/" + name, surface: "local", desc: "pulled locally"})
-			}
-		}
-		for _, info := range cat.Entries() {
-			add(modelChoice{
-				ref:          info.Provider + "/" + info.ProviderModelID,
-				surface:      info.Surface,
-				desc:         catalogDesc(info),
-				effortLevels: info.EffortLevels,
-			})
-		}
-
+		items, choices := gatherModelChoices(ctx, reg, cat)
 		if len(items) == 0 {
 			return noticeMsg{level: "error", text: "no models found: the ollama server did not answer and the catalog is empty"}
 		}
