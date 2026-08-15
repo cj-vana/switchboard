@@ -61,9 +61,9 @@ func TestLoginBuildsPickerFromLadderAndCatalog(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("/login produced no command")
 	}
-	msg, ok := cmd().(authItemsMsg)
+	msg, ok := cmd().(pickerMsg)
 	if !ok {
-		t.Fatalf("expected authItemsMsg, got %T", cmd())
+		t.Fatalf("expected pickerMsg, got %T", cmd())
 	}
 	if len(msg.items) == 0 {
 		t.Fatal("the picker has nothing to offer")
@@ -77,7 +77,7 @@ func TestLoginBuildsPickerFromLadderAndCatalog(t *testing.T) {
 
 	m.Update(msg)
 	if m.dlg == nil {
-		t.Fatal("authItemsMsg did not open the picker")
+		t.Fatal("pickerMsg did not open the picker")
 	}
 }
 

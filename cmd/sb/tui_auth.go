@@ -51,12 +51,13 @@ func credentialRefs(cfg *config.Config, cat *catalog.Catalog) []credential.Ref {
 	return append(refs, rest...)
 }
 
-// authItemsMsg carries the assembled picker after status resolution, which
-// runs off the UI goroutine because a configured helper is an exec away.
-type authItemsMsg struct {
+// pickerMsg carries an assembled picker back from a command that had to do
+// its gathering off the UI goroutine: credential standing is a helper exec
+// away, a model list is a server round trip away.
+type pickerMsg struct {
 	title  string
 	items  []pickerItem
-	action func(ref string) tea.Cmd
+	action func(id string) tea.Cmd
 }
 
 func cmdLogin(m *tuiModel, args string) tea.Cmd {
@@ -82,7 +83,7 @@ func cmdLogin(m *tuiModel, args string) tea.Cmd {
 				desc:  credentialStanding(ctx, cfg, ref),
 			})
 		}
-		return authItemsMsg{
+		return pickerMsg{
 			title: "store a credential",
 			items: items,
 			action: func(refStr string) tea.Cmd {
@@ -228,7 +229,7 @@ func cmdLogout(m *tuiModel, args string) tea.Cmd {
 		if len(items) == 0 {
 			return noticeMsg{text: "the " + store.Name() + " holds no switchboard credentials"}
 		}
-		return authItemsMsg{
+		return pickerMsg{
 			title: "remove a credential",
 			items: items,
 			action: func(refStr string) tea.Cmd {
