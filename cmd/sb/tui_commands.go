@@ -98,13 +98,18 @@ func cmdHelp(m *tuiModel, _ string) tea.Cmd {
 			strings.Join(ids, ", "), strings.Repeat(" ", 2))
 	}
 	b.WriteString(`
+input
+  @path            attach a file (tab completes)   !cmd    run a shell command yourself
+  \ then enter     continue the line               alt+enter / ctrl+j   newline
+
 keys
-  enter            send                  alt+enter / ctrl+j   newline
-  tab              complete a command    ↑↓                   history / suggestions
-  shift+tab        cycle permission mode ctrl+t              tier picker
+  enter            send                  tab                complete
+  ↑↓               history / choose      ctrl+r             search prompt history
+  shift+tab        cycle permission mode ctrl+t             tier picker
+  ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
   ctrl+o           expand the last route or tool entry
-  esc              interrupt the turn    ctrl+c ctrl+c       exit
-  pgup/pgdn        scroll                mouse wheel         scroll`)
+  esc              interrupt the turn    ctrl+c ctrl+c      exit
+  pgup/pgdn        scroll                mouse wheel        scroll`)
 	m.addInfo(b.String())
 	return nil
 }

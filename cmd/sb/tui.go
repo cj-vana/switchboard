@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -225,6 +226,9 @@ func runTUI(
 	if _, bound := cfg.Slots["advisor"]; bound {
 		initial = append(initial, startAdvisor(app))
 	}
+	// The tab's title answers "which terminal was that" for a user with six
+	// of them: this workspace, this tier.
+	initial = append(initial, tea.SetWindowTitle("sb · "+filepath.Base(workspace)+" · "+tier.ID))
 	m.initialCmd = tea.Batch(initial...)
 
 	_, err := p.Run()
