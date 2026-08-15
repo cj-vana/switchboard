@@ -387,12 +387,20 @@ func summaryLines(state session.State, cat *catalog.Catalog, target provider.Rou
 	}
 	lines := []string{line}
 
+	// The three zero-dollar meterings stay distinct here for the same reason
+	// they are distinct in the catalog (§4): a local model consumed nothing
+	// scarce, a plan target consumed quota, and reporting either as the other
+	// tells the user the wrong thing about what just ran out.
 	info, _, ok := cat.Lookup(target)
 	switch {
 	case !ok:
 		lines = append(lines, "  no catalog entry for this target, so nothing was priced")
-	case info.Free():
+	case info.Metering == catalog.Local:
 		lines = append(lines, "  runs locally, so there is nothing to bill")
+	case info.Metering == catalog.Plan:
+		lines = append(lines, "  billed as a plan; quota, not dollars, is what this consumed")
+	case info.Free():
+		lines = append(lines, "  no per-token cost recorded for this target")
 	default:
 		lines = append(lines, fmt.Sprintf("  estimated %s against catalog %s",
 			catalog.Money(state.CostMicroUSD), state.CatalogRevision))
