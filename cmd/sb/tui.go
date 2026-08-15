@@ -77,6 +77,7 @@ type updateCheckMsg struct {
 	latest string
 	err    error
 }
+type updateAppliedMsg struct{ version string }
 type copyMsg struct {
 	n   int
 	err error
@@ -201,7 +202,7 @@ func runTUI(
 
 	m.initialCmd = nil
 	if updateCheck {
-		m.initialCmd = checkForUpdate()
+		m.initialCmd = startupUpdate(cfg)
 	}
 
 	_, err := p.Run()
@@ -360,6 +361,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateAvail = msg.latest
 			m.addNotice("", "switchboard "+msg.latest+" is available; run /update to install it")
 		}
+		return m, nil
+
+	case updateAppliedMsg:
+		m.updateAvail = msg.version + " ready"
+		m.addNotice("", "updated to "+msg.version+" in the background; the next start runs it")
 		return m, nil
 
 	case copyMsg:

@@ -224,6 +224,14 @@ func TestNewerVersion(t *testing.T) {
 		{"v1.0.0", "v0.99.99", true},
 		{"v0.2.9-rc1", "v0.2.9", false},
 		{"garbage", "v0.2.9", false},
+		// The beta channel's whole path: beta.1 → beta.2 → release, each a
+		// real upgrade, none repeating.
+		{"v0.4.0-beta.2", "v0.4.0-beta.1", true},
+		{"v0.4.0", "v0.4.0-beta.2", true},
+		{"v0.4.0-beta.1", "v0.4.0-beta.1", false},
+		{"v0.4.0-beta.1", "v0.4.0", false},
+		{"v0.4.0-beta.10", "v0.4.0-beta.9", true},
+		{"v0.4.0-rc.1", "v0.4.0-beta.2", true},
 	}
 	for _, c := range cases {
 		if got := newerVersion(c.candidate, c.current); got != c.want {

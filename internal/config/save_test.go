@@ -106,7 +106,7 @@ func TestSaveWritesTiersInNumericOrder(t *testing.T) {
 }
 
 func TestSaveOmitsWhatWasNotSet(t *testing.T) {
-	c := &Config{Path: filepath.Join(t.TempDir(), FileName), UpdateCheck: true}
+	c := &Config{Path: filepath.Join(t.TempDir(), FileName), UpdateCheck: true, UpdateAuto: true}
 	if err := c.BindTier("t1", "light", "ollama/small", "", ""); err != nil {
 		t.Fatal(err)
 	}

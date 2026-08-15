@@ -21,6 +21,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/cj-vana/switchboard/internal/config"
 )
 
 // Update machinery (§18). The check names nothing but the running version and
@@ -57,15 +59,39 @@ func currentVersion() string {
 var updateHTTP = &http.Client{Timeout: 8 * time.Second}
 
 type ghRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
+	TagName    string `json:"tag_name"`
+	Prerelease bool   `json:"prerelease"`
+	Assets     []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
 }
 
-func fetchLatestRelease(ctx context.Context) (*ghRelease, error) {
-	url := "https://api.github.com/repos/" + updateRepo + "/releases/latest"
+// fetchLatest resolves the newest release the channel accepts. Stable asks
+// GitHub's /latest, which already excludes prereleases; beta has to list and
+// choose, because "latest including prereleases" is not an endpoint.
+func fetchLatest(ctx context.Context, channel string) (*ghRelease, error) {
+	if channel != "beta" {
+		return fetchJSON[ghRelease](ctx, "https://api.github.com/repos/"+updateRepo+"/releases/latest")
+	}
+	releases, err := fetchJSON[[]ghRelease](ctx, "https://api.github.com/repos/"+updateRepo+"/releases?per_page=20")
+	if err != nil {
+		return nil, err
+	}
+	var best *ghRelease
+	for i := range *releases {
+		rel := &(*releases)[i]
+		if best == nil || newerVersion(rel.TagName, best.TagName) {
+			best = rel
+		}
+	}
+	if best == nil {
+		return nil, errNoRelease
+	}
+	return best, nil
+}
+
+func fetchJSON[T any](ctx context.Context, url string) (*T, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -84,36 +110,47 @@ func fetchLatestRelease(ctx context.Context) (*ghRelease, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("release check answered %s", resp.Status)
 	}
-	var rel ghRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
+	var out T
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return nil, err
 	}
-	return &rel, nil
+	return &out, nil
 }
 
 var errNoRelease = errors.New("no releases published yet")
 
-// newerVersion reports whether candidate outranks current, comparing the
-// numeric core and ignoring prerelease suffixes.
+// newerVersion reports whether candidate outranks current under semver
+// precedence. Prerelease ordering matters because the beta channel moves
+// v0.4.0-beta.1 → v0.4.0-beta.2 → v0.4.0, and a comparison that strips the
+// suffix would refuse the second step and repeat the third forever.
 func newerVersion(candidate, current string) bool {
-	c, ok1 := semverCore(candidate)
-	u, ok2 := semverCore(current)
+	c, ok1 := parseSemver(candidate)
+	u, ok2 := parseSemver(current)
 	if !ok1 || !ok2 {
 		return false
 	}
-	for i := range c {
-		if c[i] != u[i] {
-			return c[i] > u[i]
+	for i := range c.core {
+		if c.core[i] != u.core[i] {
+			return c.core[i] > u.core[i]
 		}
 	}
-	return false
+	// Equal cores: a release outranks any prerelease of it.
+	if c.pre == "" || u.pre == "" {
+		return c.pre == "" && u.pre != ""
+	}
+	return comparePrerelease(c.pre, u.pre) > 0
 }
 
-func semverCore(v string) ([3]int, bool) {
+type semver struct {
+	core [3]int
+	pre  string
+}
+
+func parseSemver(v string) (semver, bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	v, _, _ = strings.Cut(v, "-")
+	var out semver
+	v, out.pre, _ = strings.Cut(v, "-")
 	parts := strings.Split(v, ".")
-	var out [3]int
 	if len(parts) > 3 {
 		return out, false
 	}
@@ -122,38 +159,88 @@ func semverCore(v string) ([3]int, bool) {
 		if err != nil {
 			return out, false
 		}
-		out[i] = n
+		out.core[i] = n
 	}
 	return out, true
 }
 
-// checkForUpdate runs once at TUI startup. Failure is silent: a tool that
-// nags about its update check failing is worse than one that skips it.
-func checkForUpdate() tea.Cmd {
+// comparePrerelease is semver §11.4: dot-separated identifiers, numeric ones
+// compared numerically and ranking below alphanumeric ones, fewer identifiers
+// ranking lower when all shared ones are equal.
+func comparePrerelease(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		an, aNum := strconv.Atoi(as[i])
+		bn, bNum := strconv.Atoi(bs[i])
+		switch {
+		case aNum == nil && bNum == nil:
+			if an != bn {
+				if an > bn {
+					return 1
+				}
+				return -1
+			}
+		case aNum == nil:
+			return -1
+		case bNum == nil:
+			return 1
+		default:
+			if c := strings.Compare(as[i], bs[i]); c != 0 {
+				return c
+			}
+		}
+	}
+	switch {
+	case len(as) > len(bs):
+		return 1
+	case len(as) < len(bs):
+		return -1
+	}
+	return 0
+}
+
+// startupUpdate runs once at TUI startup. With auto on it goes all the way:
+// download, verify, replace, and say so; the running process is untouched and
+// the next start runs the new binary. Failure is silent beyond falling back
+// to the notice, because a tool that nags about its own update check failing
+// is worse than one that skips it.
+func startupUpdate(cfg *config.Config) tea.Cmd {
+	channel, auto := cfg.UpdateChannel, cfg.UpdateAuto
 	return func() tea.Msg {
 		current := currentVersion()
 		if current == "" {
 			return updateCheckMsg{}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		rel, err := fetchLatestRelease(ctx)
-		if err != nil {
+		rel, err := fetchLatest(ctx, channel)
+		if err != nil || !newerVersion(rel.TagName, current) {
 			return updateCheckMsg{}
 		}
-		if newerVersion(rel.TagName, current) {
+		if !auto {
 			return updateCheckMsg{latest: rel.TagName}
 		}
-		return updateCheckMsg{}
+		if err := selfUpdate(ctx, rel); err != nil {
+			// Including installs a package manager owns: those fall back to
+			// the notice, which /update explains rather than fights.
+			return updateCheckMsg{latest: rel.TagName}
+		}
+		return updateAppliedMsg{version: rel.TagName}
 	}
 }
 
-func cmdUpdate(m *tuiModel, _ string) tea.Cmd {
+const updateUsage = "usage: /update, /update channel [stable|beta], or /update auto [on|off]"
+
+func cmdUpdate(m *tuiModel, args string) tea.Cmd {
+	if args != "" {
+		return updateSettings(m, args)
+	}
+	channel := m.app.config.UpdateChannel
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 
-		rel, err := fetchLatestRelease(ctx)
+		rel, err := fetchLatest(ctx, channel)
 		if errors.Is(err, errNoRelease) {
 			return noticeMsg{text: "no releases published yet; nothing to update to"}
 		}
@@ -167,6 +254,52 @@ func cmdUpdate(m *tuiModel, _ string) tea.Cmd {
 			return noticeMsg{level: "error", text: "update failed: " + err.Error()}
 		}
 		return noticeMsg{text: "updated to " + rel.TagName + "; restart sb to run it"}
+	}
+}
+
+// updateSettings is /update channel and /update auto: the update posture is
+// configuration, and configuration is set from inside the TUI.
+func updateSettings(m *tuiModel, args string) tea.Cmd {
+	cfg := m.app.config
+	what, value, _ := strings.Cut(strings.TrimSpace(args), " ")
+	value = strings.TrimSpace(value)
+	switch what {
+	case "channel":
+		switch value {
+		case "":
+			ch := cfg.UpdateChannel
+			if ch == "" {
+				ch = "stable"
+			}
+			return noticeCmd("", "update channel is "+ch)
+		case "stable", "beta":
+			cfg.UpdateChannel = value
+			if err := cfg.Save(); err != nil {
+				return noticeCmd("error", "saving the channel failed: "+err.Error())
+			}
+			return noticeCmd("", "update channel is now "+value)
+		default:
+			return noticeCmd("error", updateUsage)
+		}
+	case "auto":
+		switch value {
+		case "":
+			state := "on"
+			if !cfg.UpdateAuto {
+				state = "off"
+			}
+			return noticeCmd("", "auto-update is "+state)
+		case "on", "off":
+			cfg.UpdateAuto = value == "on"
+			if err := cfg.Save(); err != nil {
+				return noticeCmd("error", "saving the setting failed: "+err.Error())
+			}
+			return noticeCmd("", "auto-update is now "+value)
+		default:
+			return noticeCmd("error", updateUsage)
+		}
+	default:
+		return noticeCmd("error", updateUsage)
 	}
 }
 
@@ -246,8 +379,34 @@ func selfUpdate(ctx context.Context, rel *ghRelease) error {
 		return err
 	}
 	// Rename is atomic on the same filesystem, which is why the temp file lives
-	// beside the binary rather than in /tmp.
+	// beside the binary rather than in /tmp. Windows refuses to rename over a
+	// running executable, so there the old binary steps aside first and the
+	// leftover .old is swept on the next start.
+	if runtime.GOOS == "windows" {
+		old := exe + ".old"
+		os.Remove(old)
+		if err := os.Rename(exe, old); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, exe); err != nil {
+			os.Rename(old, exe)
+			return err
+		}
+		return nil
+	}
 	return os.Rename(tmpPath, exe)
+}
+
+// sweepOldBinary removes the .old a Windows self-update leaves behind. Called
+// at startup; every error is ignorable because the file either is not there,
+// is still running, or will be swept next time.
+func sweepOldBinary() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	if exe, err := os.Executable(); err == nil {
+		os.Remove(exe + ".old")
+	}
 }
 
 // packageManagerFor recognizes install layouts that belong to a package

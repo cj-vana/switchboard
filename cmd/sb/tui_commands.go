@@ -44,7 +44,7 @@ func commands() []commandItem {
 		{name: "login", usage: "[provider[/surface]]", desc: "store an API key in the OS keychain", busySafe: true, run: cmdLogin},
 		{name: "logout", usage: "[provider[/surface]]", desc: "remove a stored API key", busySafe: true, run: cmdLogout},
 		{name: "theme", usage: "[dark|light]", desc: "switch the color theme", run: cmdTheme},
-		{name: "update", desc: "check for and install a newer switchboard", busySafe: true, run: cmdUpdate},
+		{name: "update", usage: "[channel|auto …]", desc: "install a newer switchboard, or set the update posture", busySafe: true, run: cmdUpdate},
 	}
 }
 

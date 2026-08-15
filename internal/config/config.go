@@ -64,6 +64,16 @@ type Config struct {
 	// SB_NO_UPDATE_CHECK=1 turns it off.
 	UpdateCheck bool
 
+	// UpdateAuto installs a newer release in the background when the startup
+	// check finds one, leaving the running process alone; the new binary runs
+	// on the next start. Default on. Installs owned by a package manager are
+	// detected and never touched regardless of this setting (§18).
+	UpdateAuto bool
+
+	// UpdateChannel is "stable" (release tags only, the default) or "beta"
+	// (prereleases count too).
+	UpdateChannel string
+
 	// Theme is the TUI color theme, persisted so /theme survives a restart.
 	// Empty means the built-in default; the TUI owns what names are valid.
 	Theme string
@@ -123,10 +133,12 @@ type uiEntry struct {
 	Theme string `toml:"theme"`
 }
 
-// updatesEntry holds the release-check toggle. It is a *bool so "absent" and
-// "explicitly off" are different facts: the default is on.
+// updatesEntry holds the update settings. Booleans are *bool so "absent" and
+// "explicitly off" are different facts: the defaults are on.
 type updatesEntry struct {
-	Check *bool `toml:"check"`
+	Check   *bool  `toml:"check,omitempty"`
+	Auto    *bool  `toml:"auto,omitempty"`
+	Channel string `toml:"channel,omitempty"`
 }
 
 // providerEntry redirects a provider at a different endpoint. A gateway, an
@@ -182,6 +194,7 @@ func Load() (*Config, error) {
 			Auth:        map[string]credential.Settings{},
 			Providers:   map[string]ProviderSettings{},
 			UpdateCheck: true,
+			UpdateAuto:  true,
 		}, nil
 	}
 	return LoadFile(path)
@@ -193,6 +206,7 @@ func LoadFile(path string) (*Config, error) {
 		Auth:        map[string]credential.Settings{},
 		Providers:   map[string]ProviderSettings{},
 		UpdateCheck: true,
+		UpdateAuto:  true,
 		Path:        path,
 	}
 
@@ -242,6 +256,17 @@ func LoadFile(path string) (*Config, error) {
 	}
 	if f.Updates.Check != nil {
 		c.UpdateCheck = *f.Updates.Check
+	}
+	if f.Updates.Auto != nil {
+		c.UpdateAuto = *f.Updates.Auto
+	}
+	switch f.Updates.Channel {
+	case "", "stable", "beta":
+		c.UpdateChannel = f.Updates.Channel
+	default:
+		// The §16/§18 posture on configuration mistakes: a value that is
+		// silently ignored is a setting the user believes is in effect.
+		return nil, fmt.Errorf("%s: updates.channel %q is not stable or beta", path, f.Updates.Channel)
 	}
 	c.Theme = f.UI.Theme
 	if err := c.buildTiers(f.Tiers, path); err != nil {

@@ -122,13 +122,24 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
-	// The check defaults to on, so only "off" is worth a line. Writing
-	// "check = true" would suggest the value had been chosen.
+	// Defaults are absent, so only a chosen value is worth a line: writing
+	// "check = true" would suggest it had been decided.
+	var updates updatesEntry
 	if !c.UpdateCheck {
 		off := false
+		updates.Check = &off
+	}
+	if !c.UpdateAuto {
+		off := false
+		updates.Auto = &off
+	}
+	if c.UpdateChannel != "" && c.UpdateChannel != "stable" {
+		updates.Channel = c.UpdateChannel
+	}
+	if updates.Check != nil || updates.Auto != nil || updates.Channel != "" {
 		if err := encode(&buf, struct {
 			Updates updatesEntry `toml:"updates"`
-		}{updatesEntry{Check: &off}}); err != nil {
+		}{updates}); err != nil {
 			return nil, err
 		}
 		buf.WriteString("\n")

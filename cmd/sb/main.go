@@ -28,6 +28,7 @@ import (
 )
 
 func main() {
+	sweepOldBinary()
 	if err := run(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			os.Exit(130)
