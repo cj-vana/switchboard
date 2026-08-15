@@ -28,21 +28,73 @@ func cmdCompact(m *tuiModel, args string) tea.Cmd {
 	if cmd, handled := compactSettings(m, args); handled {
 		return cmd
 	}
+	return compactCmd(m, strings.TrimSpace(args), false)
+}
 
+// summarizerFor resolves which model writes the summary. The slots table
+// wins — a summarizer slot is the statement that compaction quality should
+// not depend on which rung happens to be active, and a session riding a
+// small local model is exactly when that matters. Absent a binding, the
+// current tier does its own summarizing, which is what it always did.
+func summarizerFor(app *tuiApp) (config.Tier, bool, error) {
+	ref, bound := app.config.Slots["summarizer"]
+	if !bound {
+		return app.tier, false, nil
+	}
+	if t, found := app.config.Tier(ref); found {
+		return t, true, nil
+	}
+	target, err := config.ParseTarget(ref, "", "")
+	if err != nil {
+		return config.Tier{}, true, fmt.Errorf("the [slots] summarizer entry does not parse: %w", err)
+	}
+	return config.Tier{ID: "-summarizer", Label: "summarizer", Target: target}, true, nil
+}
+
+// compactCmd is the compaction itself; auto marks the threshold-triggered
+// path, whose failure handling differs in one place: a summarizer slot that
+// cannot be reached fails a manual /compact outright, but the automatic path
+// falls back to the current tier and says so, because it fires precisely
+// when the session is about to hit the wall and stopping there would deliver
+// the failure compaction exists to prevent.
+func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 	state := m.app.loop.Session.State()
 	if len(state.Messages) == 0 {
 		return noticeCmd("", "nothing to compact yet")
 	}
 
-	m.addInfo("compacting: summarizing " + itoa(len(state.Messages)) + " messages on " + string(m.app.tier.Target.ID()) + "…")
+	summarizer, fromSlot, err := summarizerFor(m.app)
+	if err != nil {
+		return noticeCmd("error", err.Error())
+	}
+
+	line := "compacting: summarizing " + itoa(len(state.Messages)) + " messages on " + string(summarizer.Target.ID())
+	if fromSlot {
+		line += " (the summarizer slot)"
+	}
+	m.addInfo(line + "…")
 
 	app := m.app
-	instructions := strings.TrimSpace(args)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		summary, err := summarize(ctx, app.loop.Provider, app.tier.Target, state.Messages, instructions)
+		client, target := app.loop.Provider, app.tier.Target
+		if fromSlot {
+			probed, slotClient, perr := app.providers.probeTier(ctx, summarizer)
+			switch {
+			case perr == nil:
+				client, target = slotClient, probed.Target
+			case auto:
+				app.p.Send(noticeMsg{level: "warn", text: "summarizer slot " + string(summarizer.Target.ID()) +
+					" is unreachable (" + perr.Error() + "); compacting with the current tier instead"})
+			default:
+				return noticeMsg{level: "error", text: "summarizer slot " + string(summarizer.Target.ID()) +
+					" is unreachable, session unchanged: " + perr.Error()}
+			}
+		}
+
+		summary, err := summarize(ctx, client, target, state.Messages, instructions)
 		if err != nil {
 			return noticeMsg{level: "error", text: "compact failed, session unchanged: " + err.Error()}
 		}

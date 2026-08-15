@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 func TestShouldAutoCompactTriggersAtTheThreshold(t *testing.T) {
@@ -78,5 +79,60 @@ func TestCompactSettingsPersist(t *testing.T) {
 	// Guidance is not a setting: it flows through to the summarizer.
 	if _, handled := compactSettings(m, "focus on the migration"); handled {
 		t.Error("guidance text was swallowed by the settings parser")
+	}
+}
+
+func TestSummarizerSlotResolution(t *testing.T) {
+	m := testModel(t)
+	app := m.app
+
+	// No slot: the current tier does its own summarizing.
+	tier, fromSlot, err := summarizerFor(app)
+	if err != nil || fromSlot || tier.ID != app.tier.ID {
+		t.Fatalf("no slot should mean the current tier: %+v fromSlot=%v err=%v", tier, fromSlot, err)
+	}
+
+	// A tier alias resolves through the ladder.
+	app.config.Slots = map[string]string{"summarizer": "t1"}
+	tier, fromSlot, err = summarizerFor(app)
+	if err != nil || !fromSlot || tier.ID != "t1" {
+		t.Fatalf("alias t1 did not resolve: %+v fromSlot=%v err=%v", tier, fromSlot, err)
+	}
+
+	// A direct reference builds an ad-hoc tier.
+	app.config.Slots["summarizer"] = "kimi/kimi-for-coding-highspeed"
+	tier, fromSlot, err = summarizerFor(app)
+	if err != nil || !fromSlot || tier.Target.Provider != "kimi" || tier.Target.ModelID != "kimi-for-coding-highspeed" {
+		t.Fatalf("direct ref did not resolve: %+v err=%v", tier, err)
+	}
+
+	// A reference that would not load must not summarize either.
+	app.config.Slots["summarizer"] = "not-a-target"
+	if _, _, err = summarizerFor(app); err == nil {
+		t.Fatal("an unparseable slot should be an error, not a silent fallback")
+	}
+}
+
+// A manual /compact against an unreachable summarizer slot refuses and leaves
+// the session alone; the user asked for the slot's quality, not whatever is
+// nearest.
+func TestManualCompactRefusesUnreachableSummarizer(t *testing.T) {
+	m := testModel(t)
+	m.app.providers = newProviders("http://127.0.0.1:1", m.app.config)
+	m.app.config.Slots = map[string]string{"summarizer": "ollama/absent-model"}
+	if err := m.app.loop.Session.AppendMessage(provider.UserText("hello")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := compactCmd(m, "", false)
+	if cmd == nil {
+		t.Fatal("compact produced no command")
+	}
+	msg, ok := cmd().(noticeMsg)
+	if !ok || msg.level != "error" {
+		t.Fatalf("expected an error notice, got %#v", msg)
+	}
+	if !strings.Contains(msg.text, "session unchanged") {
+		t.Fatalf("the refusal must say the session is intact: %q", msg.text)
 	}
 }

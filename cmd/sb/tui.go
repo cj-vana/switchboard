@@ -764,7 +764,7 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		pct := m.callTokens * 100 / m.ctxWindow
 		m.addNotice("", fmt.Sprintf("context at %d%% of %s tokens; compacting automatically (/compact auto off disables this)",
 			pct, compact(m.ctxWindow)))
-		return cmdCompact(m, "")
+		return compactCmd(m, "", true)
 	}
 
 	if len(m.queue) > 0 {
