@@ -65,6 +65,13 @@ func run() error {
 		}
 		return runAuth(context.Background(), os.Args[2:], cfg)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return runUpdateCLI(context.Background(), cfg)
+	}
 
 	var opts options
 	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")

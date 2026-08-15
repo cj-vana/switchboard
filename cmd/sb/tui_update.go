@@ -231,6 +231,31 @@ func startupUpdate(cfg *config.Config) tea.Cmd {
 
 const updateUsage = "usage: /update, /update channel [stable|beta], or /update auto [on|off]"
 
+// runUpdateCLI is `sb update`: the same fetch-verify-replace as /update, on
+// stdout, so scripts and CI can move a binary forward without a terminal.
+func runUpdateCLI(ctx context.Context, cfg *config.Config) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
+	rel, err := fetchLatest(ctx, cfg.UpdateChannel)
+	if errors.Is(err, errNoRelease) {
+		fmt.Println("no releases published yet; nothing to update to")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("update check failed: %w", err)
+	}
+	if current := currentVersion(); current != "" && !newerVersion(rel.TagName, current) {
+		fmt.Println("already on the latest (" + current + ")")
+		return nil
+	}
+	if err := selfUpdate(ctx, rel); err != nil {
+		return fmt.Errorf("update failed: %w", err)
+	}
+	fmt.Println("updated to " + rel.TagName)
+	return nil
+}
+
 func cmdUpdate(m *tuiModel, args string) tea.Cmd {
 	if args != "" {
 		return updateSettings(m, args)
