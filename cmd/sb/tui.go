@@ -132,6 +132,11 @@ type tuiModel struct {
 	// scrolls; the question "how did I end up on t3" should not.
 	routeLog []string
 
+	// Reverse history search (tui_history.go).
+	histSearch bool
+	histQuery  string
+	histMatch  int
+
 	dlg  dialog
 	full *diffView
 
@@ -276,7 +281,9 @@ func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiMo
 		spin:     spinner.New(spinner.WithSpinner(spinner.Dot)),
 		tierLine: app.tierLine(),
 		mode:     app.loop.Perms.Mode(),
+		history:  loadHistory(app.workspace),
 	}
+	m.histIdx = len(m.history)
 	m.tr = newTranscript(100, th, md)
 	m.refreshCost(app.loop.Session.State())
 	m.refreshCtxWindow()
@@ -442,10 +449,17 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		}
 		return cmd
 	}
+	if m.histSearch {
+		m.historySearchKey(msg)
+		return nil
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
 		return m.interrupt()
+	case "ctrl+r":
+		m.startHistorySearch()
+		return nil
 	case "esc":
 		if m.busy {
 			return m.interrupt()
@@ -600,7 +614,12 @@ func (m *tuiModel) submit() tea.Cmd {
 	m.growInput()
 	m.sugClosed = false
 	m.sugSel = 0
-	m.history = append(m.history, v)
+	// Consecutive duplicates collapse: resubmitting "go on" five times is one
+	// history entry, not five up-arrow presses of the same thing.
+	if len(m.history) == 0 || m.history[len(m.history)-1] != v {
+		m.history = append(m.history, v)
+		appendHistory(m.app.workspace, v)
+	}
 	m.histIdx = len(m.history)
 	m.quitArmed = false
 
@@ -940,9 +959,12 @@ func (m *tuiModel) inputZoneView() string {
 		return m.dlg.view(m.width, m.th)
 	}
 	var parts []string
-	if sug := m.suggestionsView(); sug != "" {
-		parts = append(parts, sug)
-	} else if m.mentionsVisible() {
+	switch {
+	case m.histSearch:
+		parts = append(parts, m.historySearchView())
+	case m.suggestionsView() != "":
+		parts = append(parts, m.suggestionsView())
+	case m.mentionsVisible():
 		parts = append(parts, m.mentionsView())
 	}
 	parts = append(parts, m.ta.View())
