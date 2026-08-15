@@ -28,15 +28,13 @@ and written down in [docs/estimator.md](docs/estimator.md): it undercounts by
 Cost reconciliation was unexercised at the time, because every target this
 build could then reach was free.
 
-Phase 2a is underway. The Anthropic adapter is the target the cache work needs:
-it is the first one here that can render a cache plan, and the first that
-reports cache writes and reads as separate observations rather than not at all.
-It is also the first whose token count is exact, because that API will answer
-the question rather than leaving it to be estimated.
-
 Phase 2a is built: context zones, the breakpoint manager, the cache tracker,
-the cost model, and the heuristic router with a sticky primary. `sb` now picks a
-tier and tells you why, and a tier you name still wins.
+the cost model, and the heuristic router with a sticky primary. `sb` picks a
+tier and tells you why, a tier you name still wins, and mid-task the
+escalation policy moves the primary on the §8.3 signals — repeated tool
+calls, error spikes, new failure signatures, hedging — and says so inline.
+`/why` explains any of it on demand, with this session's tokens priced on
+every other rung.
 
 **The routing is rules, not a model, and that is the design's own sequencing.**
 §8.2 defines every classifier dimension by a measurement against an eval corpus
@@ -61,10 +59,13 @@ not routing, and nothing short of running the corpus would have shown it.
 The cost half of the gate is still unmeasured: both rungs are plan-metered, so
 every arm bills zero and the cost condition cannot separate them.
 
-Next: derive the ladder empirically from the data now in hand, then MCP, hooks,
-and telemetry. The Bubble Tea interface is built: phase 3's TUI is the default
-surface, with the REPL behind `-repl`. **The routing this is named for
-does not exist yet** - tiers are selected by hand.
+Next: finish deriving the ladder empirically from measured fronts — pinned
+corpus runs across every reachable target, including the ChatGPT-plan surface
+— then MCP, hooks, and telemetry. The Bubble Tea TUI is the default surface,
+with the REPL behind `-repl`, and everything the tool needs is settable from
+inside it: first run walks through binding a tier, `/models` browses and
+binds, `/login` stores keys, and the config file is written by the tool
+rather than edited by hand.
 
 ## Running it
 
@@ -84,10 +85,18 @@ ollama pull qwen3.5:9b-mlx
 ```
 
 The model has to support tool calling or it cannot drive the loop; `sb` checks
-and says so rather than failing halfway through a turn. Run `sb` with no
-`-model` to see what your server has.
+and says so rather than failing halfway through a turn.
 
-Bind a tier ladder in `~/.switchboard/config.toml`:
+On a machine with nothing configured, running `sb` in a terminal walks
+through setup: it finds what the local Ollama server has pulled and what the
+catalog knows, takes an API key masked if the model you pick needs one, binds
+t1, and starts. Nothing requires editing a file; `/models` grows the ladder
+later, `/login` and `/logout` manage keys, `/theme`, `/update channel`, and
+`/update auto` persist themselves, and the config file carries a header
+saying the tool rewrites it.
+
+The file it writes is ordinary TOML at `~/.switchboard/config.toml`, and
+hand-editing still works:
 
 ```toml
 [tiers.t1]
@@ -269,31 +278,72 @@ risk is yours and it is not hypothetical.
 A client you register yourself always wins. Anything under
 `[auth.openai.oauth]` overrides the bundled one.
 
+## The TUI
+
 Inside a session the default surface is the TUI: streaming markdown, a
 virtualized transcript, an always-on status line with the tier, target,
 permission mode, session cost, and a context-window gauge, and interactive
 permission prompts. Router decisions render inline, collapsed to one line;
 ctrl-o expands the last route or tool entry.
 
-Commands: `/help` lists them all. `/t1`, `/t2`, … switch tier, and
-`/t2 <prompt>` runs one prompt on a tier and returns. `/tiers` shows the
-ladder, `/mode`, `/cost`, `/session`, `/sandbox` do what they say, `/resume`
-picks up an earlier session, `/clear` starts fresh, `/diff` reviews
-uncommitted changes, `/copy` puts the last response on the clipboard,
-`/theme` switches dark and light, `/update` self-updates, `/exit` leaves.
-Typing `/` opens autocomplete. Shift-tab cycles the permission mode, ctrl-t
-opens the tier picker, esc interrupts the turn, ctrl-c twice exits, and
-sending a message mid-turn queues it. The line-oriented REPL remains behind
-`-repl` for scripting and gates; `-p` keeps the plain renderer either way.
+The input layer speaks the grammar the neighboring tools converged on.
+`@path` completes file names and attaches the file's contents to the prompt.
+`!cmd` runs a shell command as you, immediately, with no model in the loop;
+the output lands in the transcript and is carried into the next turn so the
+model sees what you saw. A trailing `\` continues the line, ctrl+j and
+alt+enter insert newlines, ctrl+g opens the prompt in `$EDITOR`, and prompt
+history persists per workspace — up-arrow reaches last week, ctrl+r searches
+it. Messages sent mid-turn queue and run when the turn finishes.
 
-The TUI checks for a newer release once at startup and says so in the
-transcript when one exists. The check names nothing but the running version,
-and `[updates] check = false` in the config or `SB_NO_UPDATE_CHECK=1` turns it
-off. `/update` downloads the build for this platform, verifies it against the
-release's checksums, and replaces the binary atomically; installs managed by a
-package manager defer to it. Signed update metadata is §18's bar and arrives
-with the release pipeline — until then the checksum proves integrity, not
-authenticity.
+Commands: `/help` lists them all; typing `/` opens autocomplete and ctrl+p
+opens all of them in a picker. The distinctive ones:
+
+- `/why` — how the current tier was chosen, what was ruled out, every move
+  this session made, and this session's tokens priced on every other rung.
+  The router explains itself; no neighboring tool has an equivalent because
+  no neighboring tool makes the choice.
+- `/advisor` — a second model that watches the session through the loop's own
+  observer and speaks up when the evidence says the worker is stuck: repeated
+  calls, error spikes, new failure signatures, hedging. Advice renders in the
+  transcript and is injected into the working model's turn at the next safe
+  seam. Advice, never edits; bounded per turn. `[slots] advisor = "t2"` turns
+  it on for every session.
+- `/models`, `/login`, `/logout` — discovery, binding, and credentials
+  without leaving the TUI.
+- `/compact [guidance]` — summarize the session into a fresh context using
+  the current target; the old log stays on disk untouched. `/context` shows
+  the window filling before it is fatal.
+- `/t1`, `/t2`, … switch tier; `/t2 <prompt>` runs one prompt there and
+  returns. `/tiers` shows the ladder.
+- `/init` writes an AGENTS.md for the repository; the system prompt reads it
+  (or a CLAUDE.md) on every session.
+- `/resume`, `/clear`, `/export`, `/diff`, `/copy`, `/cost`, `/session`,
+  `/sandbox`, `/mode`, `/theme`, `/exit` do what they say.
+
+Custom commands are markdown files: `.switchboard/commands/review.md` becomes
+`/review`, with `$ARGUMENTS`, `$1`..`$9`, backtick-quoted `` !`cmd` `` shell
+injection at expansion time, and `@file` references. Files written for other
+tools port by copying them; the project directory wins over
+`~/.switchboard/commands` on a clash.
+
+The line-oriented REPL remains behind `-repl` for scripting and gates; `-p`
+keeps the plain renderer either way.
+
+## Updates
+
+The TUI checks for a newer release once at startup, and with auto-update on
+(the default) installs it in the background: download, verify against the
+release checksums, replace atomically. The running process is untouched; the
+next start runs the new binary. Installs managed by a package manager are
+detected and never touched. `[updates] auto = false` or `/update auto off`
+reduces this to a notice; `[updates] check = false` or `SB_NO_UPDATE_CHECK=1`
+silences even that. The check names nothing but the running version.
+
+`/update channel beta` follows prereleases, with real semver precedence so
+`beta.2` follows `beta.1` and the release graduates past both. `sb update`
+is the same fetch-verify-replace for scripts and CI. Signed update metadata
+is §18's bar and arrives with the release pipeline — until then the checksum
+proves integrity, not authenticity.
 
 ## What the sandbox does and does not do
 
@@ -351,4 +401,4 @@ and no code path grants automatic execution without verified containment.
 
 ## License
 
-Open source; license not yet chosen.
+MIT. See [LICENSE](LICENSE).
