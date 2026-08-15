@@ -395,6 +395,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.onShellDone(msg)
 		return m, nil
 
+	case editorDoneMsg:
+		m.onEditorDone(msg)
+		return m, nil
+
 	case disarmQuitMsg:
 		m.quitArmed = false
 		return m, nil
@@ -436,6 +440,10 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		return m.cycleMode()
 	case "ctrl+t":
 		return m.openTierPicker()
+	case "ctrl+p":
+		return m.openPalette()
+	case "ctrl+g":
+		return m.openEditor()
 	case "ctrl+o":
 		if i := m.tr.lastExpandable(); i >= 0 {
 			e := m.tr.entries[i]
@@ -499,6 +507,14 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 
 	switch msg.String() {
 	case "enter":
+		// A trailing backslash is a line continuation, the one multiline
+		// route that works in every terminal ever made.
+		if v := m.ta.Value(); strings.HasSuffix(v, "\\") {
+			m.ta.SetValue(strings.TrimSuffix(v, "\\") + "\n")
+			m.ta.CursorEnd()
+			m.growInput()
+			return nil
+		}
 		return m.submit()
 	case "up":
 		if !strings.Contains(m.ta.Value(), "\n") {

@@ -208,7 +208,7 @@ func TestMatchingCommandsIncludesTiers(t *testing.T) {
 	if !found {
 		t.Fatal("tier entries missing from suggestions")
 	}
-	matches = matchingCommands("ex", cfg)
+	matches = matchingCommands("exi", cfg)
 	if len(matches) != 1 || matches[0].name != "exit" {
 		t.Fatalf("prefix matching is off: %+v", matches)
 	}
