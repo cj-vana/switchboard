@@ -121,6 +121,13 @@ type tuiModel struct {
 	sugSel    int
 	sugClosed bool
 
+	// pendingShell holds ! command transcripts awaiting the next turn, and
+	// the mention fields back @path completion (tui_mentions.go).
+	pendingShell  []string
+	mentionSel    int
+	mentionList   []string
+	mentionListAt time.Time
+
 	dlg  dialog
 	full *diffView
 
@@ -384,6 +391,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.full = &diffView{lines: msg.lines}
 		return m, nil
 
+	case shellDoneMsg:
+		m.onShellDone(msg)
+		return m, nil
+
 	case disarmQuitMsg:
 		m.quitArmed = false
 		return m, nil
@@ -469,6 +480,23 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 
+	if m.mentionsVisible() {
+		switch msg.String() {
+		case "up":
+			m.mentionSel--
+			if m.mentionSel < 0 {
+				m.mentionSel = len(m.mentionMatches()) - 1
+			}
+			return nil
+		case "down":
+			m.mentionSel = (m.mentionSel + 1) % len(m.mentionMatches())
+			return nil
+		case "tab", "enter":
+			m.acceptMention()
+			return nil
+		}
+	}
+
 	switch msg.String() {
 	case "enter":
 		return m.submit()
@@ -541,6 +569,9 @@ func (m *tuiModel) submit() tea.Cmd {
 	m.histIdx = len(m.history)
 	m.quitArmed = false
 
+	if strings.HasPrefix(v, "!") {
+		return m.runShell(strings.TrimSpace(strings.TrimPrefix(v, "!")))
+	}
 	if strings.HasPrefix(v, "/") {
 		return m.runSlash(v)
 	}
@@ -569,7 +600,11 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 		}
 	}
 
+	// The transcript shows what was typed; the model gets that plus what the
+	// @mentions attach and what recent ! commands produced. Expansion happens
+	// here, not at submit, so a queued prompt reads its files when it runs.
 	m.addUser(prompt)
+	prompt = m.shellContext(m.expandMentions(prompt))
 	m.beginTurn(prompt)
 	go m.runTurn(m.turnCtx, prompt)
 	return m.spin.Tick
@@ -868,6 +903,8 @@ func (m *tuiModel) inputZoneView() string {
 	var parts []string
 	if sug := m.suggestionsView(); sug != "" {
 		parts = append(parts, sug)
+	} else if m.mentionsVisible() {
+		parts = append(parts, m.mentionsView())
 	}
 	parts = append(parts, m.ta.View())
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
