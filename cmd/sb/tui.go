@@ -128,6 +128,10 @@ type tuiModel struct {
 	mentionList   []string
 	mentionListAt time.Time
 
+	// routeLog records every tier move this session, for /why. The transcript
+	// scrolls; the question "how did I end up on t3" should not.
+	routeLog []string
+
 	dlg  dialog
 	full *diffView
 
@@ -350,6 +354,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tierNowMsg:
 		m.addInfo(msg.line)
+		m.routeLog = append(m.routeLog, msg.line)
 		m.tierLine = m.app.tierLine()
 		m.refreshCtxWindow()
 		return m, nil
@@ -729,6 +734,7 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 	m.refreshCtxWindow()
 	if !msg.silent {
 		m.addInfo("now on " + m.tierLine)
+		m.routeLog = append(m.routeLog, "you switched to "+msg.tier.ID)
 		m.cacheSwitchNote(msg.tier)
 		return nil
 	}
