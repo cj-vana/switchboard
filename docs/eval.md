@@ -72,6 +72,47 @@ The cache comparison remains the cheapest experiment that tests the thesis §7 i
 named for: one model, one corpus, and the only difference is whether §6 places
 markers. At the observed rate that is roughly $14.
 
+## Addendum, 2026-08-15: the ladder, derived
+
+§8.6's procedure has now been run for a fourth target: `gpt-5.6-sol` on the
+ChatGPT-plan surface, pinned across the same twenty tasks at three seeds
+(journal: `pin-gpt-5.6-sol-2026-08-15.jsonl`, two workers after six proved to
+throttle the plan into deadline failures). The front over every journal in
+hand:
+
+| target | solved | median latency | position |
+|---|---|---|---|
+| `kimi/coding/kimi-for-coding-highspeed` | 66/68 (97%) | 2m36s | **the front** |
+| `openai/subscription/gpt-5.6-sol` | 52/60 (87%) | 2m49s | dominated |
+| `kimi/coding/k3-256k` | 38/65 (58%) | 5m3s | dominated |
+| `anthropic/first-party/claude-haiku-4-5` | 48/120 (40%)* | 42s | dominated |
+
+\* pooled across both cache-comparison arms, one of which was cut short when
+the credit ran out; the completed no-markers arm alone measured 48/60 (80%).
+Either figure is dominated.
+
+One rung survives domination. On this corpus there is no ladder to climb:
+the cheapest plan-metered rung solves more than the reputed flagships and is
+faster than all but haiku, which solves half as much.
+
+**What that establishes, and what it cannot.** This corpus is thirty tier-1
+tasks against this repository, and the front says the strongest cheap target
+saturates it at 97%. A corpus the bottom rung nearly aces cannot rank the
+rungs above it — there is no headroom in which a stronger model could show
+value. So the derivation settles the bottom of the ladder empirically
+(`kimi-for-coding-highspeed`, and `k3-256k` off the ladder entirely, on every
+journal since the first run), and says nothing about ordering above it.
+Deriving the upper rungs needs a corpus hard enough that the bottom rung
+fails routinely: tier-2 tasks are the recorded next step.
+
+**On a learned router.** §8.2's null hypothesis stands unchallenged: with
+one rung on the measured front, there is no routing decision for a model to
+learn, and 60-odd attempts per target is not training data past a logistic
+regression anyway. The gate in §19.2 — a learned router must beat the
+heuristic after runtime and distribution costs — cannot even be attempted
+until a harder corpus produces a front with at least two rungs. Training
+now would be fitting weights to a decision that does not exist.
+
 ## Reproducing
 
 ```
