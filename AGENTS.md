@@ -13,6 +13,12 @@ authoritative and this file only says how to work inside it.
     internal/permission/ modes and rules
     internal/tools/      the core tool suite
     internal/agent/      the loop
+    internal/advisor/    §9.2 run continuously: a second model that watches
+                         the loop's observer stream and injects advice at
+                         round boundaries; advice, never edits
+    internal/config/     the ladder and settings; the TUI owns the file and
+                         Save regenerates it, so nothing may depend on
+                         comments in config.toml surviving
 
 ## Constraints that are not negotiable
 
