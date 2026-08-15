@@ -211,10 +211,16 @@ func runTUI(
 		m.replayHistory(sess.State())
 	}
 
-	m.initialCmd = nil
+	var initial []tea.Cmd
 	if updateCheck {
-		m.initialCmd = startupUpdate(cfg)
+		initial = append(initial, startupUpdate(cfg))
 	}
+	// An advisor slot in the config is the standing request to watch every
+	// session; /advisor off remains the per-session override.
+	if _, bound := cfg.Slots["advisor"]; bound {
+		initial = append(initial, startAdvisor(app))
+	}
+	m.initialCmd = tea.Batch(initial...)
 
 	_, err := p.Run()
 	return err
@@ -402,6 +408,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editorDoneMsg:
 		m.onEditorDone(msg)
+		return m, nil
+
+	case adviceMsg:
+		m.addNotice("advisor", msg.text)
+		return m, nil
+
+	case advisorReadyMsg:
+		m.onAdvisorReady(msg)
 		return m, nil
 
 	case disarmQuitMsg:
@@ -625,7 +639,7 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 	// @mentions attach and what recent ! commands produced. Expansion happens
 	// here, not at submit, so a queued prompt reads its files when it runs.
 	m.addUser(prompt)
-	prompt = m.shellContext(m.expandMentions(prompt))
+	prompt = m.adviceContext(m.shellContext(m.expandMentions(prompt)))
 	m.beginTurn(prompt)
 	go m.runTurn(m.turnCtx, prompt)
 	return m.spin.Tick
@@ -670,6 +684,9 @@ func (m *tuiModel) beginTurn(prompt string) {
 // as messages; the session stays the only thing it writes.
 func (m *tuiModel) runTurn(ctx context.Context, prompt string) {
 	m.app.watcher.StartTurn()
+	if m.app.advisor != nil {
+		m.app.advisor.StartTurn(prompt)
+	}
 	err := m.app.loop.Turn(ctx, prompt)
 
 	after := m.app.loop.Session.State()

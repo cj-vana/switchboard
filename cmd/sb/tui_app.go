@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cj-vana/switchboard/internal/advisor"
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/config"
@@ -37,6 +38,10 @@ type tuiApp struct {
 	route   *route.Decision
 	sticky  *route.Sticky
 	watcher *watcher
+
+	// advisor, when non-nil, wraps the watcher as the loop's observer and
+	// feeds the loop's injection point (tui_advisor.go). Nil is off.
+	advisor *advisor.Advisor
 
 	obs *tuiObserver
 	p   *tea.Program
@@ -132,6 +137,13 @@ func (a *tuiApp) bind(tier config.Tier, client provider.Provider, pin bool) {
 	}
 	a.watcher = newWatcher(a.obs, a.sticky, len(a.config.Tiers)-1, a.moveTo)
 	a.loop.Observer = a.watcher
+	// The advisor survives the rebuild by wrapping whatever replaced its
+	// inner observer; dropping it silently on a tier switch would turn it off
+	// without anyone saying so.
+	if a.advisor != nil {
+		a.advisor.SetInner(a.watcher)
+		a.loop.Observer = a.advisor
+	}
 }
 
 // switchTier probes the target off the UI goroutine; the rebind happens when

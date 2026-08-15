@@ -247,6 +247,8 @@ func (t *transcript) renderNotice(level, text string, w int) []string {
 		style, prefix = t.th.err, "  error: "
 	case "route":
 		style, prefix = t.th.accent, "  route: "
+	case "advisor":
+		style, prefix = t.th.accent, "  advisor: "
 	}
 	var lines []string
 	for i, l := range wrapPlain(text, max(w-len(prefix), 20)) {

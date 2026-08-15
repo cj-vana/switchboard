@@ -59,6 +59,14 @@ type Loop struct {
 	System        []provider.Block
 	MaxToolRounds int
 	MaxAttempts   int
+
+	// Inject, when set, is drained at the top of every round. What it returns
+	// is appended to the session before the request is built, which is how
+	// advice — or the user, one day — reaches a turn already in flight. The
+	// round boundary is the only safe seam: tool results are recorded, no
+	// call is outstanding, and a user-role message is legal in every wire
+	// format this program speaks.
+	Inject func() []provider.Message
 }
 
 // price attaches what the catalog says this call cost, along with the revision
@@ -102,7 +110,19 @@ func (l *Loop) Turn(ctx context.Context, input string) error {
 	}
 
 	maxRounds := orDefault(l.MaxToolRounds, DefaultMaxToolRounds)
-	for range maxRounds {
+	for round := range maxRounds {
+		// The opening round skips injection: anything pending at turn start
+		// is the caller's to fold into the prompt itself, so a request never
+		// carries two adjacent user messages. Mid-turn the previous message
+		// is a tool result, after which a user-role message is legal in every
+		// format this program speaks.
+		if l.Inject != nil && round > 0 {
+			for _, m := range l.Inject() {
+				if err := l.Session.AppendMessage(m); err != nil {
+					return err
+				}
+			}
+		}
 		msg, stop, usage, attempts, err := l.callModel(ctx)
 		if err != nil {
 			// Content that did arrive is recorded as an interrupted turn, so the

@@ -16,6 +16,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/provider/anthropic"
 	"github.com/cj-vana/switchboard/internal/provider/kimi"
 	"github.com/cj-vana/switchboard/internal/provider/ollama"
+	"github.com/cj-vana/switchboard/internal/provider/openai"
 )
 
 // armsFor builds the ladder, lowest rung first. The baselines are its ends.
@@ -65,6 +66,31 @@ func armsFor(t *testing.T) []Arm {
 		return []Arm{
 			{Name: "always-lowest", Target: ollama.Target("qwen3.5:9b-mlx"), Provider: ollama.New()},
 			{Name: "always-highest", Target: kimi.Target("k3-256k"), Provider: kimi.New(key(kimi.Name, kimi.Surface))},
+		}
+
+	case "pin":
+		// One candidate, pinned, alone: the §8.6 baseline unit. The front is
+		// derived from every journal in hand, so a new candidate is measured
+		// by itself rather than by re-running rungs already on record. No
+		// routed arm accompanies it — routing over one rung measures nothing.
+		switch ref := os.Getenv("SB_EVAL_PIN"); ref {
+		case "openai/gpt-5.6-sol":
+			client := openai.NewResponses(
+				openai.WithResponsesToken(key(openai.Name, openai.Subscription)))
+			return []Arm{{
+				Name:     "pin-gpt-5.6-sol",
+				Target:   provider.RouteTarget{Provider: openai.Name, Surface: openai.Subscription, ModelID: "gpt-5.6-sol"},
+				Provider: client,
+			}}
+		case "ollama/qwen3.8:27b-mlx":
+			return []Arm{{
+				Name:     "pin-qwen3.8-27b",
+				Target:   ollama.Target("qwen3.8:27b-mlx"),
+				Provider: ollama.New(),
+			}}
+		default:
+			t.Skipf("SB_EVAL_PIN=%q names no candidate this harness knows", ref)
+			return nil
 		}
 
 	default:
@@ -179,6 +205,7 @@ func TestLiveBaselineRuns(t *testing.T) {
 	// frequently cut short, and grouping means the first arm completes while the
 	// others have nothing at all: a partial result covering one arm answers no
 	// comparison. Interleaved, whatever finishes covers every arm evenly.
+	pinOnly := os.Getenv("SB_EVAL_LADDER") == "pin"
 	type job func() Run
 	var jobs []job
 	for _, task := range tasks {
@@ -186,7 +213,9 @@ func TestLiveBaselineRuns(t *testing.T) {
 			for _, arm := range arms {
 				jobs = append(jobs, func() Run { return runner.Run(ctx, task, arm, seed) })
 			}
-			jobs = append(jobs, func() Run { return routed.Run(ctx, runner, task, seed) })
+			if !pinOnly {
+				jobs = append(jobs, func() Run { return routed.Run(ctx, runner, task, seed) })
+			}
 		}
 	}
 
