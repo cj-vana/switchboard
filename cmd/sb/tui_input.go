@@ -17,7 +17,14 @@ func (m *tuiModel) suggestions() []commandItem {
 	if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \n\t") {
 		return nil
 	}
-	return matchingCommands(strings.TrimPrefix(v, "/"), m.app.config)
+	prefix := strings.TrimPrefix(v, "/")
+	out := matchingCommands(prefix, m.app.config)
+	for _, c := range m.custom {
+		if strings.HasPrefix(c.name, prefix) {
+			out = append(out, commandItem{name: c.name, desc: c.desc})
+		}
+	}
+	return out
 }
 
 func (m *tuiModel) suggestionsVisible() bool {
@@ -156,6 +163,11 @@ func (m *tuiModel) runSlash(v string) tea.Cmd {
 				return noticeCmd("warn", "a turn is running; esc to interrupt it first")
 			}
 			return c.run(m, rest)
+		}
+	}
+	for _, c := range m.custom {
+		if c.name == name {
+			return runCustom(m, c, rest)
 		}
 	}
 	return noticeCmd("error", "unknown command "+name+"; try /help")

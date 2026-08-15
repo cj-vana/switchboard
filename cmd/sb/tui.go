@@ -138,6 +138,10 @@ type tuiModel struct {
 	histQuery  string
 	histMatch  int
 
+	// custom holds the markdown-file commands loaded at startup
+	// (tui_custom.go).
+	custom []customCommand
+
 	dlg  dialog
 	full *diffView
 
@@ -286,6 +290,7 @@ func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiMo
 		tierLine: app.tierLine(),
 		mode:     app.loop.Perms.Mode(),
 		history:  loadHistory(app.workspace),
+		custom:   loadCustomCommands(app.workspace),
 	}
 	m.histIdx = len(m.history)
 	m.tr = newTranscript(100, th, md)
