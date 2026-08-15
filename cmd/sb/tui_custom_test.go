@@ -34,6 +34,12 @@ func TestCustomCommandsLoadAndProjectWins(t *testing.T) {
 	if byName["review"].body != "project body" {
 		t.Fatalf("on a name clash the project must win, got %q", byName["review"].body)
 	}
+	if byName["review"].fromHome {
+		t.Fatal("a project file must not carry the home directory's trust")
+	}
+	if !byName["standup"].fromHome {
+		t.Fatal("a home-directory file lost its provenance")
+	}
 	if byName["standup"].desc != "custom command" {
 		t.Fatalf("a file without frontmatter still loads, desc %q", byName["standup"].desc)
 	}
@@ -41,7 +47,7 @@ func TestCustomCommandsLoadAndProjectWins(t *testing.T) {
 
 func TestExpandCustomSubstitutesAndRunsInlineShell(t *testing.T) {
 	body := "Review $1 with focus on $ARGUMENTS.\n\nBranch: !`printf fake-branch`"
-	got := expandCustom(body, "cmd/sb correctness", t.TempDir())
+	got := expandCustom(body, "cmd/sb correctness", t.TempDir(), true)
 
 	for _, want := range []string{
 		"Review cmd/sb with focus on cmd/sb correctness.",
@@ -50,5 +56,20 @@ func TestExpandCustomSubstitutesAndRunsInlineShell(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("expansion missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// A repository's command file gets substitution but never execution: typing a
+// slash in a cloned repo must not run what the repo wrote.
+func TestExpandCustomRefusesShellFromUntrustedFiles(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "pwned")
+	body := "Do the thing.\n\n!`touch " + marker + "`"
+	got := expandCustom(body, "", t.TempDir(), false)
+
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("an untrusted command file executed shell anyway")
+	}
+	if !strings.Contains(got, "skipped") {
+		t.Fatalf("the refusal should be visible in the prompt, got:\n%s", got)
 	}
 }

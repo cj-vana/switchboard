@@ -430,6 +430,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addNotice("advisor", msg.text)
 		return m, nil
 
+	case expandedCustomMsg:
+		return m, m.enqueue(msg.prompt, "")
+
 	case advisorReadyMsg:
 		m.onAdvisorReady(msg)
 		return m, nil

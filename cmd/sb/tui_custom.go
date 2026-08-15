@@ -28,6 +28,13 @@ type customCommand struct {
 	name string
 	desc string
 	body string
+
+	// fromHome records which directory supplied the file, and it is a trust
+	// statement, not a detail: ~/.switchboard/commands is the user speaking,
+	// a repository's .switchboard/commands is whoever was cloned. Inline
+	// shell runs only for the former — a checked-out repo must not get
+	// commands executed by the act of typing a slash.
+	fromHome bool
 }
 
 // loadCustomCommands reads both directories once at startup. Project first:
@@ -37,13 +44,17 @@ func loadCustomCommands(workspace string) []customCommand {
 	var out []customCommand
 	seen := map[string]bool{}
 
-	dirs := []string{filepath.Join(workspace, ".switchboard", "commands")}
+	type source struct {
+		dir      string
+		fromHome bool
+	}
+	dirs := []source{{filepath.Join(workspace, ".switchboard", "commands"), false}}
 	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".switchboard", "commands"))
+		dirs = append(dirs, source{filepath.Join(home, ".switchboard", "commands"), true})
 	}
 
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
+	for _, src := range dirs {
+		entries, err := os.ReadDir(src.dir)
 		if err != nil {
 			continue
 		}
@@ -55,7 +66,7 @@ func loadCustomCommands(workspace string) []customCommand {
 			if seen[name] {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			data, err := os.ReadFile(filepath.Join(src.dir, e.Name()))
 			if err != nil {
 				continue
 			}
@@ -64,7 +75,7 @@ func loadCustomCommands(workspace string) []customCommand {
 				continue
 			}
 			seen[name] = true
-			out = append(out, customCommand{name: name, desc: desc, body: body})
+			out = append(out, customCommand{name: name, desc: desc, body: body, fromHome: src.fromHome})
 		}
 	}
 	return out
@@ -98,8 +109,10 @@ var inlineShell = regexp.MustCompile("!`([^`]+)`")
 
 // expandCustom renders a command body against its arguments. Inline shell
 // runs now, at expansion, because a command that pastes today's diff into the
-// prompt is the entire point of having one.
-func expandCustom(body, args, workspace string) string {
+// prompt is the entire point of having one — but only when trusted: a project
+// file's shell fragments are replaced with a note saying they did not run,
+// since a cloned repository must not execute anything by being typed at.
+func expandCustom(body, args, workspace string, trusted bool) string {
 	fields := strings.Fields(args)
 	body = strings.ReplaceAll(body, "$ARGUMENTS", args)
 	for i := 9; i >= 1; i-- {
@@ -112,6 +125,9 @@ func expandCustom(body, args, workspace string) string {
 
 	return inlineShell.ReplaceAllStringFunc(body, func(match string) string {
 		command := inlineShell.FindStringSubmatch(match)[1]
+		if !trusted {
+			return "[inline shell `" + command + "` skipped: it runs only from ~/.switchboard/commands, not from a repository's]"
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
@@ -128,9 +144,16 @@ func expandCustom(body, args, workspace string) string {
 	})
 }
 
+// expandedCustomMsg carries an expanded command body back to the model, so
+// the inline shell's fifteen-second ceiling is spent off the UI goroutine.
+type expandedCustomMsg struct{ prompt string }
+
 func runCustom(m *tuiModel, c customCommand, args string) tea.Cmd {
 	if m.busy {
 		return noticeCmd("warn", "a turn is running; esc to interrupt it first")
 	}
-	return m.enqueue(expandCustom(c.body, args, m.app.workspace), "")
+	workspace := m.app.workspace
+	return func() tea.Msg {
+		return expandedCustomMsg{prompt: expandCustom(c.body, args, workspace, c.fromHome)}
+	}
 }
