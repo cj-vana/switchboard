@@ -64,6 +64,10 @@ type Config struct {
 	// SB_NO_UPDATE_CHECK=1 turns it off.
 	UpdateCheck bool
 
+	// Theme is the TUI color theme, persisted so /theme survives a restart.
+	// Empty means the built-in default; the TUI owns what names are valid.
+	Theme string
+
 	Path string
 }
 
@@ -109,6 +113,14 @@ type file struct {
 	Auth      map[string]authEntry     `toml:"auth"`
 	Providers map[string]providerEntry `toml:"providers"`
 	Updates   updatesEntry             `toml:"updates"`
+	UI        uiEntry                  `toml:"ui"`
+}
+
+// uiEntry holds presentation settings. They live in the config rather than a
+// separate state file because the TUI writes this file anyway, and two files
+// that both mean "how sb behaves for this user" is one file too many.
+type uiEntry struct {
+	Theme string `toml:"theme"`
 }
 
 // updatesEntry holds the release-check toggle. It is a *bool so "absent" and
@@ -134,9 +146,9 @@ type providerEntry struct {
 // field for the credential itself: §5.3 keeps secrets out of this file, and a
 // key that exists is a key someone pastes a secret into.
 type authEntry struct {
-	Env    string     `toml:"env"`
-	Helper []string   `toml:"helper"`
-	OAuth  oauthEntry `toml:"oauth"`
+	Env    string      `toml:"env,omitempty"`
+	Helper []string    `toml:"helper,omitempty"`
+	OAuth  *oauthEntry `toml:"oauth,omitempty"`
 }
 
 // oauthEntry configures a login flow. It has a client id and no client secret,
@@ -147,17 +159,17 @@ type oauthEntry struct {
 	ClientID     string            `toml:"client_id"`
 	AuthorizeURL string            `toml:"authorize_url"`
 	TokenURL     string            `toml:"token_url"`
-	Scopes       []string          `toml:"scopes"`
-	Audience     string            `toml:"audience"`
-	RedirectPort int               `toml:"redirect_port"`
-	ExtraParams  map[string]string `toml:"extra_params"`
+	Scopes       []string          `toml:"scopes,omitempty"`
+	Audience     string            `toml:"audience,omitempty"`
+	RedirectPort int               `toml:"redirect_port,omitempty"`
+	ExtraParams  map[string]string `toml:"extra_params,omitempty"`
 }
 
 type tierEntry struct {
-	Label   string `toml:"label"`
+	Label   string `toml:"label,omitempty"`
 	Model   string `toml:"model"`
-	Surface string `toml:"surface"`
-	Effort  string `toml:"effort"`
+	Surface string `toml:"surface,omitempty"`
+	Effort  string `toml:"effort,omitempty"`
 }
 
 // Load reads the user's configuration. A missing file is not an error: the
@@ -211,10 +223,9 @@ func LoadFile(path string) (*Config, error) {
 		c.Slots[k] = v
 	}
 	for k, v := range f.Auth {
-		c.Auth[k] = credential.Settings{
-			Env:    v.Env,
-			Helper: v.Helper,
-			OAuth: credential.OAuthSettings{
+		s := credential.Settings{Env: v.Env, Helper: v.Helper}
+		if v.OAuth != nil {
+			s.OAuth = credential.OAuthSettings{
 				ClientID:        v.OAuth.ClientID,
 				AuthorizeURL:    v.OAuth.AuthorizeURL,
 				TokenURL:        v.OAuth.TokenURL,
@@ -222,8 +233,9 @@ func LoadFile(path string) (*Config, error) {
 				Audience:        v.OAuth.Audience,
 				RedirectPort:    v.OAuth.RedirectPort,
 				ExtraAuthParams: v.OAuth.ExtraParams,
-			},
+			}
 		}
+		c.Auth[k] = s
 	}
 	for k, v := range f.Providers {
 		c.Providers[k] = ProviderSettings{BaseURL: v.BaseURL}
@@ -231,6 +243,7 @@ func LoadFile(path string) (*Config, error) {
 	if f.Updates.Check != nil {
 		c.UpdateCheck = *f.Updates.Check
 	}
+	c.Theme = f.UI.Theme
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err
 	}

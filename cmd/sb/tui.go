@@ -152,8 +152,15 @@ func runTUI(
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
 	// answer, stalls the first paint (§14's 50ms). Absent the variable, dark
-	// is the default and /theme is the override.
+	// is the default. A theme chosen with /theme is saved to the config and
+	// beats detection: the user said, the terminal only hinted.
 	dark := detectDark()
+	switch cfg.Theme {
+	case "dark":
+		dark = true
+	case "light":
+		dark = false
+	}
 	th := themeFor(dark)
 	md := newMarkdown(100, dark)
 	ta := newTextarea()

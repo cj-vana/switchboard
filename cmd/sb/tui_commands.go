@@ -266,6 +266,10 @@ func cmdTheme(m *tuiModel, args string) tea.Cmd {
 		default:
 			return noticeCmd("error", "theme is dark or light")
 		}
+		m.app.config.Theme = name
+		if err := m.app.config.Save(); err != nil {
+			return noticeCmd("error", "theme is now "+name+", but saving it failed: "+err.Error())
+		}
 		return noticeCmd("", "theme is now "+name)
 	}
 	if args != "" {
