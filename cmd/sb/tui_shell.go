@@ -43,7 +43,8 @@ func (m *tuiModel) runShell(command string) tea.Cmd {
 		return noticeCmd("warn", "a turn is running; ! commands wait for the prompt")
 	}
 
-	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: "shell", desc: command}})
+	// rank -1: the user ran this, not a rung, so the rail stays neutral.
+	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: "shell", desc: command}, rank: -1})
 	m.tr.scrollToBottom()
 
 	workspace := m.app.workspace

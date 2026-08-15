@@ -30,6 +30,36 @@ type theme struct {
 
 	selected lipgloss.Style
 	border   lipgloss.Style
+
+	// rungs is the heat ramp: the ladder rendered as temperature. t1 sits at
+	// cool teal and each rung above it runs warmer, ending at amber, so a
+	// glance at any routing surface says where on the ladder work is running
+	// and escalation literally heats up. This is the visual identity, and it
+	// is one no neighboring tool can wear: nothing else routes.
+	rungs     []lipgloss.Style
+	rungChips []lipgloss.Style
+}
+
+// rung returns the heat style for a ladder rank, clamped: a ladder deeper
+// than the ramp reuses the hottest color rather than inventing a new one.
+func (t *theme) rung(rank int) lipgloss.Style {
+	if rank < 0 {
+		rank = 0
+	}
+	if rank >= len(t.rungs) {
+		rank = len(t.rungs) - 1
+	}
+	return t.rungs[rank]
+}
+
+func (t *theme) rungChip(rank int) lipgloss.Style {
+	if rank < 0 {
+		rank = 0
+	}
+	if rank >= len(t.rungChips) {
+		rank = len(t.rungChips) - 1
+	}
+	return t.rungChips[rank]
 }
 
 func darkTheme() *theme {
@@ -56,6 +86,14 @@ func darkTheme() *theme {
 	t.barEmpty = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
 	t.selected = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 	t.border = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+
+	// Cool to warm, muted rather than neon: teal, steel blue, violet, copper,
+	// amber, coral. Mid-brightness values chosen to read on a dark ground.
+	for _, c := range []string{"73", "68", "134", "173", "179", "203"} {
+		t.rungs = append(t.rungs, lipgloss.NewStyle().Foreground(lipgloss.Color(c)))
+		t.rungChips = append(t.rungChips, lipgloss.NewStyle().
+			Foreground(lipgloss.Color("235")).Background(lipgloss.Color(c)).Bold(true))
+	}
 	return t
 }
 
@@ -83,5 +121,12 @@ func lightTheme() *theme {
 	t.barEmpty = lipgloss.NewStyle().Foreground(lipgloss.Color("254"))
 	t.selected = lipgloss.NewStyle().Background(lipgloss.Color("254"))
 	t.border = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+
+	// The same ramp, darkened to hold contrast on a light ground.
+	for _, c := range []string{"30", "25", "91", "130", "136", "161"} {
+		t.rungs = append(t.rungs, lipgloss.NewStyle().Foreground(lipgloss.Color(c)))
+		t.rungChips = append(t.rungChips, lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).Background(lipgloss.Color(c)).Bold(true))
+	}
 	return t
 }

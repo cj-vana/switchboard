@@ -91,7 +91,7 @@ func (d *permissionDialog) view(width int, th *theme) string {
 	}
 	for i, opt := range options {
 		if i == d.sel {
-			b.WriteString(th.accent.Render(" ❯ "+opt) + "\n")
+			b.WriteString(th.accent.Render(" ▌ "+opt) + "\n")
 		} else {
 			b.WriteString(th.dim.Render("   "+opt) + "\n")
 		}
@@ -174,7 +174,7 @@ func (d *pickerDialog) view(width int, th *theme) string {
 			row += "  " + th.dim.Render(it.desc)
 		}
 		if i == d.sel {
-			row = th.accent.Render(" ❯ ") + th.bold.Render(it.label)
+			row = th.accent.Render(" ▌ ") + th.bold.Render(it.label)
 			if it.desc != "" {
 				row += "  " + th.dim.Render(it.desc)
 			}

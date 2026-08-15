@@ -211,9 +211,7 @@ func runTUI(
 	loop.Observer = app.watcher
 	loop.Asker = &tuiAsker{p: p}
 
-	for _, l := range app.bannerLines(sess, resumed) {
-		m.addInfo(l)
-	}
+	m.addBanner(sess, resumed)
 	if routeDec != nil {
 		m.addRoute(routeSummary(*routeDec), describeRoute(*routeDec))
 	}
@@ -845,9 +843,7 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 		old.Close()
 	}
 	m.tr.reset()
-	for _, l := range m.app.bannerLines(msg.sess, !msg.fresh) {
-		m.addInfo(l)
-	}
+	m.addBanner(msg.sess, !msg.fresh)
 	if !msg.fresh {
 		m.replayHistory(msg.sess.State())
 	}
@@ -889,7 +885,9 @@ func (m *tuiModel) replayHistory(state session.State) {
 					m.tr.finalize(e)
 				}
 			case provider.ToolUse:
-				m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: b.Name, done: true}})
+				// A replayed session does not record which rung ran each
+				// call, so history renders neutral rather than guessing.
+				m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: b.Name, done: true}, rank: -1})
 			}
 		}
 	}
@@ -914,13 +912,20 @@ func (m *tuiModel) onDelta(msg deltaMsg) {
 	m.tr.add(&entry{kind: want, text: msg.text, live: true})
 }
 
+// activeRank is the current tier's position on the ladder, for the heat ramp;
+// an ad-hoc target (-model, a resumed unknown) has no rung and renders
+// neutral.
+func (m *tuiModel) activeRank() int {
+	return m.app.rankOf(m.app.tier)
+}
+
 func (m *tuiModel) onToolStart(msg toolStartMsg) {
 	m.tr.finalize(m.tr.last())
 	desc := msg.req.Path
 	if msg.req.Effect == permission.EffectExecute {
 		desc = tools.Describe(msg.req.Argv, msg.req.Shell)
 	}
-	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: msg.name, desc: desc}})
+	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: msg.name, desc: desc}, rank: m.activeRank()})
 }
 
 func (m *tuiModel) onToolEnd(msg toolEndMsg) {
@@ -949,7 +954,7 @@ func (m *tuiModel) addInfo(text string) {
 }
 
 func (m *tuiModel) addRoute(summary string, lines []string) {
-	m.tr.add(&entry{kind: kindRoute, routeSummary: summary, routeLines: lines})
+	m.tr.add(&entry{kind: kindRoute, routeSummary: summary, routeLines: lines, rank: m.activeRank()})
 }
 
 func routeSummary(d route.Decision) string {
@@ -1023,10 +1028,19 @@ func (m *tuiModel) inputZoneView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// workingLine is the row that appears under the input while a turn runs.
+// workingLine is the row that appears under the input while a turn runs. The
+// spinner and the rung name wear the active rung's heat, so "who is working"
+// is answered by color before it is answered by text.
 func (m *tuiModel) workingLine() string {
+	who := "working…"
+	spin := m.spin.View()
+	if rank := m.activeRank(); rank >= 0 {
+		who = m.app.tier.ID + " working…"
+		spin = m.th.rung(rank).Render(spin)
+		who = m.th.rung(rank).Render(who)
+	}
 	elapsed := time.Since(m.started).Round(time.Second)
-	line := fmt.Sprintf(" %s working… %s", m.spin.View(), m.th.dim.Render(elapsed.String()))
+	line := fmt.Sprintf(" %s %s %s", spin, who, m.th.dim.Render(elapsed.String()))
 	if m.turnIn+m.turnOut > 0 {
 		line += m.th.dim.Render(fmt.Sprintf(" · ↓%s ↑%s tokens", compact(m.turnIn), compact(m.turnOut)))
 	}

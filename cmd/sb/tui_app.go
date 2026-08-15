@@ -202,26 +202,3 @@ func (a *tuiApp) clearSession() tea.Cmd {
 	}
 }
 
-// bannerLines mirrors the REPL banner: what a session starts on is stated, not
-// implied.
-func (a *tuiApp) bannerLines(sess *session.Session, resumed bool) []string {
-	state := sess.State()
-	lines := []string{
-		"switchboard " + a.tierLine(),
-		"  workspace  " + a.workspace,
-		"  mode       " + string(a.loop.Perms.Mode()),
-		"  sandbox    " + a.capability.Summary(),
-		"  catalog    " + a.catalog.Revision + " (" + a.catalog.Source + ")",
-	}
-	if resumed {
-		lines = append(lines, fmt.Sprintf("  session    %s, resumed with %d messages", state.ID, len(state.Messages)))
-	} else {
-		lines = append(lines, "  session    "+state.ID)
-	}
-	if lost := sess.TruncatedBytes(); lost > 0 {
-		lines = append(lines, fmt.Sprintf(
-			"  recovered from an interrupted write; %d bytes at the end of the log were unreadable and were dropped", lost))
-	}
-	lines = append(lines, "", "  /help for commands, /exit to leave", "")
-	return lines
-}

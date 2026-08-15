@@ -25,7 +25,13 @@ func (m *tuiModel) statusLine() string {
 	if tierLabel != "" {
 		chip += " " + tierLabel
 	}
-	left := th.tierChip.Render(" "+chip+" ") + " " + th.dim.Render(target)
+	// The chip wears the active rung's heat: the corner of the eye knows
+	// whether work is running cool or warm before reading a word.
+	chipStyle := th.tierChip
+	if rank := m.activeRank(); rank >= 0 {
+		chipStyle = th.rungChip(rank)
+	}
+	left := chipStyle.Render(" "+chip+" ") + " " + th.dim.Render(target)
 
 	var right []string
 	if m.updateAvail != "" {
@@ -52,7 +58,7 @@ func (m *tuiModel) statusLine() string {
 	if gap < 1 {
 		// Shrink from the left: the target name is the longest thing here.
 		target = truncate(target, max(8, width-rightW-12))
-		left = th.tierChip.Render(" "+chip+" ") + " " + th.dim.Render(target)
+		left = chipStyle.Render(" "+chip+" ") + " " + th.dim.Render(target)
 		leftW = lipgloss.Width(left)
 		gap = width - leftW - rightW - 1
 		if gap < 1 {

@@ -24,6 +24,9 @@ const (
 	kindNotice
 	kindRoute
 	kindInfo
+	// kindRaw holds pre-styled lines rendered verbatim, for the banner: the
+	// one place composition is done by the builder, not the renderer.
+	kindRaw
 )
 
 type toolEntry struct {
@@ -47,6 +50,11 @@ type entry struct {
 	routeSummary string   // collapsed route line
 	routeLines   []string // the full decision record
 	expanded     bool
+
+	// rank is the ladder position this entry happened on, captured at
+	// creation so a t1-era line keeps t1's color after an escalation; -1
+	// means the entry has no rung association and renders neutral.
+	rank int
 
 	cache map[int][]string
 }
@@ -172,11 +180,13 @@ func (t *transcript) renderUncached(e *entry) []string {
 		}
 		return lines
 	case kindTool:
-		return t.renderTool(&e.tool, e.expanded, w)
+		return t.renderTool(&e.tool, e.expanded, e.rank, w)
 	case kindNotice:
 		return t.renderNotice(e.level, e.text, w)
 	case kindRoute:
 		return t.renderRoute(e, w)
+	case kindRaw:
+		return strings.Split(e.text, "\n")
 	default: // kindInfo
 		lines := wrapPlain(e.text, w)
 		for i, l := range lines {
@@ -186,6 +196,10 @@ func (t *transcript) renderUncached(e *entry) []string {
 	}
 }
 
+// The transcript's glyph language is the patch panel: a heavy bar marks what
+// the user plugged in, thin rails carry tool activity, and a diamond junction
+// marks the router switching jacks. Box-drawing characters only, because
+// they render everywhere a terminal does.
 func (t *transcript) renderUser(text string, w int) []string {
 	inner := w - 2
 	if inner < 20 {
@@ -194,38 +208,44 @@ func (t *transcript) renderUser(text string, w int) []string {
 	var lines []string
 	for i, l := range wrapPlain(text, inner) {
 		if i == 0 {
-			lines = append(lines, t.th.user.Render("› ")+t.th.text.Render(l))
+			lines = append(lines, t.th.user.Render("▌ ")+t.th.text.Render(l))
 		} else {
-			lines = append(lines, "  "+t.th.text.Render(l))
+			lines = append(lines, t.th.user.Render("▌ ")+t.th.text.Render(l))
 		}
 	}
 	return lines
 }
 
-func (t *transcript) renderTool(tool *toolEntry, expanded bool, w int) []string {
-	head := t.th.accent.Render("⏺ ") + t.th.bold.Render(tool.name)
+func (t *transcript) renderTool(tool *toolEntry, expanded bool, rank int, w int) []string {
+	rail := t.th.faint
+	if rank >= 0 {
+		rail = t.th.rung(rank)
+	}
+	head := rail.Render("│ ") + t.th.bold.Render(tool.name)
 	if tool.desc != "" {
-		head += t.th.dim.Render("(" + truncate(tool.desc, max(w-12-len(tool.name), 8)) + ")")
+		head += t.th.dim.Render(" " + truncate(tool.desc, max(w-12-len(tool.name), 8)))
 	}
 	if !tool.done {
 		return []string{head}
 	}
-	status := t.th.dim.Render("ok in " + formatDuration(tool.took))
+	status := t.th.dim.Render("ok " + formatDuration(tool.took))
 	if tool.failed {
-		status = t.th.err.Render("failed in " + formatDuration(tool.took))
+		status = t.th.err.Render("failed " + formatDuration(tool.took))
 	}
-	lines := []string{head, "  " + t.th.faint.Render("⎿  ") + status}
+	lines := []string{head, rail.Render("└ ") + status}
 
 	detail := strings.TrimRight(tool.detail, "\n")
 	if detail == "" {
 		return lines
 	}
 	if !expanded {
-		if first := firstLine(detail); first != "" {
-			lines[1] += t.th.dim.Render(": " + first)
+		// A failure shows its tail in full below; repeating the first line
+		// inline as well would print a one-line error twice.
+		if first := firstLine(detail); first != "" && !tool.failed {
+			lines[1] += t.th.dim.Render(" · " + first)
 		}
 		if tool.failed {
-			lines = append(lines, indentLines(t.th.err, tailLines(detail, 24), 5)...)
+			lines = append(lines, indentLines(t.th.err, tailLines(detail, 24), 4)...)
 		}
 		return lines
 	}
@@ -233,7 +253,7 @@ func (t *transcript) renderTool(tool *toolEntry, expanded bool, w int) []string 
 	if tool.failed {
 		style = t.th.err
 	}
-	lines = append(lines, indentLines(style, tailLines(detail, 200), 5)...)
+	lines = append(lines, indentLines(style, tailLines(detail, 200), 4)...)
 	return lines
 }
 
@@ -261,10 +281,16 @@ func (t *transcript) renderNotice(level, text string, w int) []string {
 	return lines
 }
 
-// renderRoute draws a router decision collapsed to one line, per §14, with the
-// full record behind ctrl-o.
+// renderRoute draws a router decision collapsed to one line, per §14, with
+// the full record behind ctrl-o. The diamond is the junction marker, colored
+// by the rung the decision landed on: the one glyph that means "the router
+// switched jacks here".
 func (t *transcript) renderRoute(e *entry, w int) []string {
-	line := t.th.accent.Render("⏺ route ") + t.th.dim.Render(e.routeSummary)
+	marker := t.th.accent
+	if e.rank >= 0 {
+		marker = t.th.rung(e.rank)
+	}
+	line := marker.Render("◆ ") + t.th.dim.Render(e.routeSummary)
 	if !e.expanded {
 		return []string{line + t.th.faint.Render("  (ctrl-o to expand)")}
 	}

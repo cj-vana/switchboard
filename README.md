@@ -303,6 +303,16 @@ permission mode, session cost, and a context-window gauge, and interactive
 permission prompts. Router decisions render inline, collapsed to one line;
 ctrl-o expands the last route or tool entry.
 
+The visual identity is the ladder itself. Each rung wears a stable color on
+a heat ramp, cool teal at t1 running warmer up the ladder, and every routing
+surface carries the active rung's color: the banner draws your ladder in
+heat order, the tier chip, the working indicator, the tool rails, and the ◆
+junction marks where the router switched. Escalation literally heats up, a
+tool line from t1 stays teal in the scrollback after you have moved to t3,
+and a glance at any corner of the screen answers where work is running.
+User-run commands and replayed history render neutral, because a color that
+means "this rung did it" must never guess.
+
 The input layer speaks the grammar the neighboring tools converged on.
 `@path` completes file names and attaches the file's contents to the prompt.
 `!cmd` runs a shell command as you, immediately, with no model in the loop;
