@@ -278,6 +278,23 @@ risk is yours and it is not hypothetical.
 A client you register yourself always wins. Anything under
 `[auth.openai.oauth]` overrides the bundled one.
 
+A machine that already runs Codex CLI has a signed-in token in
+`~/.codex/auth.json`, and a credential helper can hand it over instead of a
+second login:
+
+```toml
+[auth.openai]
+helper = ["sh", "-c",
+  "python3 -c \"import json,os;print(json.load(open(os.path.expanduser('~/.codex/auth.json')))['tokens']['access_token'])\""]
+```
+
+Two caveats, stated rather than discovered. The helper is provider-wide: if a
+developer-API tier is ever added under the same `openai` provider, this
+helper's token would be offered there too, so keep the helper and a developer
+key on different machines or different providers. And the token expires on
+its own schedule; when requests start failing with an auth error, running the
+codex CLI once refreshes it, because that file is its property, not ours.
+
 ## The TUI
 
 Inside a session the default surface is the TUI: streaming markdown, a
