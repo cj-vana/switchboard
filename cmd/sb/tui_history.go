@@ -100,7 +100,10 @@ func (m *tuiModel) historySearchKey(msg tea.KeyMsg) bool {
 		return true
 	case "backspace":
 		if m.histQuery != "" {
-			m.histQuery = m.histQuery[:len(m.histQuery)-1]
+			// By rune, not by byte: deleting the last byte of a multi-byte
+			// character would leave the query invalid UTF-8.
+			runes := []rune(m.histQuery)
+			m.histQuery = string(runes[:len(runes)-1])
 			m.histMatch = m.firstMatch()
 		}
 		return true

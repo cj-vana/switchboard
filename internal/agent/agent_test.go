@@ -518,3 +518,51 @@ func TestSystemPromptIsStableWithinASession(t *testing.T) {
 		t.Error("the model should be told that each command needs approval")
 	}
 }
+
+// TestInjectLandsBetweenRoundsOnly pins the injection seam: nothing on the
+// opening round, where the previous message is the user's own prompt and a
+// second user message would be adjacent to it; delivery after tool results,
+// where a user-role message is legal everywhere.
+func TestInjectLandsBetweenRoundsOnly(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("call_1", "read", `{"path":"hello.txt"}`)),
+		textTurn("done"),
+	)
+	if err := os.WriteFile(filepath.Join(h.root, "hello.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	injections := 0
+	pending := []provider.Message{provider.UserText("[advisor] check the error message first")}
+	h.loop.Inject = func() []provider.Message {
+		injections++
+		out := pending
+		pending = nil
+		return out
+	}
+
+	if err := h.loop.Turn(context.Background(), "read hello.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 0 must not have drained: the first drain happens on round 1, so
+	// Inject was consulted exactly once for a two-round turn.
+	if injections != 1 {
+		t.Fatalf("Inject consulted %d times over two rounds, want 1 (never on the opening round)", injections)
+	}
+
+	msgs := h.messages()
+	// user, assistant(tool use), tool results, injected user, assistant.
+	if len(msgs) != 5 {
+		t.Fatalf("got %d messages, want 5: %+v", len(msgs), msgs)
+	}
+	if msgs[2].Role != provider.RoleTool {
+		t.Fatalf("message 2 is %s, want the tool results", msgs[2].Role)
+	}
+	if msgs[3].Role != provider.RoleUser || !strings.Contains(msgs[3].Text(), "[advisor]") {
+		t.Fatalf("message 3 should be the injected advice, got %s %q", msgs[3].Role, msgs[3].Text())
+	}
+	if msgs[0].Role != provider.RoleUser || msgs[1].Role != provider.RoleAssistant {
+		t.Fatal("the opening round's shape changed")
+	}
+}

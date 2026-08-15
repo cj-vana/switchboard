@@ -476,7 +476,9 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		if m.busy {
 			return m.interrupt()
 		}
-		if m.suggestionsVisible() {
+		if m.suggestionsVisible() || m.mentionsVisible() {
+			// One dismissal covers both popups, and the next enter submits
+			// what was typed instead of accepting a completion.
 			m.sugClosed = true
 			return nil
 		}
