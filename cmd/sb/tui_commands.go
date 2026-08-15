@@ -40,6 +40,8 @@ func commands() []commandItem {
 		{name: "sandbox", desc: "what isolation this host provides", busySafe: true, run: cmdSandbox},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
+		{name: "login", usage: "[provider[/surface]]", desc: "store an API key in the OS keychain", busySafe: true, run: cmdLogin},
+		{name: "logout", usage: "[provider[/surface]]", desc: "remove a stored API key", busySafe: true, run: cmdLogout},
 		{name: "theme", usage: "[dark|light]", desc: "switch the color theme", run: cmdTheme},
 		{name: "update", desc: "check for and install a newer switchboard", busySafe: true, run: cmdUpdate},
 	}

@@ -327,6 +327,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dlg = newPermissionDialog(msg.req, msg.out, msg.respond)
 		return m, nil
 
+	case authItemsMsg:
+		m.dlg = &pickerDialog{title: msg.title, items: msg.items, onPick: msg.action}
+		return m, nil
+
+	case secretPromptMsg:
+		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
+			return storeSecretCmd(msg.ref, msg.writer, msg.storeName, value)
+		})
+		return m, nil
+
 	case turnDoneMsg:
 		return m, m.onTurnDone(msg)
 
