@@ -943,13 +943,24 @@ func (m *tuiModel) onToolStart(msg toolStartMsg) {
 }
 
 func (m *tuiModel) onToolEnd(msg toolEndMsg) {
-	if last := m.tr.last(); last != nil && last.kind == kindTool && !last.tool.done {
-		last.tool.done = true
-		last.tool.failed = msg.res.IsError
-		last.tool.took = msg.took
-		last.tool.detail = msg.res.Content
-		m.tr.invalidate(len(m.tr.entries) - 1)
+	last := m.tr.last()
+	if last == nil || last.kind != kindTool || last.tool.done {
+		return
 	}
+	// A finished todo call renders as the list itself rather than a verdict
+	// line: the list is the result. A failed call keeps the rail so the
+	// error shows the way every other tool error does.
+	if msg.name == "todo" && !msg.res.IsError {
+		last.kind = kindTodo
+		last.todos = m.app.loop.Tools.Todos()
+		m.tr.invalidate(len(m.tr.entries) - 1)
+		return
+	}
+	last.tool.done = true
+	last.tool.failed = msg.res.IsError
+	last.tool.took = msg.took
+	last.tool.detail = msg.res.Content
+	m.tr.invalidate(len(m.tr.entries) - 1)
 }
 
 func (m *tuiModel) addUser(text string) {

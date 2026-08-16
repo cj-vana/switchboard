@@ -63,6 +63,7 @@ type Registry struct {
 	root       string
 	capability execution.Capability
 	versions   *fileVersions
+	todos      *todoState
 	tools      map[string]Tool
 	order      []string
 }
@@ -87,6 +88,7 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 		root:       root,
 		capability: capability,
 		versions:   &fileVersions{seen: map[string]string{}},
+		todos:      &todoState{},
 		tools:      map[string]Tool{},
 	}
 	r.add(&readTool{r})
@@ -95,6 +97,7 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 	r.add(&execTool{r})
 	r.add(&globTool{r})
 	r.add(&grepTool{r})
+	r.add(&todoTool{r})
 	return r, nil
 }
 

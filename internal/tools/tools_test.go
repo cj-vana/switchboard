@@ -381,14 +381,14 @@ func TestDefinitionsAreDeterministic(t *testing.T) {
 			t.Errorf("%s has an invalid schema", d.Name)
 		}
 	}
-	if got := strings.Join(names, ","); got != "edit,exec,glob,grep,read,write" {
+	if got := strings.Join(names, ","); got != "edit,exec,glob,grep,read,todo,write" {
 		t.Errorf("tools = %s, want the core suite in sorted order", got)
 	}
 }
 
 func TestOnlyReadsAreParallelSafe(t *testing.T) {
 	r, _ := newRegistry(t)
-	for _, name := range []string{"read", "write", "edit", "exec", "glob", "grep"} {
+	for _, name := range []string{"read", "write", "edit", "exec", "glob", "grep", "todo"} {
 		tool, _ := r.Get(name)
 		want := name == "read" || name == "glob" || name == "grep"
 		if tool.ParallelSafe() != want {

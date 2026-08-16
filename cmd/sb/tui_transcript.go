@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 // The transcript is the scrollback. Entries render to styled lines once and
@@ -24,6 +26,7 @@ const (
 	kindNotice
 	kindRoute
 	kindInfo
+	kindTodo
 	// kindRaw holds pre-styled lines rendered verbatim, for the banner: the
 	// one place composition is done by the builder, not the renderer.
 	kindRaw
@@ -49,6 +52,7 @@ type entry struct {
 	level        string   // notice level
 	routeSummary string   // collapsed route line
 	routeLines   []string // the full decision record
+	todos        []tools.TodoItem
 	expanded     bool
 
 	// rank is the ladder position this entry happened on, captured at
@@ -209,6 +213,8 @@ func (t *transcript) renderUncached(e *entry) []string {
 		return lines
 	case kindTool:
 		return t.renderTool(&e.tool, e.expanded, e.rank, w)
+	case kindTodo:
+		return t.renderTodo(e.todos, e.rank, w)
 	case kindNotice:
 		return t.renderNotice(e.level, e.text, w)
 	case kindRoute:
@@ -296,6 +302,45 @@ func (t *transcript) renderTool(tool *toolEntry, expanded bool, rank int, w int)
 		style = t.th.err
 	}
 	lines = append(lines, indentLines(style, tailLines(detail, 200), 4)...)
+	return lines
+}
+
+// renderTodo draws the task list the model maintains. It replaces the tool
+// rail entry for a todo call, so the transcript shows the list itself where
+// every other tool shows a verdict line: the list is the result. The glyphs
+// are the transcript's own: ✓ for done, ▸ for the one active item, · for
+// pending, and the rail carries the rung color like every tool line.
+func (t *transcript) renderTodo(items []tools.TodoItem, rank int, w int) []string {
+	rail := t.th.faint
+	if rank >= 0 {
+		rail = t.th.rung(rank)
+	}
+	done := 0
+	for _, item := range items {
+		if item.Status == tools.TodoDone {
+			done++
+		}
+	}
+	head := rail.Render("│ ") + t.th.bold.Render("tasks") +
+		t.th.dim.Render(fmt.Sprintf(" %d/%d", done, len(items)))
+	lines := []string{head}
+	for i, item := range items {
+		lead := "│ "
+		if i == len(items)-1 {
+			lead = "└ "
+		}
+		text := truncate(item.Text, max(w-8, 8))
+		var body string
+		switch item.Status {
+		case tools.TodoDone:
+			body = t.th.ok.Render("✓ ") + t.th.dim.Render(text)
+		case tools.TodoActive:
+			body = t.th.bold.Render("▸ " + text)
+		default:
+			body = t.th.dim.Render("· " + text)
+		}
+		lines = append(lines, rail.Render(lead)+body)
+	}
 	return lines
 }
 
