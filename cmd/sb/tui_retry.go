@@ -113,6 +113,12 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 // because a retry elsewhere is exactly a one-shot override with a recorded
 // prompt.
 func (m *tuiModel) retryStart(msg retryStartMsg) tea.Cmd {
+	// The swap lands asynchronously, and the prompt line stayed live in
+	// between; a turn started in that window keeps the session, and the
+	// replay is dropped with its name rather than raced against it.
+	if m.busy {
+		return noticeCmd("warn", "a turn started before the retry could; /retry again when it finishes")
+	}
 	if msg.tier != "" && msg.tier != m.app.tier.ID {
 		tier, ok := m.app.config.Tier(msg.tier)
 		if !ok {
@@ -132,19 +138,36 @@ func (m *tuiModel) retryStart(msg retryStartMsg) tea.Cmd {
 
 // lastTurnOpening finds the user message that opened the final turn. Not
 // every user-role message opens one: advice and watch reports inject as
-// user-role mid-turn, always behind a tool-result message, while an opening
-// follows the previous turn's closing assistant message or nothing at all.
+// user-role mid-turn, and the log marks them Injected for exactly this
+// reader. A user message behind a tool-result tail is otherwise a real
+// opening — a cancelled or round-limited turn ends on its results, and the
+// next prompt follows them — except in a log written before the marker
+// existed, where an injection is only recognizable by the label it leads
+// with.
 func lastTurnOpening(messages []provider.Message) int {
 	last := -1
 	for idx, msg := range messages {
-		if msg.Role != provider.RoleUser {
+		if msg.Role != provider.RoleUser || msg.Injected {
 			continue
 		}
-		if idx == 0 || messages[idx-1].Role == provider.RoleAssistant {
-			last = idx
+		if idx > 0 && messages[idx-1].Role == provider.RoleTool && injectionShaped(msg) {
+			continue
 		}
+		last = idx
 	}
 	return last
+}
+
+// injectionShaped recognizes an unmarked injection by the label its text
+// leads with. Watch folds ride behind the typed prompt, so an opening never
+// leads with "[watch]"; an advice fold does lead with "[advisor]", and an
+// opening carrying one behind a tool-result tail — an interrupted turn,
+// then a prompt typed over pending advice, in a log too old to carry the
+// marker — is misread as an injection. That corner falls back to an earlier
+// opening, and the source session /retry never writes is the recovery.
+func injectionShaped(msg provider.Message) bool {
+	text := msg.Text()
+	return strings.HasPrefix(text, "[advisor]") || strings.HasPrefix(text, "[watch]")
 }
 
 // openingParts pulls the replayable content out of a recorded opening: the

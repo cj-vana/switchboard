@@ -145,10 +145,36 @@ func TestWatchTurnEndVerdictFoldsIntoTheNextPrompt(t *testing.T) {
 		Signatures: []string{"s1"},
 	}})
 	prompt := m.watchContext("fix it")
-	if !strings.Contains(prompt, "--- FAIL: TestAlpha") || !strings.HasSuffix(prompt, "fix it") {
-		t.Fatalf("the verdict did not fold into the prompt:\n%s", prompt)
+	// The typed prompt leads and the report follows, so an opening never
+	// leads with the injection label /retry's shape check reads.
+	if !strings.Contains(prompt, "--- FAIL: TestAlpha") || !strings.HasPrefix(prompt, "fix it") {
+		t.Fatalf("the verdict did not fold in behind the prompt:\n%s", prompt)
 	}
 	if again := m.watchContext("next"); again != "next" {
 		t.Errorf("the fold was not drained: %q", again)
+	}
+}
+
+// A turn-end run can outlive its turn; its stale count must not blind the
+// next turn's due check.
+func TestAStaleTurnEndRunCannotBlindTheNextTurn(t *testing.T) {
+	m := testModel(t)
+	m.app.undo = checkpoint.NewRecorder()
+	cmdWatch(m, "go test")
+	ws := m.app.watchSt
+
+	// Round one of turn one: three files captured, run due.
+	_, _, gen, ok := ws.due(3)
+	if !ok {
+		t.Fatal("three fresh captures were not due")
+	}
+
+	// The next turn begins before the run reports back.
+	ws.beginTurn(nil)
+	ws.ran(gen, 3)
+
+	// One capture into the new turn must be news.
+	if _, _, _, ok := ws.due(1); !ok {
+		t.Fatal("a stale ran() blinded the new turn")
 	}
 }

@@ -99,6 +99,13 @@ type Message struct {
 	// retained in the session log for diagnosis but is never replayed to a
 	// provider as a finished turn (§10.3).
 	Incomplete bool `json:"incomplete,omitempty"`
+
+	// Injected marks a user-role message the harness placed at a round
+	// boundary — advice, a watch report — rather than one that opened a
+	// turn. The wire does not carry it (adapters render role and content);
+	// it exists so a reader of the log can tell a turn's opening from what
+	// rode in mid-turn, which /retry has to get right.
+	Injected bool `json:"injected,omitempty"`
 }
 
 // UserText is a shorthand for the overwhelmingly common single-text-block case.
@@ -139,10 +146,11 @@ type messageJSON struct {
 	Role       Role            `json:"role"`
 	Content    []blockEnvelope `json:"content"`
 	Incomplete bool            `json:"incomplete,omitempty"`
+	Injected   bool            `json:"injected,omitempty"`
 }
 
 func (m Message) MarshalJSON() ([]byte, error) {
-	out := messageJSON{Role: m.Role, Incomplete: m.Incomplete}
+	out := messageJSON{Role: m.Role, Incomplete: m.Incomplete, Injected: m.Injected}
 	for _, b := range m.Content {
 		data, err := json.Marshal(b)
 		if err != nil {
@@ -160,6 +168,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	}
 	m.Role = in.Role
 	m.Incomplete = in.Incomplete
+	m.Injected = in.Injected
 	m.Content = nil
 	for _, env := range in.Content {
 		b, err := decodeBlock(env)

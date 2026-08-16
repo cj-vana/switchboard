@@ -50,8 +50,12 @@ type watchState struct {
 
 	// lastPending is the recorder's capture count when the verifier last
 	// ran, reset each turn with the recorder's own scope. A run is due when
-	// the count has grown past it.
+	// the count has grown past it. gen counts turns, because a turn-end run
+	// finishes on its own goroutine and may land after the next turn has
+	// begun — its stale count must not overwrite the fresh turn's zero, or
+	// the new turn's first edits would never look new.
 	lastPending int
+	gen         int
 
 	// fold holds turn-end reports for the next prompt, the seam advice and
 	// ! output already use: one user message per turn.
@@ -82,33 +86,41 @@ func (ws *watchState) armed() *watch.Watch {
 }
 
 // beginTurn resets the per-turn counter alongside the recorder's new scope
-// and remembers the turn's context, so an interrupted turn interrupts the
-// verifier with it.
+// and remembers the turn's context, so an interrupted turn interrupts a
+// mid-turn verifier run with it.
 func (ws *watchState) beginTurn(ctx context.Context) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 	ws.lastPending = 0
+	ws.gen++
 	ws.turnCtx = ctx
 }
 
 // due reports whether the verifier should run now: armed, and the turn has
-// captured files it has not seen.
-func (ws *watchState) due(pending int) (*watch.Watch, context.Context, bool) {
+// captured files it has not seen. The generation comes back with the
+// verdict so the eventual ran() can be told from a stale one.
+func (ws *watchState) due(pending int) (*watch.Watch, context.Context, int, bool) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 	if ws.w == nil || pending <= ws.lastPending {
-		return nil, nil, false
+		return nil, nil, 0, false
 	}
 	ctx := ws.turnCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return ws.w, ctx, true
+	return ws.w, ctx, ws.gen, true
 }
 
-func (ws *watchState) ran(pending int) {
+// ran records how much of the turn the verifier has seen. A count from a
+// finished generation is dropped: the turn it measured is over, and the
+// current one owes its own runs.
+func (ws *watchState) ran(gen, pending int) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
+	if gen != ws.gen {
+		return
+	}
 	ws.lastPending = pending
 }
 
@@ -129,12 +141,17 @@ func (ws *watchState) takeFold() []string {
 // inject is the loop's round-boundary seam, composed once at assembly:
 // whatever the advisor queued, then the watch's delta. Each part
 // contributes nothing when off, so the loop never needs its Inject swapped.
+// Every message leaves marked Injected, because a log reader — /retry above
+// all — must be able to tell a turn's opening from what rode in mid-turn.
 func (a *tuiApp) inject() []provider.Message {
 	var out []provider.Message
 	if adv := a.advisor; adv != nil {
 		out = append(out, adv.Drain()...)
 	}
 	out = append(out, a.watchRound()...)
+	for i := range out {
+		out[i].Injected = true
+	}
 	return out
 }
 
@@ -146,12 +163,12 @@ func (a *tuiApp) watchRound() []provider.Message {
 	if a.undo == nil {
 		return nil
 	}
-	w, ctx, ok := a.watchSt.due(a.undo.PendingFiles())
+	w, ctx, gen, ok := a.watchSt.due(a.undo.PendingFiles())
 	if !ok {
 		return nil
 	}
 	rep := w.Run(ctx)
-	a.watchSt.ran(a.undo.PendingFiles())
+	a.watchSt.ran(gen, a.undo.PendingFiles())
 	if a.p != nil {
 		a.p.Send(watchReportMsg{command: w.Command(), rep: rep})
 	}
@@ -205,14 +222,17 @@ func (m *tuiModel) watchTurnEnd() tea.Cmd {
 	if m.app.undo == nil {
 		return nil
 	}
-	w, ctx, ok := m.app.watchSt.due(m.app.undo.PendingFiles())
+	w, _, gen, ok := m.app.watchSt.due(m.app.undo.PendingFiles())
 	if !ok {
 		return nil
 	}
 	pending := m.app.undo.PendingFiles()
 	return func() tea.Msg {
-		rep := w.Run(ctx)
-		m.app.watchSt.ran(pending)
+		// Deliberately not the turn's context: the turn is over, and this
+		// run reports on what it left behind — an esc that ended the turn
+		// must not also cancel the report. The watch's own timeout bounds it.
+		rep := w.Run(context.Background())
+		m.app.watchSt.ran(gen, pending)
 		return watchReportMsg{command: w.Command(), rep: rep, turnEnd: true}
 	}
 }
@@ -250,17 +270,19 @@ func (m *tuiModel) onWatchReport(msg watchReportMsg) {
 
 // watchContext folds a turn-end verdict into the next prompt, the same seam
 // advice and ! output use and for the same reason: one user message per
-// turn.
+// turn. The typed prompt leads and the report follows, so an opening never
+// leads with the injection label — which is what lets /retry's shape check
+// for unmarked logs stay honest.
 func (m *tuiModel) watchContext(prompt string) string {
 	folds := m.app.watchSt.takeFold()
 	if len(folds) == 0 {
 		return prompt
 	}
 	var b strings.Builder
-	for _, f := range folds {
-		b.WriteString(f + "\n\n")
-	}
 	b.WriteString(prompt)
+	for _, f := range folds {
+		b.WriteString("\n\n" + f)
+	}
 	return b.String()
 }
 

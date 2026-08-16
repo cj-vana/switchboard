@@ -223,7 +223,14 @@ declaration removes the test-command regex gate, not the parity with a test
 run the model made itself — and skips the error-spike count, because the
 verifier failing means the task is broken, not that a tool call went wrong.
 The injected text passes `credential.ScanPrompt` and redacts unconditionally,
-the race record's posture, because a round boundary has no one to ask.
+the race record's posture, because a round boundary has no one to ask. A
+turn-end run feeds no escalation — the detector and the sticky policy reset
+per turn, and the turn it would have moved is over — its verdict goes to the
+user and folds behind the next typed prompt. The declaration lives on the
+app, not the session, so it survives /clear, /fork, and /resume until
+/watch off; injected messages are marked `Injected` in the log so a reader
+(/retry's `lastTurnOpening` above all) can tell an opening from what rode
+in mid-turn.
 
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by

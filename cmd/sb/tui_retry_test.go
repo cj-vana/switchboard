@@ -46,6 +46,57 @@ func TestLastTurnOpeningSkipsInjectedMessages(t *testing.T) {
 	}
 }
 
+// A cancelled or round-limited turn ends on its tool results; the prompt
+// typed after that tail opened a turn all the same.
+func TestLastTurnOpeningAcceptsAPromptAfterAnInterruptedTurn(t *testing.T) {
+	messages := []provider.Message{
+		provider.UserText("first question"),
+		{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "c1", Name: "exec", Input: []byte(`{}`)},
+		}},
+		{Role: provider.RoleTool, Content: []provider.Block{
+			provider.ToolResult{ToolUseID: "c1", Name: "exec", Content: "cancelled before this call ran", IsError: true},
+		}},
+		provider.UserText("second question, typed after the esc"),
+		{Role: provider.RoleAssistant, Content: []provider.Block{provider.Text{Text: "answer"}}},
+	}
+	if got := lastTurnOpening(messages); got != 3 {
+		t.Fatalf("the opening after the interrupted tail was missed: got %d, want 3", got)
+	}
+}
+
+// The marker outranks the shape: a marked injection is skipped whatever its
+// text says, and an opening that happens to mention the label is kept.
+func TestLastTurnOpeningTrustsTheInjectedMarker(t *testing.T) {
+	injected := provider.UserText("plain-looking advice with no label")
+	injected.Injected = true
+	messages := []provider.Message{
+		provider.UserText("the opening"),
+		{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "c1", Name: "read", Input: []byte(`{}`)},
+		}},
+		{Role: provider.RoleTool, Content: []provider.Block{
+			provider.ToolResult{ToolUseID: "c1", Name: "read", Content: "x"},
+		}},
+		injected,
+	}
+	if got := lastTurnOpening(messages); got != 0 {
+		t.Fatalf("a marked injection was taken for an opening: got %d", got)
+	}
+}
+
+func TestRetryStartDropsTheReplayWhenATurnGotThereFirst(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	cmd := m.retryStart(retryStartMsg{prompt: "replay"})
+	if cmd == nil {
+		t.Fatal("the dropped replay said nothing")
+	}
+	if msg, ok := cmd().(noticeMsg); !ok || !strings.Contains(msg.text, "before the retry") {
+		t.Fatalf("the drop does not say what happened: %+v", msg)
+	}
+}
+
 func TestRetryForksOffTheLastTurnAndReplaysItsPrompt(t *testing.T) {
 	m := testModel(t)
 	appendTurn(t, m, "first question", "first answer")

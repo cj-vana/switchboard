@@ -182,11 +182,14 @@ Beyond the expected commands, a few are Switchboard's own:
   earlier run produced, or the run going green after being red. An
   unchanged verdict is silence, because a verifier that repeats itself
   every round teaches the model to stop reading it. The status bar keeps
-  the current color either way. A new failure also counts toward
-  escalation, with the same weight as a test run the model made itself:
+  the current color either way. A new failure mid-turn also counts toward
+  escalation, with the same weight as a test run the model made itself —
   the design calls a task-specific verifier stronger evidence than the
   agent's own sense that things went well, and `/watch` is where you
-  declare one. The command runs unconfined, as you would run it — it is
+  declare one; a turn-end run informs you and the next prompt instead,
+  because the turn it would have escalated is over. The declaration
+  outlives session swaps — `/clear`, `/fork`, `/resume` — until
+  `/watch off`. The command runs unconfined, as you would run it — it is
   yours, typed in your own session, and there is deliberately no way for
   a repository to declare one.
 - `/race t3 review this diff` runs one prompt on the current rung and t3
