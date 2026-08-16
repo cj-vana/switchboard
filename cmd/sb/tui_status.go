@@ -41,8 +41,11 @@ func (m *tuiModel) statusLine() string {
 	if strip := m.ladderStrip(); strip != "" {
 		right = append(right, strip)
 	}
+	// One filled chip on the bar reads as deliberate; three read as a
+	// toolbar. The rung chip keeps its fill; mode is its hue as text.
 	if chipS, ok := th.modeChip[string(m.mode)]; ok {
-		right = append(right, chipS.Render(" "+string(m.mode)+" "))
+		modeStyle := lipgloss.NewStyle().Foreground(chipS.GetBackground())
+		right = append(right, th.onBar(modeStyle).Render(string(m.mode)))
 	} else {
 		right = append(right, th.onBar(th.dim).Render(string(m.mode)))
 	}

@@ -186,14 +186,16 @@ func TestToolEntryCollapseAndExpand(t *testing.T) {
 func TestRouteEntryCollapsesToOneLine(t *testing.T) {
 	tr := testTranscript(t, 80)
 	e := tr.add(&entry{kind: kindRoute, routeSummary: "t2 via heuristic (test)", routeLines: []string{"route t2", "estimate $0.01"}})
-	// One content line plus the composition's breathing line.
-	if got := tr.render(e); len(got) != 2 || got[1] != "" {
-		t.Fatalf("collapsed route rendered %d lines, want summary + gap: %q", len(got), got)
+	// A one-line entry earns no gap: it packs tight with its neighbors.
+	if got := tr.render(e); len(got) != 1 {
+		t.Fatalf("collapsed route rendered %d lines, want exactly the summary: %q", len(got), got)
 	}
 	e.expanded = true
 	e.cache = nil
-	if got := tr.render(e); len(got) <= 2 {
-		t.Fatal("expanded route did not show the decision record")
+	// Expanded it is multi-line, so the breathing line follows.
+	got := tr.render(e)
+	if len(got) <= 2 || got[len(got)-1] != "" {
+		t.Fatalf("expanded route should show the record and end with a gap: %q", got)
 	}
 }
 

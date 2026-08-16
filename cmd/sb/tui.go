@@ -266,7 +266,7 @@ func themeFor(dark bool) *theme {
 // chord, and the box grows with its content.
 func newTextarea() textarea.Model {
 	ta := textarea.New()
-	ta.Prompt = "› "
+	ta.Prompt = "▌ "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	ta.SetHeight(1)
@@ -305,7 +305,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.tr.setWidth(msg.Width)
-		m.ta.SetWidth(msg.Width - 8) // the composer's border, padding, and margin
+		m.ta.SetWidth(msg.Width - 4) // margin and the prompt gutter
 		return m, nil
 
 	case tea.MouseMsg:
@@ -739,6 +739,16 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 	m.refreshCost(msg.after)
 	m.app.route = nil // the opening decision describes the opening choice only
 
+	// The working line's past tense: what ran, for how long, on how many
+	// tokens, said once and left in the record.
+	if msg.err == nil {
+		done := fmt.Sprintf("%s worked %s", m.turnStarted.ID, time.Since(m.started).Round(time.Second))
+		if m.turnIn+m.turnOut > 0 {
+			done += fmt.Sprintf(" · ↓%s ↑%s tokens", compact(m.turnIn), compact(m.turnOut))
+		}
+		m.addInfo(done)
+	}
+
 	switch {
 	case errors.Is(msg.err, context.Canceled):
 		m.addNotice("", "turn cancelled; the session is intact and can continue")
@@ -1020,70 +1030,59 @@ func (m *tuiModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// inputZoneView is the composer: one rounded container holding any open
-// popup, a hairline, and the prompt. At rest its border wears the active
-// rung's color — the box says which jack you are plugged into — and while a
-// turn runs it goes faint, because the working line below has the floor.
+// inputZoneView is the composer, framed the way the shipping consensus
+// converged after every team abandoned the input box: no border to pollute
+// copy-paste, a prompt bar in the active rung's color — what you type is
+// marked the way it will appear in the transcript — and a single rule
+// underneath as the surface's bottom edge. Popups dock above the prompt.
 func (m *tuiModel) inputZoneView() string {
 	if m.dlg != nil {
 		return m.dlg.view(m.width, m.th)
 	}
-	inner := m.width - 6
-	if inner < 20 {
-		inner = 20
+
+	promptStyle := m.th.user
+	if rank := m.activeRank(); rank >= 0 && !m.busy {
+		promptStyle = m.th.rung(rank)
 	}
+	m.ta.FocusedStyle.Prompt = promptStyle
+	m.ta.BlurredStyle.Prompt = m.th.faint
+
 	var parts []string
-	popup := ""
 	switch {
 	case m.histSearch:
-		popup = m.historySearchView()
+		parts = append(parts, m.historySearchView())
 	case m.suggestionsView() != "":
-		popup = m.suggestionsView()
+		parts = append(parts, m.suggestionsView())
 	case m.mentionsVisible():
-		popup = m.mentionsView()
+		parts = append(parts, m.mentionsView())
 	}
-	if popup != "" {
-		parts = append(parts, popup, m.th.faint.Render(strings.Repeat("─", inner)))
-	}
-	parts = append(parts, m.ta.View())
+	parts = append(parts, m.ta.View(), m.th.faint.Render(strings.Repeat("─", max(m.width-2, 10))))
 
-	borderColor := m.th.faint.GetForeground()
-	if !m.busy {
-		if rank := m.activeRank(); rank >= 0 {
-			borderColor = m.th.rung(rank).GetForeground()
-		}
-	}
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
-		Width(m.width - 4)
-	lines := strings.Split(box.Render(lipgloss.JoinVertical(lipgloss.Left, parts...)), "\n")
+	lines := strings.Split(lipgloss.JoinVertical(lipgloss.Left, parts...), "\n")
 	for i, l := range lines {
 		lines[i] = " " + l
 	}
 	return strings.Join(lines, "\n")
 }
 
-// workingLine is the row that appears under the input while a turn runs. The
-// spinner and the rung name wear the active rung's heat, so "who is working"
-// is answered by color before it is answered by text.
+// workingLine is the row that appears under the input while a turn runs:
+// spinner, who, elapsed, the way out. The spinner and the rung name wear the
+// active rung's heat, so "who is working" is answered by color before it is
+// answered by text. Token counts live in the completion line and /cost; six
+// segments animating against a timer was five too many.
 func (m *tuiModel) workingLine() string {
-	who := "working…"
+	who := "working"
 	spin := m.spin.View()
 	if rank := m.activeRank(); rank >= 0 {
-		who = m.app.tier.ID + " working…"
+		who = m.app.tier.ID + " working"
 		spin = m.th.rung(rank).Render(spin)
 		who = m.th.rung(rank).Render(who)
 	}
 	elapsed := time.Since(m.started).Round(time.Second)
 	line := fmt.Sprintf(" %s %s %s", spin, who, m.th.dim.Render(elapsed.String()))
-	if m.turnIn+m.turnOut > 0 {
-		line += m.th.dim.Render(fmt.Sprintf(" · ↓%s ↑%s tokens", compact(m.turnIn), compact(m.turnOut)))
-	}
-	line += m.th.faint.Render(" · esc to interrupt")
+	line += m.th.faint.Render("  esc interrupts")
 	if len(m.queue) > 0 {
-		line += m.th.faint.Render(fmt.Sprintf(" · %d queued", len(m.queue)))
+		line += m.th.faint.Render(fmt.Sprintf("  %d queued", len(m.queue)))
 	}
 	return line
 }

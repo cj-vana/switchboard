@@ -179,6 +179,12 @@ func (t *transcript) composed(e *entry) []string {
 	case kindTool, kindThinking, kindInfo:
 		return lines
 	}
+	// The gap is earned, not fixed: multi-line blocks and user turns breathe,
+	// while consecutive one-line notices and route lines pack tight the way
+	// the tool rail does. Density around chatter, air around substance.
+	if e.kind != kindUser && len(lines) <= 1 {
+		return lines
+	}
 	if len(lines) > 0 && lines[len(lines)-1] != "" {
 		lines = append(lines, "")
 	}
@@ -279,25 +285,27 @@ func (t *transcript) renderTool(tool *toolEntry, expanded bool, rank int, w int)
 	return lines
 }
 
+// renderNotice speaks the transcript's glyph vocabulary: the glyph carries
+// the color and the severity, the text stays quiet. Word prefixes read as
+// debug output; a mark reads as the page's own voice.
 func (t *transcript) renderNotice(level, text string, w int) []string {
-	style := t.th.dim
-	prefix := "  note: "
+	style, glyph, body := t.th.dim, "·", t.th.dim
 	switch level {
 	case "warn":
-		style, prefix = t.th.warn, "  warn: "
+		style, glyph, body = t.th.warn, "△", t.th.warn
 	case "error":
-		style, prefix = t.th.err, "  error: "
+		style, glyph, body = t.th.err, "✕", t.th.err
 	case "route":
-		style, prefix = t.th.accent, "  route: "
+		style, glyph = t.th.accent, "◆"
 	case "advisor":
-		style, prefix = t.th.accent, "  advisor: "
+		style, glyph = t.th.accent, "◇"
 	}
 	var lines []string
-	for i, l := range wrapPlain(text, max(w-len(prefix), 20)) {
+	for i, l := range wrapPlain(text, max(w-2, 20)) {
 		if i == 0 {
-			lines = append(lines, style.Render(prefix+l))
+			lines = append(lines, style.Render(glyph+" ")+body.Render(l))
 		} else {
-			lines = append(lines, style.Render(strings.Repeat(" ", len(prefix))+l))
+			lines = append(lines, "  "+body.Render(l))
 		}
 	}
 	return lines
@@ -314,7 +322,7 @@ func (t *transcript) renderRoute(e *entry, w int) []string {
 	}
 	line := marker.Render("◆ ") + t.th.dim.Render(e.routeSummary)
 	if !e.expanded {
-		return []string{line + t.th.faint.Render("  ctrl-o")}
+		return []string{line}
 	}
 	lines := []string{line}
 	for _, l := range e.routeLines {
@@ -358,7 +366,15 @@ func (t *transcript) scrollBy(n int) {
 
 func (t *transcript) scrollToBottom() { t.offset = 0 }
 
+// maxTextWidth caps prose regardless of terminal width. On a wide monitor,
+// uncapped text running edge to edge is the most legible nobody-designed-this
+// signal a transcript can send.
+const maxTextWidth = 120
+
 func (t *transcript) setWidth(width int) {
+	if width > maxTextWidth {
+		width = maxTextWidth
+	}
 	if width == t.width {
 		return
 	}

@@ -39,11 +39,28 @@ func (m *markdown) rebuild() {
 	}
 }
 
+// styleFor adapts glamour's stock styles to a transcript. Stock ships three
+// defects for this use: a blank line before and after every render, a
+// two-column margin on every paragraph, and a hardcoded #373737 band behind
+// fenced code that matches no theme on earth. The transcript owns gaps and
+// gutters, and code reads better as foreground-only syntax color over the
+// page's own ground; inline code keeps its chip background, which is the one
+// place a background earns its keep.
 func styleFor(dark bool) glamour.TermRendererOption {
+	cfg := styles.LightStyleConfig
 	if dark {
-		return glamour.WithStyles(styles.DarkStyleConfig)
+		cfg = styles.DarkStyleConfig
 	}
-	return glamour.WithStyles(styles.LightStyleConfig)
+	cfg.Document.BlockPrefix = ""
+	cfg.Document.BlockSuffix = ""
+	zero := uint(0)
+	cfg.Document.Margin = &zero
+	if cfg.CodeBlock.Chroma != nil {
+		chroma := *cfg.CodeBlock.Chroma
+		chroma.Background.BackgroundColor = nil
+		cfg.CodeBlock.Chroma = &chroma
+	}
+	return glamour.WithStyles(cfg)
 }
 
 func (m *markdown) setWidth(width int) {
