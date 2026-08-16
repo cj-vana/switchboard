@@ -113,6 +113,16 @@ Beyond the expected commands, a few are Switchboard's own:
   `[slots] summarizer` binding lets one model own the summaries whichever
   rung is active, so a session riding a small local model still gets a good
   one.
+- `/budget 2.50` sets a dollar ceiling the session must stay under, and
+  it is enforced against a conservative worst case rather than the
+  average, because a turn affordable on average is not a turn under a
+  ceiling. Three places check it: the router refuses rungs whose upper
+  bound could cross it, the escalation policy cannot move the primary
+  onto one, and the loop stops before the call that would — so lowering
+  the ceiling mid-turn reins in a turn already running. It governs
+  dollars only: a local rung consumes nothing scarce, a plan rung
+  consumes quota, and neither is collapsed into the ceiling's units.
+  The setting persists, and the status bar shows spend against it.
 - `/think high` changes reasoning effort for the running model, this
   session, visible immediately in the status bar.
 - `/context` draws the window filling before it is fatal, and `/export`

@@ -179,6 +179,7 @@ func runTUI(
 	undoRec *checkpoint.Recorder,
 	agents []delegate.Agent,
 	agentNotes []string,
+	budget *budgetState,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -214,6 +215,7 @@ func runTUI(
 		undo:       undoRec,
 		agents:     agents,
 		agentNotes: agentNotes,
+		budget:     budget,
 	}
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()
@@ -1040,6 +1042,13 @@ func (m *tuiModel) refreshCost(state session.State) {
 		m.costLine = "free"
 	default:
 		m.costLine = catalog.Money(state.CostMicroUSD).String()
+		// The ceiling rides the readout so a governed session shows it at
+		// rest, the same principle as the tier: visible, not on demand.
+		if m.app.budget != nil {
+			if c := m.app.budget.get(); c > 0 {
+				m.costLine += " of " + c.String()
+			}
+		}
 	}
 }
 

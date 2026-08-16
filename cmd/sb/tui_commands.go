@@ -39,6 +39,7 @@ func commands() []commandItem {
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, desc: "tokens and cost for this session", busySafe: true, run: cmdCost},
+		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|auto|at]", desc: "summarize into a fresh context; auto-compacts near the window", run: cmdCompact},
 		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
 		{name: "init", desc: "write an AGENTS.md for this repository", run: cmdInit},
@@ -235,6 +236,65 @@ func cmdCost(m *tuiModel, _ string) tea.Cmd {
 	m.refreshCost(state)
 	m.addInfo(strings.Join(summaryLines(state, m.app.catalog, m.app.loop.Target), "\n"))
 	return nil
+}
+
+// cmdBudget shows or sets the session's dollar ceiling. Setting persists the
+// way /theme does. It stays busy-safe on purpose: the loop's gate reads the
+// shared state before every call, so lowering the ceiling mid-turn is how a
+// runaway turn gets stopped without waiting for it.
+func cmdBudget(m *tuiModel, args string) tea.Cmd {
+	args = strings.TrimSpace(args)
+	bs := m.app.budget
+	if bs == nil {
+		return noticeCmd("error", "no budget state is wired for this session")
+	}
+	switch args {
+	case "":
+		ceiling := bs.get()
+		if ceiling == 0 {
+			m.addInfo("  no ceiling set\n" +
+				"  /budget 2.50 caps what this session may spend: the router refuses rungs whose\n" +
+				"  upper bound could cross it, escalation cannot move onto one, and the loop stops\n" +
+				"  before the call that would. /budget off clears it. The setting persists.")
+			return nil
+		}
+		state := m.app.loop.Session.State()
+		spent := catalog.Money(state.CostMicroUSD)
+		var b strings.Builder
+		fmt.Fprintf(&b, "  ceiling  %s\n  spent    %s\n  left     %s", ceiling, spent, ceiling-spent)
+		info, _, ok := m.app.catalog.Lookup(m.app.loop.Target)
+		switch {
+		case !ok:
+			b.WriteString("\n  the active target has no catalog entry, so its calls are unpriced and pass the gate")
+		case info.Metering == catalog.Local:
+			b.WriteString("\n  the active rung runs locally; the ceiling governs the rungs that bill dollars")
+		case info.Metering == catalog.Plan:
+			b.WriteString("\n  the active rung bills quota, not dollars; the ceiling governs the rungs that bill dollars")
+		}
+		b.WriteString("\n  a delegate errand counts its own log and this one against the same ceiling while it runs")
+		m.addInfo(b.String())
+		return nil
+	case "off":
+		bs.set(0)
+		m.app.config.Budget = 0
+		m.refreshCost(m.app.loop.Session.State())
+		if err := m.app.config.Save(); err != nil {
+			return noticeCmd("warn", "ceiling cleared for this session, but not saved: "+err.Error())
+		}
+		return noticeCmd("", "ceiling cleared")
+	default:
+		var money catalog.Money
+		if err := money.UnmarshalText([]byte(args)); err != nil || money <= 0 {
+			return noticeCmd("error", "/budget takes a dollar amount like 2.50, or off")
+		}
+		bs.set(money)
+		m.app.config.Budget = money
+		m.refreshCost(m.app.loop.Session.State())
+		if err := m.app.config.Save(); err != nil {
+			return noticeCmd("warn", fmt.Sprintf("ceiling %s set for this session, but not saved: %v", money, err))
+		}
+		return noticeCmd("", fmt.Sprintf("ceiling %s set; the session stops before the call that would cross it", money))
+	}
 }
 
 func cmdSession(m *tuiModel, _ string) tea.Cmd {

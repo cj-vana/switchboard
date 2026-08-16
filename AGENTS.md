@@ -94,6 +94,16 @@ reported as one that was out-priced, and a ceiling is checked against the upper
 bound rather than the expectation: a turn affordable on average is not a turn
 under a ceiling.
 
+The /budget ceiling is enforced in three places and all three price the same
+way, through the §6.4 estimator's upper bound (`cmd/sb/budget.go`): the router
+excludes rungs it does not fit, `moveTo` refuses an escalation onto one, and
+`Loop.Budget` gates each call before it goes out (§15). The loop's hook takes
+a token count and returns an error; the ceiling itself lives with the surface,
+because the surface knows what the session has spent and what a dollar is. A
+ceiling governs dollars only — a local or plan rung passes the gate, because
+the three meterings are never collapsed — and an unpriced target passes too,
+with /budget saying so, since a ceiling cannot govern what has no price.
+
 **An outcome is worth less as evidence than it looks.** §8.4's labelling rules
 are in `internal/router` because each prevents a specific failure. A clean
 completion is weak evidence of sufficiency and none of necessity, which is the

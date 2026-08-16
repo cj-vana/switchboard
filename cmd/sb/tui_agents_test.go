@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -37,5 +38,59 @@ func TestAgentsCommandExplainsWhenEmpty(t *testing.T) {
 	joined := strings.Join(m.tr.flat, "\n")
 	if !strings.Contains(joined, ".switchboard/agents") {
 		t.Fatalf("/agents on an empty session should say where definitions live:\n%s", joined)
+	}
+}
+
+func TestBudgetCommandSetsShowsAndClears(t *testing.T) {
+	m := testModel(t)
+	m.app.budget = &budgetState{}
+	m.app.config.Path = filepath.Join(t.TempDir(), "config.toml")
+
+	m.ta.SetValue("/budget 2.50")
+	if cmd := m.submit(); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if got := m.app.budget.get(); got != 2_500_000 {
+		t.Fatalf("ceiling = %d micro-dollars, want 2.50 set", got)
+	}
+	if m.app.config.Budget != 2_500_000 {
+		t.Error("the ceiling did not persist to the config")
+	}
+
+	m.ta.SetValue("/budget")
+	m.submit()
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "ceiling") || !strings.Contains(joined, "$2.50") {
+		t.Errorf("/budget did not show the ceiling:\n%s", joined)
+	}
+
+	m.ta.SetValue("/budget off")
+	if cmd := m.submit(); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if got := m.app.budget.get(); got != 0 {
+		t.Errorf("ceiling = %d after /budget off, want cleared", got)
+	}
+}
+
+func TestBudgetCommandRejectsJunk(t *testing.T) {
+	m := testModel(t)
+	m.app.budget = &budgetState{}
+	m.ta.SetValue("/budget lots")
+	if cmd := m.submit(); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if got := m.app.budget.get(); got != 0 {
+		t.Errorf("junk input set a ceiling of %d", got)
+	}
+	last := m.tr.last()
+	if last == nil || last.kind != kindNotice || last.level != "error" {
+		t.Fatalf("junk input did not produce an error notice: %+v", last)
 	}
 }

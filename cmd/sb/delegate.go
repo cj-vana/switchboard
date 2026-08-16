@@ -63,6 +63,7 @@ func registerDelegate(
 	capability execution.Capability,
 	workspace string,
 	undoRec *checkpoint.Recorder,
+	budget *budgetState,
 ) ([]delegate.Agent, []string, error) {
 	if len(cfg.Tiers) == 0 {
 		return nil, nil, nil // no ladder, nothing to delegate on
@@ -130,7 +131,7 @@ func registerDelegate(
 			if named != nil {
 				system = append(system, provider.Text{Text: named.Prompt})
 			}
-			return &agent.Loop{
+			sub := &agent.Loop{
 				Provider:      client,
 				Target:        tier.Target,
 				Tools:         subRegistry,
@@ -143,7 +144,16 @@ func registerDelegate(
 				Observer:      obs,
 				MaxToolRounds: delegate.MaxRounds,
 				Hooks:         hookSet,
-			}, nil
+			}
+			// The errand runs under the same ceiling as the session that
+			// spawned it, counting what both logs have priced so far. A
+			// delegated task is not a way around /budget.
+			sub.Budget = budgetGate(budget, cat,
+				func() provider.RouteTarget { return sub.Target },
+				func() catalog.Money {
+					return catalog.Money(primary.Session.State().CostMicroUSD + sess.State().CostMicroUSD)
+				})
+			return sub, nil
 		},
 		Forward: subagentForward.get,
 	})

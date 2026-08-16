@@ -18,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/credential"
 	"github.com/cj-vana/switchboard/internal/provider"
 )
@@ -88,6 +89,12 @@ type Config struct {
 	// Empty means the built-in default; the TUI owns what names are valid.
 	Theme string
 
+	// Budget is a per-session dollar ceiling, persisted so /budget survives a
+	// restart. Zero means no ceiling. It governs what the catalog prices in
+	// dollars; a local rung consumes nothing scarce and a plan rung consumes
+	// quota, and neither is what this bounds (§4, §15).
+	Budget catalog.Money
+
 	Path string
 }
 
@@ -135,6 +142,13 @@ type file struct {
 	Updates   updatesEntry             `toml:"updates"`
 	Compact   compactEntry             `toml:"compact"`
 	UI        uiEntry                  `toml:"ui"`
+	Limits    limitsEntry              `toml:"limits"`
+}
+
+// limitsEntry holds the spending ceiling. Money's own text form is what the
+// file reads and writes, so the value is "2.50", not a count of micro-dollars.
+type limitsEntry struct {
+	Budget catalog.Money `toml:"budget,omitempty"`
 }
 
 // compactEntry holds the auto-compaction settings. Auto is a *bool so
@@ -302,6 +316,10 @@ func LoadFile(path string) (*Config, error) {
 		c.CompactAtPercent = f.Compact.AtPercent
 	}
 	c.Theme = f.UI.Theme
+	if f.Limits.Budget < 0 {
+		return nil, fmt.Errorf("%s: limits.budget %s is negative; a ceiling below zero rules out every turn", path, f.Limits.Budget)
+	}
+	c.Budget = f.Limits.Budget
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err
 	}

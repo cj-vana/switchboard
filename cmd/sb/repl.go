@@ -16,6 +16,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/prefix"
 	"github.com/cj-vana/switchboard/internal/provider"
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
@@ -39,6 +40,10 @@ type repl struct {
 	route   *route.Decision
 	sticky  *route.Sticky
 	watcher *watcher
+
+	// budget is the shared ceiling the loop's gate reads; the REPL checks it
+	// before an escalation the same way the TUI does.
+	budget *budgetState
 }
 
 // moveTo rebinds the loop after the escalation policy changed the primary.
@@ -51,6 +56,19 @@ func (r *repl) moveTo(rank int, why string) {
 		return
 	}
 	tier := r.config.Tiers[rank]
+
+	// Same refusal as the TUI's: an escalation never overrides the ceiling.
+	if r.budget != nil {
+		state := r.loop.Session.State()
+		tokens := prefix.RequestTokens(provider.Request{
+			System: r.loop.System, Tools: r.loop.Tools.Definitions(), Messages: state.Messages,
+		})
+		if reason, blocked := budgetBlocksMove(r.budget, r.catalog, tier,
+			catalog.Money(state.CostMicroUSD), tokens); blocked {
+			r.out.Notice("warn", "staying on "+r.tier.ID+": "+reason)
+			return
+		}
+	}
 
 	probed, client, err := r.providers.probeTier(context.Background(), tier)
 	if err != nil {

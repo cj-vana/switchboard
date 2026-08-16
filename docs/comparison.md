@@ -36,7 +36,12 @@ dollars, and the catalog never collapses them into "free"
 down rather than guessed (`docs/estimator.md`), and the cost model widens
 its bound by that measurement. The demonstration is one line in every
 session footer: a local run says "runs locally, so there is nothing to
-bill", not "$0.00".
+bill", not "$0.00". On top of that sits `/budget`: a hard dollar ceiling
+checked against a conservative preflight bound in three places — the
+router refuses rungs whose upper bound could cross it, the escalation
+policy cannot move onto one, and the loop stops before the call that
+would (`cmd/sb/budget.go`, §15). The neighbors report spend after the
+fact; none enforces a ceiling the model-selection machinery itself obeys.
 
 **A falsification instrument, with its runs in the tree.** `internal/eval`
 is a harness the routing thesis has to survive, not a benchmark to pass;

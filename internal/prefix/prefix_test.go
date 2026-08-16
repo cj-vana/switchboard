@@ -296,3 +296,20 @@ func TestEmptyLayoutProducesAUsableRequest(t *testing.T) {
 		t.Errorf("system = %+v", req.System)
 	}
 }
+
+func TestRequestTokensCountsEveryZone(t *testing.T) {
+	req := provider.Request{
+		System: []provider.Block{provider.Text{Text: strings.Repeat("s", 40)}},
+		Tools: []provider.ToolDefinition{
+			{Name: "read", Description: strings.Repeat("d", 36), Schema: []byte("{}")},
+		},
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: []provider.Block{provider.Text{Text: strings.Repeat("u", 80)}}},
+		},
+	}
+	// Characters over four: 10 for the system block, 10 for the tool
+	// (4 + 36 + 2 over four), 20 for the message.
+	if got := RequestTokens(req); got != 40 {
+		t.Errorf("RequestTokens = %d, want 40", got)
+	}
+}

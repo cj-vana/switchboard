@@ -18,6 +18,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/delegate"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/prefix"
 	"github.com/cj-vana/switchboard/internal/provider"
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
@@ -59,6 +60,10 @@ type tuiApp struct {
 	// agentNotes what their loading had to say; both for /agents.
 	agents     []delegate.Agent
 	agentNotes []string
+
+	// budget is the shared dollar ceiling, for /budget and the escalation
+	// guard; the loop reads the same state before every call.
+	budget *budgetState
 
 	// advisor, when non-nil, wraps the watcher as the loop's observer and
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.
@@ -130,6 +135,20 @@ func (a *tuiApp) rankOf(tier config.Tier) int {
 func (a *tuiApp) moveTo(rank int, why string) {
 	if rank < 0 || rank >= len(a.config.Tiers) {
 		return
+	}
+	// A quality trigger may override a cost preference and never a hard
+	// ceiling (§8.3): a destination whose upper bound does not fit is
+	// refused with the reason, and the primary stays put.
+	if a.budget != nil {
+		state := a.loop.Session.State()
+		tokens := prefix.RequestTokens(provider.Request{
+			System: a.loop.System, Tools: a.loop.Tools.Definitions(), Messages: state.Messages,
+		})
+		if reason, blocked := budgetBlocksMove(a.budget, a.catalog, a.config.Tiers[rank],
+			catalog.Money(state.CostMicroUSD), tokens); blocked {
+			a.p.Send(noticeMsg{level: "warn", text: "staying on " + a.tier.ID + ": " + reason})
+			return
+		}
 	}
 	probed, client, err := a.providers.probeTier(context.Background(), a.config.Tiers[rank])
 	if err != nil {

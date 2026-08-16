@@ -405,6 +405,27 @@ func (l *Layout) HistoryBlocks() int {
 	return n
 }
 
+// RequestTokens estimates what a whole request costs a target to read:
+// system, tool definitions, and every message. Characters over four, the
+// same crude estimate everything else here uses, with the same measured
+// bias (docs/estimator.md): a floor, never an overcount. The budget check
+// prices its preflight bound from this, which is why it is exported.
+func RequestTokens(req provider.Request) int {
+	total := 0
+	for _, b := range req.System {
+		total += blockTokens(b)
+	}
+	for _, t := range req.Tools {
+		total += (len(t.Name) + len(t.Description) + len(t.Schema)) / 4
+	}
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			total += blockTokens(b)
+		}
+	}
+	return total
+}
+
 func blockTokens(b provider.Block) int {
 	switch v := b.(type) {
 	case provider.Text:

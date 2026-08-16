@@ -566,3 +566,32 @@ func TestInjectLandsBetweenRoundsOnly(t *testing.T) {
 		t.Fatal("the opening round's shape changed")
 	}
 }
+
+// TestBudgetGateStopsBeforeTheCall pins the §15 seam: the refusal happens
+// before the provider is asked, so nothing is billed and the session holds
+// only the user's message.
+func TestBudgetGateStopsBeforeTheCall(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("never sent"))
+	asked := 0
+	h.loop.Budget = func(promptTokens int) error {
+		asked++
+		if promptTokens <= 0 {
+			t.Errorf("promptTokens = %d, want the request sized before the gate answers", promptTokens)
+		}
+		return errors.New("the ceiling would not survive this call")
+	}
+
+	err := h.loop.Turn(context.Background(), "do something expensive")
+	if err == nil || !strings.Contains(err.Error(), "ceiling") {
+		t.Fatalf("Turn err = %v, want the gate's refusal", err)
+	}
+	if asked != 1 {
+		t.Errorf("gate consulted %d times, want once", asked)
+	}
+	if msgs := h.messages(); len(msgs) != 1 {
+		t.Errorf("session holds %d messages, want the user's only: no call went out", len(msgs))
+	}
+	if usage := h.sess.State().Usage; usage.InputTokens != 0 || usage.OutputTokens != 0 {
+		t.Errorf("usage = %+v, want nothing billed", usage)
+	}
+}

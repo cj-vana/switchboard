@@ -189,22 +189,28 @@ func run() error {
 	cache := cacheFor(tier.Target, cat)
 
 	loop := &agent.Loop{
-		Provider: client,
-		Target:   tier.Target,
-		Tools:    registry,
-		Perms:    permission.NewEngine(mode, capability, mcpRules...),
-		Session:  sess,
-		Catalog:  cat,
-		Cache:    cache,
+		Provider:    client,
+		Target:      tier.Target,
+		Tools:       registry,
+		Perms:       permission.NewEngine(mode, capability, mcpRules...),
+		Session:     sess,
+		Catalog:     cat,
+		Cache:       cache,
 		System:      agent.SystemPrompt(workspace, mode, capability),
 		Hooks:       hookSet,
 		Checkpoints: undoRec,
 	}
 
+	// The ceiling gates the loop before each call, whatever surface drives
+	// it; /budget adjusts the shared state mid-session.
+	budget := &budgetState{}
+	budget.set(cfg.Budget)
+	loop.Budget = primaryGate(budget, loop, cat)
+
 	// The delegate tool joins after the loop exists because its subagents
 	// share the loop's permission engine and asker; it still lands before the
 	// first request, which is what the frozen zone requires.
-	agents, agentNotes, err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec)
+	agents, agentNotes, err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec, budget)
 	if err != nil {
 		mcpEnv.add(mcpNote{"warn", "delegate unavailable: " + err.Error()})
 	}
@@ -236,7 +242,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget)
 	}
 
 	out := newRenderer(os.Stdout)
@@ -255,6 +261,7 @@ func run() error {
 		catalog:    cat,
 		tier:       tier,
 		providers:  reg,
+		budget:     budget,
 	}
 	r.route = routeDec
 	r.sticky = sticky
@@ -371,6 +378,9 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *c
 		Prompt:       opts.prompt,
 		Candidates:   candidatesFor(cfg, cat, nil, 0),
 		Requirements: route.Requirements{NeedsTools: true},
+		// The session opens with nothing spent, so the whole ceiling is what
+		// a rung's upper bound is checked against (§15).
+		Budgets: route.Budgets{MaxCost: cfg.Budget},
 	})
 	if err != nil {
 		return config.Tier{}, nil, err

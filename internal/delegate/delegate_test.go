@@ -299,5 +299,5 @@ func (r *recorder) ToolStart(name string, _ permission.Request) {
 func (r *recorder) ToolEnd(name string, _ tools.Result, _ time.Duration) {
 	r.ends = append(r.ends, name)
 }
-func (r *recorder) Notice(_, text string) { r.notices = append(r.notices, text) }
+func (r *recorder) Notice(_, text string)   { r.notices = append(r.notices, text) }
 func (r *recorder) TurnUsage(session.Usage) {}

@@ -235,3 +235,25 @@ func TestUnrecognizedProviderKeyIsRejected(t *testing.T) {
 		t.Error("a misspelled provider key must be an error, not silently ignored")
 	}
 }
+
+func TestBudgetRoundTripsAndRejectsNegative(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := &Config{Path: path, Budget: 2_500_000}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Budget != 2_500_000 {
+		t.Errorf("Budget = %d, want the saved ceiling back", loaded.Budget)
+	}
+
+	if err := os.WriteFile(path, []byte("[limits]\nbudget = \"-1.00\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(path); err == nil {
+		t.Error("a negative ceiling must refuse to load, not rule out every turn quietly")
+	}
+}

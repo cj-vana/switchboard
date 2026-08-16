@@ -171,6 +171,15 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
+	if c.Budget > 0 {
+		if err := encode(&buf, struct {
+			Limits limitsEntry `toml:"limits"`
+		}{limitsEntry{Budget: c.Budget}}); err != nil {
+			return nil, err
+		}
+		buf.WriteString("\n")
+	}
+
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 

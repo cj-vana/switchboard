@@ -18,6 +18,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/hooks"
 	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/prefix"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
 	"github.com/cj-vana/switchboard/internal/tools"
@@ -79,6 +80,14 @@ type Loop struct {
 	// captures into it before each mutation. The interface keeps the
 	// recorder's package out of the loop's imports.
 	Checkpoints interface{ Begin(label string) }
+
+	// Budget, when non-nil, is asked before each model call whether the call
+	// may go out, given the request's estimated token count. An error ends
+	// the turn right there — before the call, which is what §15 means by a
+	// preflight bound rather than a spending brake — and everything earlier
+	// rounds earned is already recorded. The ceiling itself lives with the
+	// surface, which knows what the session has spent and what a dollar is.
+	Budget func(promptTokens int) error
 }
 
 // price attaches what the catalog says this call cost, along with the revision
@@ -209,6 +218,11 @@ func (l *Loop) callModel(ctx context.Context) (provider.Message, provider.StopRe
 		System:   l.System,
 		Tools:    l.Tools.Definitions(),
 		Messages: l.Session.State().Messages,
+	}
+	if l.Budget != nil {
+		if err := l.Budget(prefix.RequestTokens(req)); err != nil {
+			return provider.Message{}, "", provider.Usage{}, 0, err
+		}
 	}
 	req.CachePlan = l.Cache.plan(req.System, req.Tools, req.Messages)
 
