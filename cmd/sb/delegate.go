@@ -112,6 +112,13 @@ func registerDelegate(
 			if err != nil {
 				return nil, err
 			}
+			// A subagent searches more than anything else, so it gets the
+			// structural tool too. Before Restrict on purpose: a named
+			// agent's grant validates against the core suite, so a
+			// restricted agent loses astgrep with everything else unnamed,
+			// which is right — a grant written on one machine must not
+			// depend on another machine's binaries.
+			addStructuralSearch(subRegistry)
 			// A named agent's grant narrows the suite before the first
 			// request; the grant was validated at load, so an error here is
 			// wiring, not a typo.

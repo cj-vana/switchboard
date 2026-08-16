@@ -187,6 +187,10 @@ func run() error {
 	undoRec := checkpoint.NewRecorder()
 	registry.SetCheckpoints(undoRec)
 
+	// Structural search joins the suite only where the machine has the
+	// binary: looked up once, so the frozen zone never changes mid-session.
+	addStructuralSearch(registry)
+
 	// The trust store is opened before MCP assembly because it is what
 	// decides whether a repository's declared servers may start.
 	trustStore, trustErr := trust.Open()

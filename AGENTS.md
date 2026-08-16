@@ -178,6 +178,24 @@ guarantee, not the comment above the code.
 unverified, automatic execution is disabled rather than approximated by
 prompting (design principle 4, §11).
 
+The same rule prices a first-party subprocess tool. `astgrep` wraps the
+user's own ast-grep binary, and its permission effect follows confinement:
+inside a demonstrated sandbox the call is read-effect and runs wrapped —
+the confinement consulted is the confinement applied — while without one it
+is execute-effect and approved per call. It is never read-effect unwrapped.
+The binary is looked up once at session assembly (`cmd/sb/astgrep.go`), so
+the frozen zone never changes shape mid-session, and the tool is absent
+rather than broken on a machine without it. `CoreNames()` deliberately
+excludes it: a named agent's tool grant must not depend on another
+machine's binaries, so a restricted agent loses astgrep with everything
+else it did not name, while unrestricted subagents get it. The JSON it
+parses was captured against ast-grep 0.45.1, exit 1 is the no-match
+convention rather than a failure, and the runner's combined output means
+the binary's warnings ride beside the JSON line — the parser separates
+them and hands the warnings to the model on a miss, because "your pattern
+did not parse cleanly" is the difference between tightening a pattern and
+abandoning the tool.
+
 **An external tool is never inside the sandbox.** An MCP server is a process
 this program started un-confined, acting wherever it acts, so a bridged call
 carries `permission.EffectExternal`: no mode auto-allows it, bypass included,

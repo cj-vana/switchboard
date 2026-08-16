@@ -176,7 +176,20 @@ grep, and a task list the transcript renders live as the model works
 through it. A repeated read of an unchanged file answers with a short
 marker rather than the bytes, because the content already sits in the
 context — token reduction that never moves a block the cache is holding.
-Everything else arrives over MCP. Declare servers in
+Everything else arrives over MCP.
+
+One tool joins the suite conditionally. With [ast-grep](https://ast-grep.github.io)
+installed (`brew install ast-grep`), an `astgrep` tool searches by syntax
+tree rather than text: `fmt.Errorf($MSG, $$$ARGS)` finds every such call
+whatever its spacing, and comments that merely mention the words never
+match — the token waste of text-grep false positives, gone. The binary is
+found once at session start, the tool is simply absent without it, and
+how it runs follows the sandbox's own rule: inside demonstrated
+confinement it carries the read effect and runs wrapped; without
+confinement every call is approved individually, because a subprocess the
+sandbox never held is one you vouch for per call. Semantic search over an
+external index is deliberately not built in — a service that receives
+your code is a destination you configure, which is what MCP is for. Declare servers in
 `~/.switchboard/mcp.toml`:
 
 ```toml
