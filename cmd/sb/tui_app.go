@@ -18,6 +18,7 @@ import (
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
 	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/trust"
 )
 
 // tuiApp owns the session mechanics the TUI drives: the loop, the ladder, the
@@ -38,6 +39,11 @@ type tuiApp struct {
 	route   *route.Decision
 	sticky  *route.Sticky
 	watcher *watcher
+
+	// trust is the standing record of which checkouts may run what they
+	// declare. Nil when the store could not open; trustErr says why.
+	trust    *trust.Store
+	trustErr string
 
 	// advisor, when non-nil, wraps the watcher as the loop's observer and
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.

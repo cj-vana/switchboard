@@ -24,6 +24,7 @@ import (
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
 	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/trust"
 )
 
 // Messages flowing from the loop goroutine (and async commands) into the
@@ -200,6 +201,11 @@ func runTUI(
 		route:      routeDec,
 		sticky:     sticky,
 		obs:        obs,
+	}
+	if ts, err := trust.Open(); err != nil {
+		app.trustErr = err.Error()
+	} else {
+		app.trust = ts
 	}
 
 	m := newTUIModel(app, th, md, ta)

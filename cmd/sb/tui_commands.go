@@ -44,6 +44,7 @@ func commands() []commandItem {
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},
 		{name: "session", desc: "session id, target, and message count", busySafe: true, run: cmdSession},
 		{name: "sandbox", desc: "what isolation this host provides", busySafe: true, run: cmdSandbox},
+		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
@@ -246,6 +247,46 @@ func cmdSandbox(m *tuiModel, _ string) tea.Cmd {
 
 func cmdDiff(m *tuiModel, _ string) tea.Cmd {
 	return openDiff(m.app.workspace, m.th.dark)
+}
+
+// cmdTrust shows and edits the standing grant that lets a checkout start the
+// processes it declares. The wording stays concrete about what a grant
+// enables, because "trust this workspace?" answered without knowing the
+// stakes is the permission-prompt-as-sandbox mistake in another costume.
+func cmdTrust(m *tuiModel, args string) tea.Cmd {
+	s := m.app.trust
+	if s == nil {
+		return noticeCmd("error", "the trust store is unavailable: "+m.app.trustErr)
+	}
+	ws := m.app.workspace
+	switch strings.TrimSpace(args) {
+	case "":
+		state := "not trusted: MCP servers and hooks declared in this repository's .switchboard/ stay off"
+		if s.Trusted(ws) {
+			state = "trusted: MCP servers and hooks declared in this repository's .switchboard/ may run"
+		}
+		m.addInfo(fmt.Sprintf("  %s\n  %s\n  /trust grant enables, /trust revoke withdraws; ~/.switchboard config always runs", ws, state))
+	case "grant":
+		if err := s.Grant(ws); err != nil {
+			return noticeCmd("error", "grant failed: "+err.Error())
+		}
+		m.addInfo("  workspace trusted; repository-declared MCP servers and hooks start with the next session (/clear)")
+	case "revoke":
+		if err := s.Revoke(ws); err != nil {
+			return noticeCmd("error", "revoke failed: "+err.Error())
+		}
+		m.addInfo("  trust withdrawn; repository-declared MCP servers and hooks stay off from the next session")
+	case "list":
+		granted := s.Granted()
+		if len(granted) == 0 {
+			m.addInfo("  no workspaces are trusted")
+			break
+		}
+		m.addInfo("  " + strings.Join(granted, "\n  "))
+	default:
+		return noticeCmd("error", "/trust takes grant, revoke, or list")
+	}
+	return nil
 }
 
 func cmdCopy(m *tuiModel, args string) tea.Cmd {
