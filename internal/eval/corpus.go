@@ -234,7 +234,7 @@ var specs = []spec{
 		id:     "detector-signature",
 		prompt: "The same test failure is being reported as new on every retry. Fix it so the tests pass.",
 		pkg:    "./internal/router/",
-		breaks: []breakage{{"internal/router/detect.go", "\t\tnormalized := strings.Map(func(r rune) rune {\n\t\t\tif r >= '0' && r <= '9' {\n\t\t\t\treturn -1\n\t\t\t}\n\t\t\treturn r\n\t\t}, strings.TrimSpace(line))", "\t\tnormalized := output"}},
+		breaks: []breakage{{"internal/router/detect.go", "\tnormalized := strings.Map(func(r rune) rune {\n\t\tif r >= '0' && r <= '9' {\n\t\t\treturn -1\n\t\t}\n\t\treturn r\n\t}, strings.TrimSpace(line))", "\tnormalized := line"}},
 	},
 }
 
