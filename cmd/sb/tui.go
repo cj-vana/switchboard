@@ -216,6 +216,9 @@ func runTUI(
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	obs.p = p
 	app.p = p
+	// Subagent rails render through the raw observer, not the watcher:
+	// a delegate's stumbles must never escalate the primary.
+	subagentForward.set(obs)
 	app.watcher = newWatcher(obs, sticky, len(cfg.Tiers)-1, app.moveTo)
 	loop.Observer = app.watcher
 	loop.Asker = &tuiAsker{p: p}
@@ -955,24 +958,35 @@ func (m *tuiModel) onToolStart(msg toolStartMsg) {
 }
 
 func (m *tuiModel) onToolEnd(msg toolEndMsg) {
-	last := m.tr.last()
-	if last == nil || last.kind != kindTool || last.tool.done {
+	// Pair by name, newest first: a delegate's sub-tool rails land between
+	// the delegate's own start and end, so the entry finishing is not
+	// necessarily the last one.
+	idx := -1
+	for i := len(m.tr.entries) - 1; i >= 0; i-- {
+		e := m.tr.entries[i]
+		if e.kind == kindTool && !e.tool.done && e.tool.name == msg.name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
 		return
 	}
+	e := m.tr.entries[idx]
 	// A finished todo call renders as the list itself rather than a verdict
 	// line: the list is the result. A failed call keeps the rail so the
 	// error shows the way every other tool error does.
 	if msg.name == "todo" && !msg.res.IsError {
-		last.kind = kindTodo
-		last.todos = m.app.loop.Tools.Todos()
-		m.tr.invalidate(len(m.tr.entries) - 1)
+		e.kind = kindTodo
+		e.todos = m.app.loop.Tools.Todos()
+		m.tr.invalidate(idx)
 		return
 	}
-	last.tool.done = true
-	last.tool.failed = msg.res.IsError
-	last.tool.took = msg.took
-	last.tool.detail = msg.res.Content
-	m.tr.invalidate(len(m.tr.entries) - 1)
+	e.tool.done = true
+	e.tool.failed = msg.res.IsError
+	e.tool.took = msg.took
+	e.tool.detail = msg.res.Content
+	m.tr.invalidate(idx)
 }
 
 func (m *tuiModel) addUser(text string) {

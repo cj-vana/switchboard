@@ -192,6 +192,13 @@ func run() error {
 		Hooks:    hookSet,
 	}
 
+	// The delegate tool joins after the loop exists because its subagents
+	// share the loop's permission engine and asker; it still lands before the
+	// first request, which is what the frozen zone requires.
+	if err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace); err != nil {
+		mcpEnv.notes = append(mcpEnv.notes, mcpNote{"warn", "delegate unavailable: " + err.Error()})
+	}
+
 	// The sticky primary starts wherever routing landed, and the watcher feeds
 	// it what happens inside a turn. Without that connection the escalation
 	// policy is built and never consulted.
@@ -223,6 +230,7 @@ func run() error {
 	in := bufio.NewReader(os.Stdin)
 	loop.Asker = &terminalAsker{in: in, out: out}
 	loop.Observer = out
+	subagentForward.set(out)
 
 	r := &repl{
 		loop:       loop,
