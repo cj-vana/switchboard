@@ -169,6 +169,23 @@ Repository instructions in `AGENTS.md` or `CLAUDE.md` are read into the
 system prompt on every session, and `/init` writes one for a repo that
 lacks it.
 
+## Scripting
+
+`sb -p "prompt"` runs one turn and exits, no terminal required. Piped
+stdin is content: `git diff | sb -p "review this"` attaches what arrived
+the same way an `@path` mention attaches a file. Because the pipe was
+spent on content, nothing can be approved mid-run; whatever needs
+approval is refused with its reason carried to the model, and widening
+`-mode` is the deliberate way to let a scripted run do more.
+
+`-output json` prints exactly one machine-readable line on stdout while
+the transcript renders on stderr: the result, the outcome, the tier and
+target the run ended on, tokens, and a cost object that keeps the three
+meterings apart, so a script never mistakes a local run for a free
+dollar figure. `sb -sessions` lists what a workspace has recorded, and
+`-resume` or `-continue` picks a session back up where a script, or a
+crash, left it.
+
 ## Extending
 
 The built-in suite is small on purpose: read, write, edit, exec, glob,

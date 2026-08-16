@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,7 @@ type options struct {
 	think     string
 	workspace string
 	prompt    string
+	output    string
 	resume    string
 	cont      bool
 	list      bool
@@ -97,7 +99,8 @@ func run() error {
 	flag.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, or bypass")
 	flag.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")
 	flag.StringVar(&opts.workspace, "workspace", "", "workspace root (default: current directory)")
-	flag.StringVar(&opts.prompt, "p", "", "run a single prompt and exit")
+	flag.StringVar(&opts.prompt, "p", "", "run a single prompt and exit; piped stdin is attached to it")
+	flag.StringVar(&opts.output, "output", "text", "what a -p run prints: text, or json for one machine-readable result line")
 	flag.StringVar(&opts.resume, "resume", "", "resume a session by id")
 	flag.BoolVar(&opts.cont, "continue", false, "resume the most recent session for this workspace")
 	flag.BoolVar(&opts.list, "sessions", false, "list sessions for this workspace and exit")
@@ -113,6 +116,16 @@ func run() error {
 		}
 		fmt.Println("sb " + v)
 		return nil
+	}
+
+	switch opts.output {
+	case "", "text":
+	case "json":
+		if opts.prompt == "" {
+			return errors.New("-output json reports one completed prompt, so it needs -p")
+		}
+	default:
+		return fmt.Errorf("unknown output format %q: text or json", opts.output)
 	}
 
 	ctx := context.Background()
@@ -284,9 +297,31 @@ func run() error {
 		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget)
 	}
 
-	out := newRenderer(os.Stdout)
+	// With -output json, stdout carries exactly one JSON line and nothing
+	// else; the transcript still renders, on stderr, so a person watching a
+	// scripted run sees the work happen.
+	outDest := os.Stdout
+	if opts.output == "json" {
+		outDest = os.Stderr
+	}
+	out := newRenderer(outDest)
 	in := bufio.NewReader(os.Stdin)
-	loop.Asker = &terminalAsker{in: in, out: out}
+
+	// Piped stdin under -p is content, not a control channel: it rides into
+	// the prompt as an attachment, and the asker is left unset so anything
+	// needing approval is refused with a reason rather than answered by
+	// whatever bytes happened to be next in the pipe. Widening -mode is the
+	// deliberate way to let a scripted run do more.
+	piped := opts.prompt != "" && !isTerminal(os.Stdin)
+	if piped {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading piped stdin: %w", err)
+		}
+		opts.prompt = attachPipedInput(opts.prompt, data)
+	} else {
+		loop.Asker = &terminalAsker{in: in, out: out}
+	}
 	loop.Observer = out
 	subagentForward.set(out)
 
@@ -317,7 +352,14 @@ func run() error {
 	}
 
 	if opts.prompt != "" {
-		return r.once(ctx, opts.prompt)
+		err := r.once(ctx, opts.prompt)
+		if opts.output == "json" {
+			rep := buildHeadlessReport(loop.Session.State(), cat, r.tier, err)
+			if wErr := writeHeadlessReport(os.Stdout, rep); wErr != nil {
+				return wErr
+			}
+		}
+		return err
 	}
 	return r.interactive(ctx)
 }
