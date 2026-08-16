@@ -14,6 +14,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/mcp"
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/session"
 )
 
 // commandItem is one slash command. busySafe commands may run while a turn is
@@ -150,10 +151,22 @@ func cmdResume(m *tuiModel, args string) tea.Cmd {
 	}
 	items := make([]pickerItem, 0, len(infos))
 	for _, info := range infos {
+		// The label is the first words the user sent, because a menu of
+		// timestamped ids asks the user to remember which opaque string held
+		// which conversation. ReadOpening reads a few records from the head of
+		// each log, so labelling the list stays cheap however long the
+		// sessions grew; a log with no user turn yet, or one that cannot be
+		// read, falls back to the id it always showed.
+		label := info.ID
+		desc := info.Modified.Local().Format("2006-01-02 15:04:05")
+		if opening, err := session.ReadOpening(info.Path); err == nil && opening != "" {
+			label = truncate(strings.Join(strings.Fields(opening), " "), 56)
+			desc = info.ID + "  " + desc
+		}
 		items = append(items, pickerItem{
 			id:      info.ID,
-			label:   info.ID,
-			desc:    info.Modified.Local().Format("2006-01-02 15:04:05"),
+			label:   label,
+			desc:    desc,
 			current: m.app.loop.Session != nil && info.ID == m.app.loop.Session.ID(),
 		})
 	}
