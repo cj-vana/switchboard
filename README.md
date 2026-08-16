@@ -129,6 +129,66 @@ Repository instructions in `AGENTS.md` or `CLAUDE.md` are read into the
 system prompt on every session, and `/init` writes one for a repo that
 lacks it.
 
+## Extending
+
+The built-in suite is small on purpose: read, write, edit, exec, glob,
+grep, and a task list the transcript renders live as the model works
+through it. Everything else arrives over MCP. Declare servers in
+`~/.switchboard/mcp.toml`:
+
+```toml
+[mcp.github]
+command = "github-mcp-server"
+args = ["stdio"]
+
+[mcp.docs]
+url = "https://example.com/mcp"
+```
+
+A `command` server runs as a child process speaking stdio; a `url`
+server is reached over Streamable HTTP. `/mcp` shows what connected,
+what each server brought, and what has died since. An MCP tool acts
+outside the workspace and outside the sandbox, so every call asks
+first, whatever the mode; `allow = ["tool_name"]` in a server's block
+names the tools you have decided need no prompt. A spawned server
+inherits your environment minus the model keys switchboard itself
+holds: those were entrusted to the tool, not to whatever a config file
+asked it to start.
+
+Hooks run your own commands at the seams of a tool call, from
+`~/.switchboard/hooks.toml`:
+
+```toml
+[[hooks.pre_tool]]
+tools = ["exec"]
+run = "./scripts/audit.sh"
+
+[[hooks.post_tool]]
+tools = ["write", "edit"]
+run = "gofmt -w \"$SB_HOOK_PATH\""
+```
+
+A pre_tool hook that exits non-zero blocks the call, and its output is
+the reason the model reads; a hook that times out blocks too, because a
+gate that fails open the moment it hangs is not a gate. A post_tool
+hook's output rides back on the tool result, so a formatter that
+rewrote the file says so to the model that wrote it. Each hook gets the
+call as JSON on stdin and as `SB_HOOK_*` variables.
+
+A repository may declare both files in its own `.switchboard/`
+directory, and they stay off until you say otherwise: cloning a
+repository is not permission to start what it declares. `/trust grant`
+extends that permission to one checkout, `/trust revoke` withdraws it,
+and `~/.switchboard`'s files always run because they are you speaking.
+
+The model can also delegate. The `delegate` tool hands a self-contained
+task to a subagent with a fresh context, on a ladder rung the model
+names, and the default is the cheap rung: a search, a survey, or a
+mechanical edit does not need the primary's model, and running it low
+with a clean context is the ladder's whole argument applied twice.
+Subagents get the core tools, cannot delegate further, and every call
+they make passes the same permission engine as the primary's.
+
 ## Credentials
 
 Local targets need none. For everything else, the resolution order is: an

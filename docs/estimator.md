@@ -85,6 +85,13 @@ If the estimator, the system prompt, or the tool schemas change enough to move
 the ratio, that test fails and this document is what has to be updated. The
 number and the code cannot drift apart quietly.
 
+One such change is already known: the tool suite grew after the 2026-08-13
+measurement (glob, grep, todo, delegate, and whatever MCP servers a session
+carries), which adds schema bytes to every request. Schema text is counted by
+the same characters-over-four rule as everything else, so the ratio is
+expected to hold inside the band; the next `SB_LIVE=1` run is what says so,
+and if it does not, this table gets re-measured rather than the band widened.
+
 ## Where the error is now used
 
 `internal/costmodel` widens its upper bound by this measurement rather than by a

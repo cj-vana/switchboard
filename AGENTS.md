@@ -17,6 +17,15 @@ point into it, and this file restates the constraints that bind the code.
     internal/advisor/    §9.2 run continuously: a second model that watches
                          the loop's observer stream and injects advice at
                          round boundaries; advice, never edits
+    internal/mcp/        MCP client over stdio and Streamable HTTP, and the
+                         bridge that puts each discovered tool in the registry
+                         as mcp__server__tool
+    internal/hooks/      user commands at the seams of a tool call; a pre_tool
+                         hook blocks on non-zero exit and on timeout
+    internal/delegate/   the delegate tool: one level of subagent on a chosen
+                         ladder rung, sharing the permission engine
+    internal/trust/      per-workspace grants that gate repository-declared
+                         MCP servers and hooks
     internal/config/     the ladder and settings; the TUI owns the file and
                          Save regenerates it, so nothing may depend on
                          comments in config.toml surviving
@@ -144,6 +153,45 @@ guarantee, not the comment above the code.
 unverified, automatic execution is disabled rather than approximated by
 prompting (design principle 4, §11).
 
+**An external tool is never inside the sandbox.** An MCP server is a process
+this program started un-confined, acting wherever it acts, so a bridged call
+carries `permission.EffectExternal`: no mode auto-allows it, bypass included,
+because bypass suppresses prompts inside a granted sandbox and an external
+tool was never inside one. Only an explicit rule (the server's `allow` list)
+or a remembered answer lets one run without asking, and the remembered answer
+covers the tool, not one byte-exact invocation — that is what the display-only
+`Request.Detail` field exists for. A spawned server inherits the parent
+environment minus the model credentials; the test that fails if one leaks is
+in `internal/mcp/stdio_test.go`.
+
+**A repository's configuration may speak; only a trusted checkout executes.**
+`.switchboard/mcp.toml` and `.switchboard/hooks.toml` in a repository are read
+only after the user grants trust to that resolved path (`/trust grant`,
+`internal/trust`). The same files under ~/.switchboard always run, because
+that is the user speaking. Do not add a repository-provided input that starts
+a process without routing it through this gate.
+
+**MCP discovery is once, at session assembly.** Tool definitions sit in the
+frozen zone (§6.1), so a server that changes its tool list mid-session is
+noted and deliberately not followed; the next session lists again. Bridged
+names are sorted before registration so the frozen-zone ordering never
+depends on which server answered first.
+
+**A hook that hangs has answered.** A pre_tool hook blocks the call on
+non-zero exit and on timeout both, because a gate that fails open the moment
+it hangs is not a gate. Hooks run unconfined and unprompted — they are the
+user's standing policy — which is exactly why the repository's hooks file
+sits behind the trust grant.
+
+**Delegate depth is one.** A subagent's registry has no delegate tool; an
+agent that can recurse is an agent whose cost has no ceiling. Subagents share
+the primary's permission engine and asker, their rails render through the raw
+observer rather than the watcher so a subagent's stumbles never escalate the
+primary, and their sessions live in their own store so /resume never offers a
+context that was never the user's. §19.2 phase 6 expects delegation evaluated
+against sticky single-primary baselines; that eval has not run, and the tool's
+own description does not claim it has.
+
 There is deliberately no exported boolean for this. `execution.Capability`
 carries a `*Confinement`, which is produced only by a self-test that passed on
 this machine and is also the thing that wraps the command. Do not add a
@@ -170,8 +218,12 @@ once per completed block through glamour, completed entries cache per width so
 repaints never re-render markdown, and diffs highlight once at load. Keep it
 that way.
 
-Deliberately absent until their phases: MCP, hooks, and the
-`glob`/`grep`/`todo`/`delegate` tools.
+Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
+hooks, the workspace-trust flow — along with the `glob`/`grep`/`todo` tools
+and phase 6's `delegate`, each under the constraints above. Deliberately
+absent until their phases: named subagent definitions, the learned router
+(phase 7 gates it on beating the heuristic), and everything in the phase 8
+platform program.
 
 ## Working here
 
