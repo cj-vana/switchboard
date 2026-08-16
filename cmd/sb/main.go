@@ -154,7 +154,7 @@ func run() error {
 	}
 
 	var chosen route.Decision
-	sess, tier, client, resumed, err := openSession(ctx, store, reg, cfg, cat, workspace, &opts, &chosen)
+	sess, tier, client, resumed, fallbackNote, err := openSession(ctx, store, reg, cfg, cat, workspace, &opts, &chosen)
 	if err != nil {
 		return err
 	}
@@ -181,6 +181,16 @@ func run() error {
 	hookSet, hookNotes := loadHooks(workspace, trustStore)
 	for _, n := range hookNotes {
 		mcpEnv.add(n)
+	}
+
+	// A fallback substitution renders before any content is sent and is
+	// recorded on the session (§5.4): the user must know which server this
+	// conversation is actually going to.
+	if fallbackNote != "" {
+		mcpEnv.add(mcpNote{"warn", fallbackNote})
+		if err := sess.AppendNote("warn", fallbackNote); err != nil {
+			return err
+		}
 	}
 
 	// §6 is only live if something wires it. The loop assembles a request from
@@ -300,7 +310,7 @@ func openSession(
 	workspace string,
 	opts *options,
 	chosen *route.Decision,
-) (*session.Session, config.Tier, provider.Provider, bool, error) {
+) (*session.Session, config.Tier, provider.Provider, bool, string, error) {
 	var (
 		sess *session.Session
 		err  error
@@ -314,60 +324,60 @@ func openSession(
 			err = fmt.Errorf("no session to continue in %s", workspace)
 		}
 	default:
-		tier, client, buildErr := resolveTier(ctx, reg, cfg, cat, opts, "", chosen)
+		tier, client, note, buildErr := resolveTier(ctx, reg, cfg, cat, opts, "", chosen)
 		if buildErr != nil {
-			return nil, config.Tier{}, nil, false, buildErr
+			return nil, config.Tier{}, nil, false, "", buildErr
 		}
 		sess, err = store.Create(workspace, tier.Target.ID(), cat.Revision)
-		return sess, tier, client, false, err
+		return sess, tier, client, false, note, err
 	}
 
 	if err != nil {
-		return nil, config.Tier{}, nil, false, err
+		return nil, config.Tier{}, nil, false, "", err
 	}
 
-	tier, client, err := resolveTier(ctx, reg, cfg, cat, opts, sess.State().Target, chosen)
+	tier, client, note, err := resolveTier(ctx, reg, cfg, cat, opts, sess.State().Target, chosen)
 	if err != nil {
 		sess.Close()
-		return nil, config.Tier{}, nil, false, err
+		return nil, config.Tier{}, nil, false, "", err
 	}
-	return sess, tier, client, true, nil
+	return sess, tier, client, true, note, nil
 }
 
 // resolveTier picks the starting target. An explicit model wins, then an
 // explicit tier, then the target a resumed session recorded, then the bottom of
 // the ladder.
-func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *catalog.Catalog, opts *options, recorded string, chosen *route.Decision) (config.Tier, provider.Provider, error) {
+func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *catalog.Catalog, opts *options, recorded string, chosen *route.Decision) (config.Tier, provider.Provider, string, error) {
 	switch {
 	case opts.model != "":
 		target := ollama.Target(opts.model)
 		applyEffort(&target, opts.think)
-		return reg.probeTier(ctx, config.Tier{ID: "-model", Label: "ad hoc", Target: target})
+		return reg.probeTierFallback(ctx, config.Tier{ID: "-model", Label: "ad hoc", Target: target})
 
 	case opts.tier != "":
 		tier, ok := cfg.Tier(opts.tier)
 		if !ok {
-			return config.Tier{}, nil, fmt.Errorf("no tier %s is configured; run sb -tiers to see the ladder", opts.tier)
+			return config.Tier{}, nil, "", fmt.Errorf("no tier %s is configured; run sb -tiers to see the ladder", opts.tier)
 		}
 		applyEffort(&tier.Target, opts.think)
-		return reg.probeTier(ctx, tier)
+		return reg.probeTierFallback(ctx, tier)
 
 	case recorded != "":
 		// A resumed session stays on the target it was recorded with unless the
 		// user asked otherwise, so replaying it means what it meant.
 		if tier, ok := tierForTarget(cfg, recorded); ok {
-			return reg.probeTier(ctx, tier)
+			return reg.probeTierFallback(ctx, tier)
 		}
 		target, err := parseRecordedTarget(recorded)
 		if err != nil {
-			return config.Tier{}, nil, err
+			return config.Tier{}, nil, "", err
 		}
 		applyEffort(&target, opts.think)
-		return reg.probeTier(ctx, config.Tier{ID: "-resumed", Label: "resumed", Target: target})
+		return reg.probeTierFallback(ctx, config.Tier{ID: "-resumed", Label: "resumed", Target: target})
 	}
 
 	if len(cfg.Tiers) == 0 {
-		return config.Tier{}, nil, noTargetError(ctx, reg.ollama, cfg)
+		return config.Tier{}, nil, "", noTargetError(ctx, reg.ollama, cfg)
 	}
 
 	// Nothing was pinned, so the router picks. With no prompt yet this is the
@@ -383,16 +393,16 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *c
 		Budgets: route.Budgets{MaxCost: cfg.Budget},
 	})
 	if err != nil {
-		return config.Tier{}, nil, err
+		return config.Tier{}, nil, "", err
 	}
 	*chosen = decision
 
 	tier, ok := cfg.Tier(decision.Tier)
 	if !ok {
-		return config.Tier{}, nil, fmt.Errorf("the router chose %q, which is not on the ladder", decision.Tier)
+		return config.Tier{}, nil, "", fmt.Errorf("the router chose %q, which is not on the ladder", decision.Tier)
 	}
 	applyEffort(&tier.Target, opts.think)
-	return reg.probeTier(ctx, tier)
+	return reg.probeTierFallback(ctx, tier)
 }
 
 func applyEffort(target *provider.RouteTarget, effort string) {

@@ -49,8 +49,10 @@ type Config struct {
 	Tiers []config.Tier
 
 	// Probe resolves a tier to a live client, the same way a manual /t2
-	// switch does: a tier that cannot be served is an error, not a fallback.
-	Probe func(ctx context.Context, tierID string) (config.Tier, provider.Provider, error)
+	// switch does — including the tier's own fallback list (§5.4). A
+	// non-empty note reports that a fallback is serving, and it is shown
+	// before the errand's content goes anywhere.
+	Probe func(ctx context.Context, tierID string) (config.Tier, provider.Provider, string, error)
 
 	// NewSession creates the subagent's own session record. Sub-sessions are
 	// real logs — crash-safe, auditable — kept out of the primary store so
@@ -230,7 +232,7 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 }
 
 func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) (tools.Result, error) {
-	tier, client, err := t.c.Probe(ctx, in.Tier)
+	tier, client, note, err := t.c.Probe(ctx, in.Tier)
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("tier %s cannot be served: %v", in.Tier, err), IsError: true}, nil
 	}
@@ -245,6 +247,14 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) 
 	if t.c.Forward != nil {
 		if fwd := t.c.Forward(); fwd != nil {
 			obs = &forwarding{parent: fwd}
+		}
+	}
+	// The substitution is visible before the errand's content goes out, and
+	// the errand's own log records it (§5.4).
+	if note != "" {
+		obs.Notice("warn", note)
+		if err := sess.AppendNote("warn", note); err != nil {
+			return tools.Result{Content: fmt.Sprintf("could not record the fallback note: %v", err), IsError: true}, nil
 		}
 	}
 

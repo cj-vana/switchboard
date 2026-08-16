@@ -70,10 +70,14 @@ func (r *repl) moveTo(rank int, why string) {
 		}
 	}
 
-	probed, client, err := r.providers.probeTier(context.Background(), tier)
+	probed, client, note, err := r.providers.probeTierFallback(context.Background(), tier)
 	if err != nil {
 		r.out.Notice("warn", "staying on "+r.tier.ID+": "+err.Error())
 		return
+	}
+	if note != "" {
+		r.out.Notice("warn", note)
+		r.loop.Session.AppendNote("warn", note)
 	}
 	r.tier = probed
 	r.loop.Target = probed.Target
@@ -358,10 +362,14 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 		return
 	}
 
-	probed, client, err := r.providers.probeTier(ctx, tier)
+	probed, client, note, err := r.providers.probeTierFallback(ctx, tier)
 	if err != nil {
 		r.out.Notice("error", err.Error())
 		return
+	}
+	if note != "" {
+		r.out.Notice("warn", note)
+		r.loop.Session.AppendNote("warn", note)
 	}
 
 	r.tier = probed

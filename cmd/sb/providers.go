@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/credential"
@@ -244,4 +245,39 @@ func (p *providers) probeTier(ctx context.Context, tier config.Tier) (config.Tie
 			"%s does not support tool calling, so it cannot drive the agent loop", tier.Target.ModelID)
 	}
 	return tier, client, nil
+}
+
+// probeTierFallback serves a tier from its primary target, or failing that
+// from the first fallback that answers (§5.4). Fallback is an availability
+// event, not a routing decision: the order is the user's, every entry was
+// written into their config — which is what makes each an approved
+// destination — and each candidate passes the same probe as a primary, so a
+// fallback that cannot call tools is refused the same way. The returned
+// note is the visible substitution the design requires; it is empty when
+// the primary served, and the caller renders it before any content is sent
+// and records it on the session.
+func (p *providers) probeTierFallback(ctx context.Context, tier config.Tier) (config.Tier, provider.Provider, string, error) {
+	probed, client, primaryErr := p.probeTier(ctx, tier)
+	if primaryErr == nil {
+		return probed, client, "", nil
+	}
+	if len(tier.Fallbacks) == 0 {
+		return config.Tier{}, nil, "", primaryErr
+	}
+
+	attempts := []string{fmt.Sprintf("%s: %v", tier.Target.ID(), primaryErr)}
+	for _, fb := range tier.Fallbacks {
+		sub := tier
+		sub.Target = fb
+		probed, client, err := p.probeTier(ctx, sub)
+		if err != nil {
+			attempts = append(attempts, fmt.Sprintf("%s: %v", fb.ID(), err))
+			continue
+		}
+		note := fmt.Sprintf("%s is served by its fallback %s: %s is unavailable (%v)",
+			tier.ID, fb.ID(), tier.Target.ID(), primaryErr)
+		return probed, client, note, nil
+	}
+	return config.Tier{}, nil, "", fmt.Errorf("tier %s and its fallbacks are all unavailable:\n  %s",
+		tier.ID, strings.Join(attempts, "\n  "))
 }

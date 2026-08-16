@@ -36,6 +36,13 @@ type Tier struct {
 	ID     string
 	Label  string
 	Target provider.RouteTarget
+
+	// Fallbacks is the ordered list of targets that may serve this tier when
+	// its primary cannot be reached (§5.4). Every entry was written into the
+	// config by the user, which is what makes each an approved destination;
+	// the substitution still renders before content is sent. Entries use the
+	// provider's default serving surface.
+	Fallbacks []provider.RouteTarget
 }
 
 func (t Tier) String() string {
@@ -210,10 +217,11 @@ type oauthEntry struct {
 }
 
 type tierEntry struct {
-	Label   string `toml:"label,omitempty"`
-	Model   string `toml:"model"`
-	Surface string `toml:"surface,omitempty"`
-	Effort  string `toml:"effort,omitempty"`
+	Label    string   `toml:"label,omitempty"`
+	Model    string   `toml:"model"`
+	Surface  string   `toml:"surface,omitempty"`
+	Effort   string   `toml:"effort,omitempty"`
+	Fallback []string `toml:"fallback,omitempty"`
 }
 
 // Load reads the user's configuration. A missing file is not an error: the
@@ -354,7 +362,15 @@ func (c *Config) buildTiers(entries map[string]tierEntry, path string) error {
 		if err != nil {
 			return fmt.Errorf("%s: tier %s: %w", path, id, err)
 		}
-		c.Tiers = append(c.Tiers, Tier{ID: id, Label: entry.Label, Target: target})
+		tier := Tier{ID: id, Label: entry.Label, Target: target}
+		for _, ref := range entry.Fallback {
+			fb, err := ParseTarget(ref, "", "")
+			if err != nil {
+				return fmt.Errorf("%s: tier %s fallback: %w", path, id, err)
+			}
+			tier.Fallbacks = append(tier.Fallbacks, fb)
+		}
+		c.Tiers = append(c.Tiers, tier)
 	}
 	return nil
 }

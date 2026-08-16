@@ -150,10 +150,14 @@ func (a *tuiApp) moveTo(rank int, why string) {
 			return
 		}
 	}
-	probed, client, err := a.providers.probeTier(context.Background(), a.config.Tiers[rank])
+	probed, client, note, err := a.providers.probeTierFallback(context.Background(), a.config.Tiers[rank])
 	if err != nil {
 		a.p.Send(noticeMsg{level: "warn", text: "staying on " + a.tier.ID + ": " + err.Error()})
 		return
+	}
+	if note != "" {
+		a.p.Send(noticeMsg{level: "warn", text: note})
+		a.loop.Session.AppendNote("warn", note)
 	}
 	a.tier = probed
 	a.loop.Target = probed.Target
@@ -206,8 +210,8 @@ func (a *tuiApp) switchTier(id string) tea.Cmd {
 		return noticeCmd("", "already on "+a.tierLine())
 	}
 	return func() tea.Msg {
-		probed, client, err := a.providers.probeTier(context.Background(), tier)
-		return tierSwitchMsg{tier: probed, client: client, err: err}
+		probed, client, note, err := a.providers.probeTierFallback(context.Background(), tier)
+		return tierSwitchMsg{tier: probed, client: client, note: note, err: err}
 	}
 }
 

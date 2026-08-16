@@ -97,12 +97,12 @@ func registerDelegate(
 	tool, err := delegate.New(delegate.Config{
 		Tiers:  cfg.Tiers,
 		Agents: agents,
-		Probe: func(ctx context.Context, tierID string) (config.Tier, provider.Provider, error) {
+		Probe: func(ctx context.Context, tierID string) (config.Tier, provider.Provider, string, error) {
 			tier, ok := cfg.Tier(tierID)
 			if !ok {
-				return config.Tier{}, nil, fmt.Errorf("no tier %s", tierID)
+				return config.Tier{}, nil, "", fmt.Errorf("no tier %s", tierID)
 			}
-			return reg.probeTier(ctx, tier)
+			return reg.probeTierFallback(ctx, tier)
 		},
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {
 			return subStore.Create(workspace, target, cat.Revision)

@@ -104,6 +104,18 @@ ceiling governs dollars only — a local or plan rung passes the gate, because
 the three meterings are never collapsed — and an unpriced target passes too,
 with /budget saying so, since a ceiling cannot govern what has no price.
 
+**Fallback is availability, never routing.** A tier's `fallback` list
+(§5.4, `probeTierFallback`) is consulted only when the primary cannot be
+probed, the rung's identity does not change, and each candidate passes the
+same probe a primary does — a fallback that cannot call tools is refused
+the same way. Every entry was written into the user's own config, which is
+what makes it an approved destination; what the design still demands is
+that the substitution renders before content is sent and is recorded on
+the session, so every call site of `probeTierFallback` must surface the
+note it returns rather than dropping it. Entries resolve the provider's
+default serving surface; a non-default-surface fallback is not expressible
+and that is a stated limit, not an oversight.
+
 **An outcome is worth less as evidence than it looks.** §8.4's labelling rules
 are in `internal/router` because each prevents a specific failure. A clean
 completion is weak evidence of sufficiency and none of necessity, which is the

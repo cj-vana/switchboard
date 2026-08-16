@@ -69,6 +69,7 @@ effort = "high"
 [tiers.t3]
 label = "kimi"
 model = "kimi/kimi-for-coding-highspeed"
+fallback = ["ollama/qwen3.8:27b-mlx"]
 
 [tiers.t4]
 label = "codex"
@@ -85,6 +86,15 @@ signatures, hedging. Each move renders inline with its reason.
 `/why` answers the question no other tool can be asked: how the current tier
 was chosen, what was ruled out, every move this session made, and this
 session's tokens priced on every other rung.
+
+A rung may also name fallbacks. When its primary cannot be served — the
+server is down, the model is not pulled — the first listed target that
+answers serves the rung instead, and the substitution is said out loud
+and recorded on the session before anything is sent. Fallback is an
+availability event, not a routing decision: the ladder's meaning does
+not change because a server went away, and each candidate passes the
+same probe a primary does. Entries take the provider's default serving
+surface.
 
 Cost stays honest about what money is. A local model consumes nothing
 scarce, a plan-metered model consumes quota, and a per-token model consumes

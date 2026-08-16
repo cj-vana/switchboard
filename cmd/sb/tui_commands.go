@@ -218,6 +218,13 @@ func cmdTiers(m *tuiModel, _ string) tea.Cmd {
 			marker = "* "
 		}
 		b.WriteString(marker + t.String() + "\n")
+		if len(t.Fallbacks) > 0 {
+			var ids []string
+			for _, fb := range t.Fallbacks {
+				ids = append(ids, string(fb.ID()))
+			}
+			b.WriteString("      falls back to " + strings.Join(ids, ", ") + "\n")
+		}
 		info, confidence, ok := m.app.catalog.Lookup(t.Target)
 		if !ok {
 			b.WriteString("      no catalog entry\n")

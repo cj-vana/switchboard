@@ -61,7 +61,8 @@ type tierNowMsg struct{ line string }
 type tierSwitchMsg struct {
 	tier   config.Tier
 	client provider.Provider
-	silent bool // a /tN override restoring what it borrowed, not a user switch
+	silent bool   // a /tN override restoring what it borrowed, not a user switch
+	note   string // a fallback substitution, rendered before content is sent
 	err    error
 }
 type sessionSwapMsg struct {
@@ -76,6 +77,7 @@ type overrideProbeMsg struct {
 	prompt string
 	tier   config.Tier
 	client provider.Provider
+	note   string
 	err    error
 }
 type updateCheckMsg struct {
@@ -699,8 +701,8 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 			return noticeCmd("error", "no tier "+override+" is configured; try /tiers")
 		}
 		return func() tea.Msg {
-			probed, client, err := m.app.providers.probeTier(context.Background(), tier)
-			return overrideProbeMsg{prompt: prompt, tier: probed, client: client, err: err}
+			probed, client, note, err := m.app.providers.probeTierFallback(context.Background(), tier)
+			return overrideProbeMsg{prompt: prompt, tier: probed, client: client, note: note, err: err}
 		}
 	}
 
@@ -842,8 +844,8 @@ func (m *tuiModel) shouldAutoCompact() bool {
 // borrowed it is done.
 func (m *tuiModel) restoreCmd(tier config.Tier) tea.Cmd {
 	return func() tea.Msg {
-		probed, client, err := m.app.providers.probeTier(context.Background(), tier)
-		return tierSwitchMsg{tier: probed, client: client, err: err, silent: true}
+		probed, client, note, err := m.app.providers.probeTierFallback(context.Background(), tier)
+		return tierSwitchMsg{tier: probed, client: client, note: note, err: err, silent: true}
 	}
 }
 
@@ -851,6 +853,10 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 	if msg.err != nil {
 		m.addNotice("error", msg.err.Error())
 		return nil
+	}
+	if msg.note != "" {
+		m.addNotice("warn", msg.note)
+		m.app.loop.Session.AppendNote("warn", msg.note)
 	}
 	m.app.bind(msg.tier, msg.client, true)
 	m.tierLine = m.app.tierLine()

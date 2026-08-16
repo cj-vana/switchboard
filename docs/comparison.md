@@ -13,9 +13,9 @@ Claude Code, Codex CLI, OpenCode, and Switchboard have all converged on the
 same skeleton: an agent loop over read/write/edit/exec plus file search, MCP
 for the long tail of tools, hooks at tool-call boundaries, custom slash
 commands, repo instructions read from `AGENTS.md` or equivalent, subagents,
-permission modes, and session resume. On this skeleton none of the four is
-interesting; the differences are in what each tool believes about models,
-money, and safety.
+permission modes, model fallbacks for availability, and session resume. On
+this skeleton none of the four is interesting; the differences are in what
+each tool believes about models, money, and safety.
 
 ## What only Switchboard does, and where to check it
 

@@ -80,12 +80,16 @@ func (c *Config) render() ([]byte, error) {
 
 	for _, t := range c.Tiers {
 		fmt.Fprintf(&buf, "[tiers.%s]\n", t.ID)
-		if err := encode(&buf, tierEntry{
+		entry := tierEntry{
 			Label:   t.Label,
 			Model:   t.Target.Provider + "/" + t.Target.ModelID,
 			Surface: surfaceToWrite(t.Target.Provider, t.Target.Surface),
 			Effort:  effortOf(t.Target),
-		}); err != nil {
+		}
+		for _, fb := range t.Fallbacks {
+			entry.Fallback = append(entry.Fallback, fb.Provider+"/"+fb.ModelID)
+		}
+		if err := encode(&buf, entry); err != nil {
 			return nil, err
 		}
 		buf.WriteString("\n")

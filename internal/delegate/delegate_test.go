@@ -70,14 +70,14 @@ func testConfig(t *testing.T, answer string) Config {
 
 	return Config{
 		Tiers: ladder(),
-		Probe: func(_ context.Context, tierID string) (config.Tier, provider.Provider, error) {
+		Probe: func(_ context.Context, tierID string) (config.Tier, provider.Provider, string, error) {
 			for _, tier := range ladder() {
 				if tier.ID == tierID {
-					return tier, &oneTurnProvider{text: answer}, nil
+					return tier, &oneTurnProvider{text: answer}, "", nil
 				}
 			}
 			t.Fatalf("probe asked for unknown tier %s", tierID)
-			return config.Tier{}, nil, nil
+			return config.Tier{}, nil, "", nil
 		},
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {
 			return store.Create(workspace, target, "test-revision")

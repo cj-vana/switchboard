@@ -257,3 +257,41 @@ func TestBudgetRoundTripsAndRejectsNegative(t *testing.T) {
 		t.Error("a negative ceiling must refuse to load, not rule out every turn quietly")
 	}
 }
+
+func TestTierFallbacksRoundTripAndValidate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(
+		"[tiers.t1]\nmodel = \"ollama/small\"\nfallback = [\"ollama/backup\", \"kimi/kimi-for-coding\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fbs := c.Tiers[0].Fallbacks
+	if len(fbs) != 2 || fbs[0].ModelID != "backup" || fbs[1].Provider != "kimi" {
+		t.Fatalf("Fallbacks = %+v, want both entries in order", fbs)
+	}
+	if fbs[0].Surface == "" {
+		t.Error("a fallback must resolve its provider's default surface")
+	}
+
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Tiers[0].Fallbacks) != 2 {
+		t.Errorf("fallbacks did not survive a save round trip: %+v", again.Tiers[0].Fallbacks)
+	}
+
+	if err := os.WriteFile(path, []byte(
+		"[tiers.t1]\nmodel = \"ollama/small\"\nfallback = [\"nonsense\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(path); err == nil {
+		t.Error("a fallback entry without provider/model form must refuse to load")
+	}
+}
