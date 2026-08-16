@@ -207,6 +207,38 @@ strongest tool in its class, and it is the only one that ships the
 instrument that could prove that sentence wrong. The neighbors ask you to
 pick a model; this tool treats the pick as the product, and measures it.
 
+## Reproduce it
+
+The claims above are argued from the code; the head-to-head that would
+test them is runnable, not hypothetical. The eval corpus doubles as a
+baseline instrument (§8.6): `internal/eval/bench_test.go` materialises a
+deterministic one-task-per-package cut of the corpus — chosen in corpus
+order, fixed before any tool runs, so results cannot pick their tasks —
+and judges any tool's attempts with the same verifier the exit gate uses,
+the package tests plus the checks that keep "delete the failing test"
+from counting as a solve.
+
+One lane, any agent CLI:
+
+    SB_BENCH_MATERIALIZE=/tmp/bench/sb go test ./internal/eval/ -run TestMaterializeBench
+
+Then, per task directory and its prompt from `manifest.jsonl`, run the
+tool under trial headless — the postures that give each tool
+edit-and-run-tests capability non-interactively are
+`sb -p "<prompt>" -mode bypass -output json`,
+`claude -p "<prompt>" --permission-mode acceptEdits --allowedTools
+"Bash(go test:*)" "Bash(go build:*)" --output-format json`, and
+`codex exec --sandbox workspace-write --skip-git-repo-check "<prompt>"` —
+and judge the lane:
+
+    SB_BENCH_VERIFY=/tmp/bench/sb go test ./internal/eval/ -run TestVerifyBench -v
+
+Verdicts land in `verdicts.jsonl`, one line per task, from the same code
+for every lane. Running all three lanes costs real subscription quota and
+an hour of wall clock, which is why this document ships the procedure
+rather than presuming to spend it; what it refuses to ship is a
+comparison that could not be rerun.
+
 ## Sources
 
 Competitor capabilities above were checked against current public

@@ -241,7 +241,11 @@ stdin is content: `git diff | sb -p "review this"` attaches what arrived
 the same way an `@path` mention attaches a file. Because the pipe was
 spent on content, nothing can be approved mid-run; whatever needs
 approval is refused with its reason carried to the model, and widening
-`-mode` is the deliberate way to let a scripted run do more.
+`-mode` is the deliberate way to let a scripted run do more. A scripted
+run that needs to execute — build, test, verify — takes `-mode bypass`,
+and on a host whose sandbox self-test passed, bypass still runs every
+command inside that sandbox: the mode widens who approves, not what
+contains.
 
 `-output json` prints exactly one machine-readable line on stdout while
 the transcript renders on stderr: the result, the outcome, the tier and
