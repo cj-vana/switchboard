@@ -338,7 +338,7 @@ func (s *Session) apply(rec Record) error {
 		s.state.Usage = s.state.Usage.Add(p.Usage)
 		s.state.CostMicroUSD += p.CostMicroUSD
 		s.state.Calls++
-	case RecordPermission, RecordNote, RecordRoute:
+	case RecordPermission, RecordNote, RecordRoute, RecordRace:
 		// Recorded for audit and for §8.4's training signal; none of them carry
 		// conversation state, so replay skips them without losing anything.
 	default:
@@ -398,6 +398,15 @@ func (s *Session) AppendRoute(r Route) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.append(RecordRoute, r)
+}
+
+// AppendRace records a paired trial's verdict. It lands on the session that
+// continues — the picked branch, or the pre-race session when the race was
+// abandoned — so the record travels with the history it judged.
+func (s *Session) AppendRace(r Race) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.append(RecordRace, r)
 }
 
 func (s *Session) AppendPermission(p Permission) error {

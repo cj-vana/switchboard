@@ -31,6 +31,15 @@ import (
 // The source is read without the append lock, so a session open in this
 // process — the usual case — forks from its durable prefix.
 func (s *Store) Fork(id string, keepMessages int) (*Session, error) {
+	return s.ForkOnto(id, keepMessages, "")
+}
+
+// ForkOnto is Fork with the new log started against a different target,
+// which is what a /race arm needs: the branch shares the source's messages
+// but runs its turn on the rung being raced, and a session's start record
+// has to name the target that actually served it, because /resume binds
+// from that record. An empty target keeps the source's.
+func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTargetID) (*Session, error) {
 	if keepMessages < 1 {
 		return nil, fmt.Errorf("a fork keeping no messages is an empty session; /clear is how those start")
 	}
@@ -105,7 +114,10 @@ func (s *Store) Fork(id string, keepMessages int) (*Session, error) {
 		return nil, fmt.Errorf("session %s holds %d messages, cannot keep %d", id, messages, keepMessages)
 	}
 
-	fork, err := s.Create(start.Workspace, provider.RouteTargetID(start.Target), start.CatalogRevision)
+	if target == "" {
+		target = provider.RouteTargetID(start.Target)
+	}
+	fork, err := s.Create(start.Workspace, target, start.CatalogRevision)
 	if err != nil {
 		return nil, err
 	}

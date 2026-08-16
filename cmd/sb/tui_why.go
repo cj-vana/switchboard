@@ -48,6 +48,17 @@ func cmdWhy(m *tuiModel, _ string) tea.Cmd {
 		}
 	}
 
+	// Races are the session's paired evidence: the same prompt judged across
+	// two rungs, which is a stronger fact about model choice than any single
+	// turn's outcome, so the explanation owes it a line.
+	for i, entry := range m.raceLog {
+		if i == 0 {
+			fmt.Fprintf(&b, "races      %s\n", entry)
+		} else {
+			fmt.Fprintf(&b, "           %s\n", entry)
+		}
+	}
+
 	// The counterfactual: this session's token counts priced on every rung.
 	// Same tokens is the honest caveat — a different model writes different
 	// tokens — but it is the comparison the invoice makes, and it is the one

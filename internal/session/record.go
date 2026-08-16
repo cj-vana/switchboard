@@ -55,6 +55,15 @@ const (
 	// measurements is a corpus of tasks somebody thought to write down, and the
 	// distribution that matters is the one people actually work in.
 	RecordRoute RecordType = "route"
+
+	// RecordRace is one /race verdict: the same prompt, from the same prefix,
+	// run on two rungs at once and judged by the user. §8.4's complaint about
+	// natural outcomes is that they are weak — a clean completion says nothing
+	// about necessity — and a paired, human-judged comparison is the strongest
+	// label class ordinary use can produce. This record is where the phase 2b
+	// corpus that measurement needs comes from; nothing reads it back into
+	// routing, because a learned router is gated on the eval that has not run.
+	RecordRace RecordType = "race"
 )
 
 // Route is one turn's routing decision and outcome.
@@ -96,6 +105,42 @@ type Route struct {
 	// Verified is whether a task-specific check confirmed the result, which
 	// §8.4 calls stronger evidence than the harness's own completion signal.
 	Verified bool `json:"verified"`
+
+	Usage        provider.Usage `json:"usage"`
+	CostMicroUSD int64          `json:"cost_micro_usd"`
+	WallTimeMS   int64          `json:"wall_time_ms"`
+}
+
+// Race is one paired trial. The outcome vocabulary is deliberate, §8.4
+// applied to a comparison instead of a turn: "a" and "b" are judged
+// preferences; "tie" means both sufficed, which is evidence of necessity for
+// the cheaper rung — exactly what a clean completion alone never
+// establishes; "abandoned" is censored, not negative; and "incomparable"
+// records that an arm failed to finish, because a provider error is not a
+// preference and must not be stored as one.
+type Race struct {
+	Prompt string  `json:"prompt"`
+	A      RaceArm `json:"a"`
+	B      RaceArm `json:"b"`
+
+	Outcome string `json:"outcome"`
+	// Kept names the tier whose branch the session continued on, empty when
+	// the race was abandoned and the pre-race session carried on instead.
+	Kept string `json:"kept,omitempty"`
+}
+
+// RaceArm is what one branch of the trial did. Usage and cost are the
+// branch's own — the forked prefix's spend is subtracted — and SessionID
+// names the branch log, which survives the verdict: the road not taken
+// stays resumable.
+type RaceArm struct {
+	Tier      string                 `json:"tier"`
+	Target    provider.RouteTargetID `json:"target"`
+	SessionID string                 `json:"session_id"`
+
+	// Status is "completed", or why the arm has no answer: "error",
+	// "cancelled", "round_limit". Only two completed arms can be compared.
+	Status string `json:"status"`
 
 	Usage        provider.Usage `json:"usage"`
 	CostMicroUSD int64          `json:"cost_micro_usd"`

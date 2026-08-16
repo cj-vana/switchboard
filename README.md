@@ -158,6 +158,17 @@ Beyond the expected commands, a few are Switchboard's own:
   the cache layout is half the product. Changes a shell command made are
   outside the boundary, and `/undo` says so rather than half-covering
   them.
+- `/race t3 review this diff` runs one prompt on the current rung and t3
+  at once, side by side; `/race t2 t3 …` names both lanes. Each branch is
+  a fork of the session, so the sitting rung rides its warm prefix, and
+  both run read-only — enforced by the permission engine, not promised —
+  until you pick which branch the session continues on. The other answer
+  stays on disk, resumable. A tie keeps the cheaper rung, and that is the
+  most valuable verdict the ladder can hear: direct evidence the cheap
+  model was enough, which no amount of watching one model succeed can
+  establish. Every verdict is recorded on the session as paired routing
+  evidence and shows in `/why`; the router deliberately does not consume
+  it — collecting the corpus honestly comes before acting on it.
 - `/fork` is how the conversation goes back without rewriting anything:
   it branches the session into a new log and continues there, `/fork 2`
   leaving the last two user turns behind. The original is read, never

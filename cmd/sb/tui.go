@@ -140,6 +140,11 @@ type tuiModel struct {
 	// scrolls; the question "how did I end up on t3" should not.
 	routeLog []string
 
+	// race is the paired trial in flight, nil otherwise; raceLog keeps each
+	// verdict's one-line summary for /why, the way routeLog keeps moves.
+	race    *raceRun
+	raceLog []string
+
 	// Reverse history search (tui_history.go).
 	histSearch bool
 	histQuery  string
@@ -471,6 +476,24 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addNotice("advisor", msg.text)
 		return m, nil
 
+	case raceProbeMsg:
+		return m, m.onRaceProbe(msg)
+
+	case raceToolMsg:
+		m.onRaceTool(msg)
+		return m, nil
+
+	case raceUsageMsg:
+		m.onRaceUsage(msg)
+		return m, nil
+
+	case raceNoticeMsg:
+		m.onRaceNotice(msg)
+		return m, nil
+
+	case raceArmDoneMsg:
+		return m, m.onRaceArmDone(msg)
+
 	case expandedCustomMsg:
 		return m, m.enqueue(msg.prompt, "")
 
@@ -635,6 +658,12 @@ func (m *tuiModel) pageSize() int {
 // interrupt cancels a running turn; at the prompt it clears the input, and a
 // second ctrl-c leaves.
 func (m *tuiModel) interrupt() tea.Cmd {
+	if m.race != nil && m.race.cancel != nil {
+		m.race.cancelled = true
+		m.race.cancel()
+		m.addNotice("", "cancelling the race; the session stays where it was")
+		return nil
+	}
 	if m.busy && m.turnCancel != nil {
 		m.turnCancel()
 		m.addNotice("", "cancelling the turn; the session stays resumable")

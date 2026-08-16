@@ -326,6 +326,28 @@ calls without results and every request built from it is malformed (§10.3).
 Fork branches the log only: files are /undo's job, and the checkpoint
 recorder is process-scoped, so it keeps working across the swap.
 
+**A race arm is byte-identical upstream and read-only downstream.** /race
+(`cmd/sb/race.go`) runs one prompt on two rungs from two forks of the
+session, and every constraint follows from one of two facts. Fact one: the
+arms' requests share the session's prefix, so an arm reuses the primary's
+system blocks and a `Registry.Branch` of its registry — same schema bytes,
+own copy of the §6.7 read state, because two arms racing one prompt read
+the same files and a read that armed the skip in one context must not
+answer with a marker in the other. Fact two: two branches ran and one will
+be discarded, so neither may act — each arm gets a fresh plan-mode
+permission engine, which denies every non-read effect before rules or
+remembered answers are consulted, in every session mode, bypass included;
+the delegate tool is schema-kept and Plan-refused because its subagents
+would run under the primary's engine, not the arm's. The verdict is §8.4's
+strongest label class — a paired, human-judged comparison, with a tie
+recorded as the cheaper rung sufficing and an abandoned race censored —
+appended as a `race` record to the session that continues, and deliberately
+never consumed by routing: phase 2b collects the corpus, phase 7 gates
+acting on it. /budget preflights the sum of both arms' upper bounds, both
+gates charge the shared total, a race whose lanes resolve to one target is
+refused as measuring nothing, and the losing branch's log survives,
+labelled, for /resume.
+
 ## Build phase
 
 Phase 0 of §19.2: minimal loop, streaming, `read`/`write`/`edit`/`exec`,

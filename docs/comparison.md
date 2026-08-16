@@ -79,6 +79,20 @@ prefix byte-identical to what was already sent — so a provider still
 holding it warm serves the fork warm, and going back costs nothing in
 cache. Rewind mutates history to move; fork moves without mutating.
 
+**A paired trial the user judges.** `/race` runs one prompt on two rungs
+at once, each arm a fork of the session riding the same prefix, both
+read-only until the user picks which branch continues (`cmd/sb/race.go`,
+`internal/tools/branch.go`). The pick is recorded on the session as a
+paired, human-judged comparison — same task, same context, two targets —
+which is a stronger fact about model choice than any single turn's
+outcome, and a tie is recorded as the cheaper rung sufficing: direct
+evidence of necessity, the thing watching one model succeed can never
+establish. The record is collected and deliberately not consumed by
+routing, because acting on it is gated behind the eval that has not run.
+The neighbors can switch models between turns; none can run the same turn
+on two models, show both answers, and keep the verdict as evidence — and
+none needs it less, because none has a routing thesis to falsify.
+
 **Delegation priced on the same ladder.** Subagents exist everywhere now;
 Switchboard's `delegate` takes a rung, defaults to the cheapest, and its
 trailer names what the errand cost (`internal/delegate`). Named
@@ -137,11 +151,12 @@ Switchboard now concedes nothing: the converged skeleton is fully present
 custom commands, skills that load the neighbors' own packs, availability
 fallbacks, per-turn undo, session fork, structural search, and
 language-server symbol lookup), and
-on top of it sit seven axes — evidence-based routing with `/why`,
+on top of it sit eight axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
-verified-or-absent sandboxing, and delegation priced on the ladder — where
-the neighbors have no counterpart at all.
+verified-or-absent sandboxing, delegation priced on the ladder, and the
+`/race` paired trial whose verdicts feed that harness — where the
+neighbors have no counterpart at all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
