@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"os"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/credential"
 )
 
@@ -64,6 +67,75 @@ func TestSecretGateAnswers(t *testing.T) {
 	}
 	if sent != "" {
 		t.Errorf("esc sent the prompt anyway: %q", sent)
+	}
+}
+
+// The REPL's form of the gate: same three answers, asked in line, and the
+// question itself never quotes the key.
+func TestReplSecretGateAnswers(t *testing.T) {
+	prompt := "use " + testGitHubToken + " for the API"
+	leaks := credential.ScanPrompt(prompt)
+	if len(leaks) == 0 {
+		t.Fatal("fixture token was not detected")
+	}
+	ask := func(answer string) (string, string) {
+		t.Helper()
+		out, err := os.CreateTemp(t.TempDir(), "repl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer out.Close()
+		r := &repl{in: bufio.NewReader(strings.NewReader(answer)), out: newRenderer(out)}
+		sent := r.secretGate(prompt, leaks)
+		r.out.flush()
+		printed, err := os.ReadFile(out.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sent, string(printed)
+	}
+
+	if sent, printed := ask("r\n"); strings.Contains(sent, testGitHubToken) ||
+		!strings.Contains(sent, "[redacted: a GitHub token]") || strings.Contains(printed, testGitHubToken) {
+		t.Errorf("redact answer: sent %q, printed %q", sent, printed)
+	}
+	if sent, _ := ask("s\n"); sent != prompt {
+		t.Errorf("send answer did not pass the prompt as typed: %q", sent)
+	}
+	if sent, printed := ask("\n"); sent != "" || strings.Contains(printed, testGitHubToken) {
+		t.Errorf("an empty answer sent anyway: %q (printed %q)", sent, printed)
+	}
+}
+
+// The race record is a summary, not the transcript: a key typed into the
+// /race prompt must not ride the record into the log after the gate
+// scrubbed it from what was sent.
+func TestFinishRaceRedactsTheRecordedPrompt(t *testing.T) {
+	m := raceModel(t)
+	armA, err := assembleRaceArm(m.app, m.app.config.Tiers[0], &racedProvider{}, agent.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	armB, err := assembleRaceArm(m.app, m.app.config.Tiers[1], &racedProvider{}, agent.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	armA.status, armB.status = "completed", "completed"
+	run := &raceRun{typed: "compare with " + testGitHubToken, arms: [2]*raceArm{armA, armB}}
+	m.race = run
+	m.busy = true
+
+	winnerPath := armA.sess.Path()
+	m.finishRace(run, "a", "a")
+	log, err := os.ReadFile(winnerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(log), testGitHubToken) {
+		t.Error("the race record carried the raw key into the log")
+	}
+	if !strings.Contains(string(log), "[redacted: a GitHub token]") {
+		t.Error("the record does not say a key stood in the prompt")
 	}
 }
 

@@ -403,7 +403,11 @@ func (m *tuiModel) finishRace(run *raceRun, pick, outcome string) tea.Cmd {
 	if kept != nil {
 		keptTier = kept.tier.ID
 	}
-	record := raceRecord(run.typed, run.arms[0], run.arms[1], outcome, keptTier)
+	// The record redacts unconditionally: it is a summary, not the
+	// transcript, and a key pasted into the /race prompt must not ride a
+	// summary into the log after the gate scrubbed it from what was sent.
+	prompt := credential.Redact(run.typed, credential.ScanPrompt(run.typed))
+	record := raceRecord(prompt, run.arms[0], run.arms[1], outcome, keptTier)
 
 	line := fmt.Sprintf("race %s vs %s: %s", run.arms[0].tier.ID, run.arms[1].tier.ID, outcome)
 	if kept != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/credential"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/prefix"
@@ -160,6 +161,15 @@ func (r *repl) interactive(ctx context.Context) error {
 			continue
 		}
 
+		// The outbound credential gate, on the one scripted surface that can
+		// still ask: same three answers as the TUI dialog, in line.
+		if leaks := credential.ScanPrompt(input); len(leaks) > 0 {
+			input = r.secretGate(input, leaks)
+			if input == "" {
+				continue
+			}
+		}
+
 		if err := r.turn(ctx, input); err != nil {
 			if errors.Is(err, context.Canceled) {
 				r.out.Notice("warn", "turn cancelled; the session is intact and can continue")
@@ -171,6 +181,36 @@ func (r *repl) interactive(ctx context.Context) error {
 			r.out.Notice("error", err.Error())
 		}
 	}
+}
+
+// secretGate holds a key-shaped prompt behind a one-line question, the
+// REPL's form of the TUI's dialog. Anything that is not a deliberate
+// answer drops the prompt, because the default direction for a question
+// about a credential has to be the safe one — and the question itself
+// names kinds and prefixes only, never the match.
+func (r *repl) secretGate(input string, leaks []credential.Leak) string {
+	kinds := make([]string, len(leaks))
+	for i, l := range leaks {
+		kinds[i] = l.String()
+	}
+	r.out.Notice("warn", "the prompt contains "+strings.Join(kinds, ", "))
+	r.out.w.WriteString("[r]edact and send, [s]end as typed, anything else drops it: ")
+	r.out.atLineTop = false
+	r.out.flush()
+
+	answer, err := r.in.ReadString('\n')
+	if err != nil {
+		return ""
+	}
+	r.out.atLineTop = true
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "r", "redact":
+		return credential.Redact(input, leaks)
+	case "s", "send":
+		return input
+	}
+	r.out.Notice("", "not sent; the prompt was dropped before anything left this machine")
+	return ""
 }
 
 // turn runs one message with an interrupt handler bound to it. Ctrl-C cancels

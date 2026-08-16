@@ -79,6 +79,33 @@ func TestLeakHasNoRenderingThatShowsTheSecret(t *testing.T) {
 	}
 }
 
+// The property the gate promises: after redact, no key material remains
+// outbound. For a PEM that means the body and END line go with the header,
+// and a block whose END was lost in the paste is stripped to the end of
+// the text, because a truncated key is still a key.
+func TestRedactStripsAWholePrivateKeyBlock(t *testing.T) {
+	body := "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7"
+	pem := "-----BEGIN RSA PRIVATE KEY-----\n" + body + "\n-----END RSA PRIVATE KEY-----"
+	for name, text := range map[string]string{
+		"complete":  "my key is\n" + pem + "\nplease review",
+		"truncated": "my key is\n-----BEGIN RSA PRIVATE KEY-----\n" + body,
+	} {
+		out := Redact(text, ScanPrompt(text))
+		if strings.Contains(out, body) {
+			t.Errorf("%s: redaction left the key body outbound: %q", name, out)
+		}
+		if strings.Contains(out, "-----END") {
+			t.Errorf("%s: redaction left the block's tail: %q", name, out)
+		}
+		if !strings.Contains(out, "[redacted: a private key block]") {
+			t.Errorf("%s: redaction does not say what stood there: %q", name, out)
+		}
+	}
+	if !strings.Contains(Redact("my key is\n"+pem+"\nplease review", ScanPrompt(pem)), "please review") {
+		t.Error("redaction took the prose after the block with it")
+	}
+}
+
 func TestRedactReplacesTheMatchAndNamesTheKind(t *testing.T) {
 	secret := "sk-ant-api03-abcdefghijklmnopqrstuvwx"
 	text := "use " + secret + " for auth"

@@ -188,12 +188,19 @@ the user to wave everything through. A `Leak` keeps its match unexported
 with masked `String`/`GoString` renderings and no accessor — redaction
 happens inside the package — so a finding cannot commit the leak it
 reports; the test that renders one every way and greps for the token is
-the guarantee. The TUI holds the send behind redact/send/drop through one
+the guarantee. The private-key pattern matches the whole block, END line
+included and to end-of-text when the END was lost in the paste, because a
+redaction that replaced only the header would send the body it was asked
+to hold back. The TUI holds the send behind redact/send/drop through one
 chokepoint (`tui_secretgate.go`) that covers plain turns, /tN overrides,
-and races, with esc meaning drop; headless refuses outright and names
+and races, with esc meaning drop; the interactive REPL asks the same
+three answers in line; headless refuses outright and names
 `-allow-secrets` as the stated widening, because a surface with no one to
-ask fails closed. Do not add a pattern without a length floor, and do not
-give a finding a rendering that shows the match.
+ask fails closed. A race's verdict record redacts its stored prompt
+unconditionally — the record is a summary, not the transcript, and must
+not carry what the gate scrubbed from the sends. Do not add a pattern
+without a length floor, and do not give a finding a rendering that shows
+the match.
 
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by

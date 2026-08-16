@@ -35,6 +35,9 @@ type Leak struct {
 // the user already knows, and nothing after it.
 func (l Leak) Masked() string {
 	head := l.match
+	if strings.HasPrefix(head, "-----BEGIN") {
+		return "-----BEGIN …"
+	}
 	if i := strings.IndexAny(head, "-_"); i >= 0 && i < len(head)-1 {
 		head = head[:i+1]
 	} else if len(head) > 6 {
@@ -66,7 +69,12 @@ var leakPatterns = []leakPattern{
 	{"a Stripe live key", regexp.MustCompile(`\b[sr]k_live_[A-Za-z0-9]{20,}`)},
 	{"an npm token", regexp.MustCompile(`\bnpm_[A-Za-z0-9]{36}\b`)},
 	{"a Hugging Face token", regexp.MustCompile(`\bhf_[A-Za-z0-9]{30,}`)},
-	{"a private key block", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+	// The whole block, not the header: a redaction that replaced only the
+	// BEGIN line would send the key body it was asked to hold back. The
+	// non-greedy body stops at the first END line, and a block whose END
+	// was cut off in the paste redacts through to the end of the text,
+	// because a truncated key is still a key.
+	{"a private key block", regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)`)},
 }
 
 // ScanPrompt reports every key-shaped string in outbound content, in
