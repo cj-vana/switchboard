@@ -60,6 +60,7 @@ func commands() []commandItem {
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
+		{name: "retry", usage: "[tier]", desc: "take back the last turn and run it again, optionally on another rung", run: cmdRetry},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
 		{name: "models", desc: "browse models and bind tiers", run: cmdModels},

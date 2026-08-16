@@ -42,6 +42,7 @@ func testModel(t *testing.T) *tuiModel {
 	}
 	app := &tuiApp{
 		loop:      loop,
+		store:     store,
 		config:    cfg,
 		catalog:   &catalog.Catalog{Revision: "test"},
 		tier:      cfg.Tiers[0],

@@ -166,6 +166,16 @@ Beyond the expected commands, a few are Switchboard's own:
   the cache layout is half the product. Changes a shell command made are
   outside the boundary, and `/undo` says so rather than half-covering
   them.
+- `/retry` takes the last turn back and runs it again; `/retry t3` runs
+  it one rung up instead, returning after, the way `/t3 <prompt>` does.
+  The turn's file edits revert through the same checkpoints `/undo`
+  uses, the conversation goes back by forking at the turn's opening — 
+  the set-aside answer stays on disk, labelled `user_corrected`,
+  resumable — and the recorded opening replays byte-for-byte rather than
+  being re-expanded, so the second rung reads exactly what the first one
+  read. What commands did stays done, and the command says so. A retry
+  onto another rung is the ladder's cheapest experiment: same input,
+  different rung, your judgment as the verdict.
 - `/watch go test ./...` declares your verifier, and from then on it runs
   after the model's edits — at the round boundary inside a turn, and once
   more at the turn's end — with only the delta reported: a failure no

@@ -74,9 +74,14 @@ type sessionSwapMsg struct {
 	fresh  bool
 	note   string // rendered after the swap; how a fork says where it came from
 	err    error
+
+	// andThen, when set, runs once the swap has landed — how /retry sends
+	// its replay into the forked session rather than the one it left.
+	andThen tea.Cmd
 }
 type overrideProbeMsg struct {
 	prompt string
+	images []provider.Image
 	tier   config.Tier
 	client provider.Provider
 	note   string
@@ -406,6 +411,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchReportMsg:
 		m.onWatchReport(msg)
 		return m, nil
+
+	case retryStartMsg:
+		return m, m.retryStart(msg)
 
 	case usageMsg:
 		m.turnIn += msg.u.Usage.InputTokens + msg.u.Usage.CacheWriteTokens
@@ -824,7 +832,7 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 
 	m.addUser(msg.prompt)
 	m.beginTurn(msg.prompt)
-	go m.runTurn(m.turnCtx, msg.prompt, nil)
+	go m.runTurn(m.turnCtx, msg.prompt, msg.images)
 	return m.spin.Tick
 }
 
@@ -1014,6 +1022,12 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	// The old session's occupancy does not describe the new one, and leaving
 	// it would re-trigger the auto-compaction that produced this swap.
 	m.callTokens = 0
+
+	// A swap that carries its own continuation runs it now; /retry's replay
+	// belongs to the fork it just landed in, ahead of anything queued.
+	if msg.andThen != nil {
+		return msg.andThen
+	}
 
 	// Prompts queued behind the turn that triggered an auto-compaction run
 	// now, in the fresh context they were waiting for.
