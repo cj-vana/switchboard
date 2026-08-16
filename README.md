@@ -150,6 +150,14 @@ Beyond the expected commands, a few are Switchboard's own:
   accounting for every session the workspace has recorded, from the
   command line, with the three meterings kept apart throughout: dollars
   are summed, local sessions say local, plan sessions say plan.
+- `/cost rungs` reprices the session that just happened on every rung of
+  your ladder: each recorded call, priced cold on each rung — no cache
+  assumed, since a counterfactual has no provider reports — next to what
+  the session actually cost as routed, caches included. It is the
+  ladder's receipt, per session: what always-use-the-best would have
+  billed, what always-use-the-cheapest could not have held. A rung whose
+  context window could not fit a call reports that instead of a price,
+  because feasibility is not economics.
 - `/undo` takes back the last turn's file changes, turn by turn: write
   and edit capture what a file looked like before the turn first touched
   it, and a restored file forces the model to re-read before it may write

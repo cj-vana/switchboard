@@ -102,6 +102,42 @@ func ReadRaces(path string) ([]Race, error) {
 	}
 }
 
+// ReadUsages collects a log's per-call usage records, read-only. The replayed
+// State sums them, and a sum is the wrong shape for counterfactual pricing:
+// catalog prices are banded by the size of one call, so repricing a session on
+// another rung has to see each call, not the total the calls added up to.
+func ReadUsages(path string) ([]Usage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+
+	if err := checkHeader(r, path); err != nil {
+		return nil, err
+	}
+
+	var out []Usage
+	for {
+		rec, _, err := decodeRecord(r)
+		if errors.Is(err, io.EOF) || errors.Is(err, ErrCorruptRecord) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if rec.Type != RecordUsage {
+			continue
+		}
+		var u Usage
+		if err := json.Unmarshal(rec.Payload, &u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+}
+
 // ReadOpening returns the first words the user sent, for listings that need
 // to say what a session was about without replaying what it became. It stops
 // at the first user message that carries text, so labelling a directory of

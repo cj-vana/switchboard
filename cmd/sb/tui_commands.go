@@ -42,7 +42,7 @@ func commands() []commandItem {
 		{name: "race", usage: "<tier> [tier] <prompt>", desc: "one prompt on two rungs at once; you pick which continues", run: cmdRace},
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
-		{name: "cost", aliases: []string{"usage"}, desc: "tokens and cost for this session", busySafe: true, run: cmdCost},
+		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|auto|at]", desc: "summarize into a fresh context; auto-compacts near the window", run: cmdCompact},
 		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
@@ -292,11 +292,25 @@ func cmdMode(m *tuiModel, args string) tea.Cmd {
 	return nil
 }
 
-func cmdCost(m *tuiModel, _ string) tea.Cmd {
-	state := m.app.loop.Session.State()
-	m.refreshCost(state)
-	m.addInfo(strings.Join(summaryLines(state, m.app.catalog, m.app.loop.Target), "\n"))
-	return nil
+func cmdCost(m *tuiModel, args string) tea.Cmd {
+	switch strings.TrimSpace(args) {
+	case "":
+		state := m.app.loop.Session.State()
+		m.refreshCost(state)
+		m.addInfo(strings.Join(summaryLines(state, m.app.catalog, m.app.loop.Target), "\n"))
+		return nil
+	case "rungs":
+		// Read-only on the session's own log, which is open for appending:
+		// same posture as `sb cost`, and busy-safe for the same reason.
+		usages, err := session.ReadUsages(m.app.loop.Session.Path())
+		if err != nil {
+			return noticeCmd("error", err.Error())
+		}
+		m.addInfo(strings.Join(costRungsLines(m.app.config.Tiers, m.app.catalog, m.app.tier.ID, usages), "\n"))
+		return nil
+	default:
+		return noticeCmd("error", "/cost shows this session; /cost rungs reprices it on every rung of the ladder")
+	}
 }
 
 // cmdBudget shows or sets the session's dollar ceiling. Setting persists the

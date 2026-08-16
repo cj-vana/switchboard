@@ -44,6 +44,38 @@ func TestReadOpeningStopsAtTheFirstUserWords(t *testing.T) {
 	}
 }
 
+func TestReadUsagesKeepsTheCallsApart(t *testing.T) {
+	store, workspace := newStore(t)
+
+	sess, err := store.Create(workspace, "ollama/local/qwen3.5:9b-mlx", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	for i, in := range []int{1_000, 250_000} {
+		if err := sess.AppendUsage(Usage{
+			Target: "a/b/c",
+			Usage:  provider.Usage{InputTokens: in, OutputTokens: 10 * (i + 1)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Per call, in order, while the session is open: counterfactual pricing
+	// bands by the size of one call, so the sum replay keeps is not enough.
+	usages, err := ReadUsages(sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usages) != 2 {
+		t.Fatalf("got %d usage records, want 2", len(usages))
+	}
+	if usages[0].Usage.InputTokens != 1_000 || usages[1].Usage.InputTokens != 250_000 {
+		t.Fatalf("calls out of order or merged: %+v", usages)
+	}
+}
+
 func TestReadOpeningOnASessionWithNoUserTurn(t *testing.T) {
 	store, workspace := newStore(t)
 
