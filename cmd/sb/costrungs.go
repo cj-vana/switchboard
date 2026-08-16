@@ -132,7 +132,13 @@ func asRoutedLine(cat *catalog.Catalog, usages []session.Usage) string {
 	}
 
 	var parts []string
-	if priced > 0 {
+	switch {
+	case priced > 0 && dollars == 0:
+		// Reachable: a call priced when its target had no catalog entry
+		// records zero, and rendering that as $0.00 would teach the same
+		// wrong lesson it does everywhere else.
+		parts = append(parts, fmt.Sprintf("no cost was recorded for the %d calls that bill dollars", priced))
+	case priced > 0:
 		parts = append(parts, fmt.Sprintf("%s across the %d calls that bill dollars, with the caches they actually hit", dollars, priced))
 	}
 	if local > 0 {

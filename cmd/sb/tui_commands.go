@@ -152,16 +152,14 @@ func cmdResume(m *tuiModel, args string) tea.Cmd {
 	}
 	items := make([]pickerItem, 0, len(infos))
 	for _, info := range infos {
-		// The label is the first words the user sent, because a menu of
-		// timestamped ids asks the user to remember which opaque string held
-		// which conversation. ReadOpening reads a few records from the head of
-		// each log, so labelling the list stays cheap however long the
-		// sessions grew; a log with no user turn yet, or one that cannot be
-		// read, falls back to the id it always showed.
+		// A menu of timestamped ids asks the user to remember which opaque
+		// string held which conversation; openingLabel reads a few records
+		// from the head of each log, so labelling the list stays cheap
+		// however long the sessions grew.
 		label := info.ID
 		desc := info.Modified.Local().Format("2006-01-02 15:04:05")
-		if opening, err := session.ReadOpening(info.Path); err == nil && opening != "" {
-			label = truncate(strings.Join(strings.Fields(opening), " "), 56)
+		if opening := openingLabel(info.Path); opening != "" {
+			label = opening
 			desc = info.ID + "  " + desc
 		}
 		items = append(items, pickerItem{

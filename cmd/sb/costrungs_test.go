@@ -97,6 +97,22 @@ func TestCostRungsRefusesAPartialSum(t *testing.T) {
 	}
 }
 
+func TestAsRoutedNeverRendersZeroDollars(t *testing.T) {
+	cat, priced := pricedTarget(t)
+	// A call priced when its target had no catalog entry records zero cost;
+	// read back now that the entry exists, it must not render as $0.00.
+	usages := []session.Usage{
+		{Target: string(priced.ID()), Usage: provider.Usage{InputTokens: 1_000, OutputTokens: 100}},
+	}
+	line := asRoutedLine(cat, usages)
+	if strings.Contains(line, "$0.00") {
+		t.Fatalf("a recorded zero rendered as free money: %q", line)
+	}
+	if !strings.Contains(line, "no cost was recorded") {
+		t.Fatalf("the zero case should say what it is: %q", line)
+	}
+}
+
 func TestCostRungsWithNothingRecorded(t *testing.T) {
 	cat, priced := pricedTarget(t)
 	tiers := []config.Tier{{ID: "t2", Target: priced}}

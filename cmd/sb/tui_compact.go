@@ -24,6 +24,11 @@ const compactSystem = `You are summarizing a coding session so it can continue i
 
 const compactUsage = "usage: /compact [guidance], /compact auto [on|off], or /compact at <50–95>"
 
+// compactSeedHead opens every compacted session's seed message. The session
+// listings match on it to label such a session by its summary's first words
+// rather than by a preamble every compacted session shares.
+const compactSeedHead = "This session continues an earlier one ("
+
 func cmdCompact(m *tuiModel, args string) tea.Cmd {
 	if cmd, handled := compactSettings(m, args); handled {
 		return cmd
@@ -103,7 +108,7 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 		if err != nil {
 			return noticeMsg{level: "error", text: "compact failed, session unchanged: " + err.Error()}
 		}
-		seed := "This session continues an earlier one (" + state.ID + "). What follows is a summary of that conversation; treat it as established context.\n\n" + summary
+		seed := compactSeedHead + state.ID + "). What follows is a summary of that conversation; treat it as established context.\n\n" + summary
 		// The acknowledgment keeps the log strictly alternating, which every
 		// adapter renders correctly; a seed followed directly by the user's
 		// next prompt would put two user messages back to back.
