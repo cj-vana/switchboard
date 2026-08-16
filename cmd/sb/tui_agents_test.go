@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/cj-vana/switchboard/internal/delegate"
+	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/session"
 )
 
 func TestAgentsCommandListsDefinitionsAndNotes(t *testing.T) {
@@ -92,5 +94,83 @@ func TestBudgetCommandRejectsJunk(t *testing.T) {
 	last := m.tr.last()
 	if last == nil || last.kind != kindNotice || last.level != "error" {
 		t.Fatalf("junk input did not produce an error notice: %+v", last)
+	}
+}
+
+func TestForkCommandBranchesAndLeavesTurnsBehind(t *testing.T) {
+	m := testModel(t)
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.Create(t.TempDir(), "ollama/local/test:7b", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.app.store = store
+	m.app.loop.Session = sess
+	say := func(msg provider.Message) {
+		t.Helper()
+		if err := sess.AppendMessage(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	say(provider.UserText("one"))
+	say(provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.Text{Text: "answer one"}}})
+	say(provider.UserText("two"))
+	say(provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.Text{Text: "answer two"}}})
+	srcID := sess.ID()
+
+	m.ta.SetValue("/fork 1")
+	cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("/fork 1 produced no command")
+	}
+	m.Update(cmd())
+
+	got := m.app.loop.Session
+	if got.ID() == srcID {
+		t.Fatal("the session did not swap to the fork")
+	}
+	msgs := got.State().Messages
+	if len(msgs) != 2 || msgs[1].Text() != "answer one" {
+		t.Fatalf("fork holds %d messages ending %q, want the first turn only", len(msgs), msgs[len(msgs)-1].Text())
+	}
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "forked from "+srcID) {
+		t.Errorf("the swap did not say where the fork came from:\n%s", joined)
+	}
+	got.Close()
+}
+
+func TestForkCommandRefusesDroppingEverything(t *testing.T) {
+	m := testModel(t)
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.Create(t.TempDir(), "ollama/local/test:7b", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	m.app.store = store
+	m.app.loop.Session = sess
+	if err := sess.AppendMessage(provider.UserText("only turn")); err != nil {
+		t.Fatal(err)
+	}
+
+	m.ta.SetValue("/fork 1")
+	if cmd := m.submit(); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if m.app.loop.Session.ID() != sess.ID() {
+		t.Fatal("dropping the only turn should not have swapped sessions")
+	}
+	last := m.tr.last()
+	if last == nil || last.level != "error" {
+		t.Fatalf("want an error notice naming /clear, got %+v", last)
 	}
 }

@@ -69,6 +69,7 @@ type sessionSwapMsg struct {
 	tier   config.Tier
 	client provider.Provider
 	fresh  bool
+	note   string // rendered after the swap; how a fork says where it came from
 	err    error
 }
 type overrideProbeMsg struct {
@@ -893,6 +894,9 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	m.addBanner(msg.sess, !msg.fresh)
 	if !msg.fresh {
 		m.replayHistory(msg.sess.State())
+	}
+	if msg.note != "" {
+		m.addNotice("", msg.note)
 	}
 	m.tierLine = m.app.tierLine()
 	m.mode = m.app.loop.Perms.Mode()

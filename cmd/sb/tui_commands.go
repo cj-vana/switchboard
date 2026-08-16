@@ -13,6 +13,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/mcp"
 	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // commandItem is one slash command. busySafe commands may run while a turn is
@@ -33,6 +34,7 @@ func commands() []commandItem {
 		{name: "exit", aliases: []string{"quit"}, desc: "leave", busySafe: true, run: cmdExit},
 		{name: "clear", aliases: []string{"new", "reset"}, desc: "start a fresh session", run: cmdClear},
 		{name: "resume", usage: "[id]", desc: "pick up an earlier session", run: cmdResume},
+		{name: "fork", usage: "[n]", desc: "branch this session, less its last n user turns", run: cmdFork},
 		{name: "tier", usage: "<id>", desc: "switch tier (bare /t2 works too)", run: cmdTier},
 		{name: "tiers", desc: "show the configured ladder", busySafe: true, run: cmdTiers},
 		{name: "why", desc: "how this tier was chosen, and what the others would have cost", busySafe: true, run: cmdWhy},
@@ -159,6 +161,43 @@ func cmdResume(m *tuiModel, args string) tea.Cmd {
 		onPick: func(id string) tea.Cmd { return m.app.reopen(id) },
 	}
 	return nil
+}
+
+// cmdFork branches the session at a turn boundary (§12). Bare /fork branches
+// at the tip — a safe point to explore from — and /fork n leaves the last n
+// user turns behind, which is the cache-honest form of "go back two turns":
+// the original log is never rewritten, and the fork's prefix stays warm on
+// the provider because it is byte-identical to what was already sent.
+func cmdFork(m *tuiModel, args string) tea.Cmd {
+	state := m.app.loop.Session.State()
+	if len(state.Messages) == 0 {
+		return noticeCmd("", "nothing to fork; the session is empty")
+	}
+
+	n := 0
+	if args = strings.TrimSpace(args); args != "" {
+		v, err := strconv.Atoi(args)
+		if err != nil || v < 0 {
+			return noticeCmd("error", "/fork takes how many user turns to leave behind, e.g. /fork 2")
+		}
+		n = v
+	}
+
+	keep := len(state.Messages)
+	if n > 0 {
+		var userAt []int
+		for i, msg := range state.Messages {
+			if msg.Role == provider.RoleUser {
+				userAt = append(userAt, i)
+			}
+		}
+		if n >= len(userAt) {
+			return noticeCmd("error", fmt.Sprintf(
+				"the session has %d user turns; dropping %d would leave nothing, and /clear is how an empty session starts", len(userAt), n))
+		}
+		keep = userAt[len(userAt)-n]
+	}
+	return m.app.forkSession(m.app.loop.Session.ID(), keep, n)
 }
 
 func cmdTier(m *tuiModel, args string) tea.Cmd {

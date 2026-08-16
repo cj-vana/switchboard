@@ -135,6 +135,14 @@ Beyond the expected commands, a few are Switchboard's own:
   the cache layout is half the product. Changes a shell command made are
   outside the boundary, and `/undo` says so rather than half-covering
   them.
+- `/fork` is how the conversation goes back without rewriting anything:
+  it branches the session into a new log and continues there, `/fork 2`
+  leaving the last two user turns behind. The original is read, never
+  written, and `/resume` returns to it. Because the fork's messages are
+  byte-identical to the original's prefix, a provider still holding that
+  prefix warm serves the fork warm — going back costs nothing in cache.
+  Files are not rewound; that is `/undo`, and it keeps working across
+  the branch.
 
 Custom commands are markdown files in `.switchboard/commands/` (project) or
 `~/.switchboard/commands/` (global): `$ARGUMENTS` and `$1..$9` substitute,

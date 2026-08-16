@@ -72,8 +72,12 @@ the differentiator: it never rewrites sent messages, because the
 append-only prefix is what keeps the provider cache warm, and a restored
 file already forces the model to re-read through the stale check. Claude
 Code's checkpoints rewind the conversation too, at the price of the
-context; here that trade is declined on stated grounds rather than left
-unconsidered.
+context; here the same want is answered by `/fork`
+(`internal/session/fork.go`, §12): branch the session at a turn boundary
+into a new log and continue there, the original untouched and the fork's
+prefix byte-identical to what was already sent — so a provider still
+holding it warm serves the fork warm, and going back costs nothing in
+cache. Rewind mutates history to move; fork moves without mutating.
 
 **Delegation priced on the same ladder.** Subagents exist everywhere now;
 Switchboard's `delegate` takes a rung, defaults to the cheapest, and its

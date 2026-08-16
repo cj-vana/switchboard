@@ -240,6 +240,26 @@ func (a *tuiApp) reopen(id string) tea.Cmd {
 	}
 }
 
+// forkSession branches the current session at a message boundary into a new
+// log and continues there (§12). The original is read, never written; the
+// fork's prefix is byte-identical to it, so a provider still holding that
+// prefix warm serves the fork warm. Files are not rewound — /undo is what
+// restores files, and it keeps working across the swap because turns changed
+// the workspace, whichever log they live in now.
+func (a *tuiApp) forkSession(id string, keepMessages int, dropped int) tea.Cmd {
+	return func() tea.Msg {
+		sess, err := a.store.Fork(id, keepMessages)
+		if err != nil {
+			return sessionSwapMsg{err: err}
+		}
+		note := fmt.Sprintf("forked from %s; the original is untouched, /resume %s returns to it", id, id)
+		if dropped > 0 {
+			note = fmt.Sprintf("forked from %s, less its last %d user turns; the original is untouched, /resume %s returns to it", id, dropped, id)
+		}
+		return sessionSwapMsg{sess: sess, tier: a.tier, client: a.loop.Provider, note: note}
+	}
+}
+
 // clearSession starts a fresh log on the current target, keeping the client.
 func (a *tuiApp) clearSession() tea.Cmd {
 	return func() tea.Msg {
