@@ -51,7 +51,7 @@ func runCostCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, workspa
 		fmt.Fprintf(w, "; %d billed a plan, consuming quota rather than dollars", plan)
 	}
 	if unpriced > 0 {
-		fmt.Fprintf(w, "; %d had no catalog entry, so nothing was priced", unpriced)
+		fmt.Fprintf(w, "; %d had nothing the catalog could price", unpriced)
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "an estimator and reconciliation aid, not the provider's invoice (§15)")
@@ -77,6 +77,11 @@ func costWord(cat *catalog.Catalog, state session.State, total *catalog.Money, p
 	case info.Metering == catalog.Plan:
 		*plan++
 		return "plan"
+	case info.Free():
+		// Dollar-metered, priced at zero throughout: rendering the recorded
+		// zero as $0.00 would claim a bill where the catalog holds no rates.
+		*unpriced++
+		return "no per-token cost"
 	default:
 		*priced++
 		*total += catalog.Money(state.CostMicroUSD)

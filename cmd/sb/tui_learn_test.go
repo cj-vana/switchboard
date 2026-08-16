@@ -68,20 +68,21 @@ func TestComposeSkillRoundTripsThroughTheLoader(t *testing.T) {
 	}
 }
 
-func TestComposeSkillFlattensAWrappedDescription(t *testing.T) {
+func TestComposeSkillCutsAWrappedDescriptionAtItsLine(t *testing.T) {
 	generated := "Use when releasing\nthis package to npm.\n\nThe steps."
-	// A distiller that wrapped its first sentence would otherwise leak a
-	// newline into the frontmatter, and the parser reads the description to
-	// the end of its line.
+	// The parser reads the description to the end of its line, so the cut is
+	// at the distiller's first newline; the wrapped tail must land in the
+	// body rather than leak a newline into the frontmatter or be dropped.
 	content, _, err := composeSkill("npm-release", generated)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(content, "description: Use when releasing") {
+	if !strings.Contains(content, "description: Use when releasing\n") {
 		t.Errorf("composed:\n%s", content)
 	}
-	if strings.Contains(content, "description: Use when releasing\n") && !strings.Contains(content, "this package to npm.") {
-		t.Errorf("the wrapped tail was dropped rather than joined:\n%s", content)
+	_, body, _ := strings.Cut(content, "---\n\n")
+	if !strings.HasPrefix(body, "this package to npm.") {
+		t.Errorf("the wrapped tail should open the body:\n%s", content)
 	}
 }
 

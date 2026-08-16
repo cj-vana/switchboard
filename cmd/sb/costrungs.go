@@ -125,6 +125,11 @@ func asRoutedLine(cat *catalog.Catalog, usages []session.Usage) string {
 			local++
 		case info.Metering == catalog.Plan:
 			plan++
+		case info.Free():
+			// A dollar-metered entry whose prices are all zero has nothing
+			// to sum, and counting it as a call that bills dollars would
+			// render the $0.00 this file exists to avoid.
+			unpriced++
 		default:
 			priced++
 			dollars += catalog.Money(u.CostMicroUSD)

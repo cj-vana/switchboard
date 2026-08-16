@@ -154,9 +154,9 @@ func distill(ctx context.Context, client provider.Provider, target provider.Rout
 // ask.
 func composeSkill(name, generated string) (content string, redacted int, err error) {
 	desc, body, _ := strings.Cut(strings.TrimSpace(generated), "\n")
-	// The parser reads the description to the end of its line, so it must
-	// hold no newlines; collapsing whitespace also unwraps a distiller that
-	// wrapped its first sentence.
+	// The parser reads the description to the end of its line, so it is cut
+	// at the distiller's first newline; a wrapped tail is not lost, it opens
+	// the body. The collapse keeps stray whitespace out of the frontmatter.
 	desc = strings.Join(strings.Fields(desc), " ")
 	body = strings.TrimSpace(body)
 	if desc == "" || body == "" {
