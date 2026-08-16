@@ -74,6 +74,21 @@ func run() error {
 		}
 		return runUpdateCLI(context.Background(), cfg)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "cost" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		cat, err := catalog.Load()
+		if err != nil {
+			return err
+		}
+		return runCostCLI(os.Stdout, store, cat, cwd)
+	}
 
 	var opts options
 	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")

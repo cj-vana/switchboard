@@ -104,6 +104,24 @@ matrix, LSP integration, a desktop app, and the largest open-source
 community. A user whose work never leaves one frontier model, or who needs
 an IDE surface today, is well served there.
 
+## In practical use
+
+Capability axes are not the whole of a tool, so the practical claims get
+their evidence too. Setup is one checksum-verified install command and one
+checklist: first run detects every reachable provider, takes keys into the
+OS keychain, wires an existing Codex login in one pick, and binds t1 — no
+file is ever edited by hand (`cmd/sb/tui_onboard.go`, tested in
+`tui_onboard_test.go`). The §14 performance discipline is tested rather
+than asserted: completed entries render once per width and streaming text
+never touches the renderer cache (`tui_test.go`), and the transcript
+renders the viewport rather than the session —
+`BenchmarkTranscriptView50Turns` and `BenchmarkTranscriptView500Turns`
+exist to be compared, and a 500-turn session views no slower than a
+50-turn one, microseconds against the 16ms input-latency target. What this
+document deliberately does not claim is user-adoption evidence: the
+neighbors have communities and this tool is new, and no benchmark
+substitutes for that.
+
 ## The verdict this document will stand behind
 
 Separate capability from breadth and the picture is clean. On breadth —

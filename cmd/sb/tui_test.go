@@ -275,3 +275,21 @@ func TestCompact(t *testing.T) {
 		t.Errorf("compact(2.5M) = %s", got)
 	}
 }
+
+// The §14 claim behind these is that view cost tracks the viewport, not the
+// session: a 500-turn transcript renders no slower than a 50-turn one once
+// completed entries are cached. Run both and compare.
+func benchTranscript(b *testing.B, turns int) {
+	tr := newTranscript(100, darkTheme(), newMarkdown(100, true))
+	for i := 0; i < turns; i++ {
+		tr.add(&entry{kind: kindUser, text: "a question that fills a line or two of the terminal"})
+		tr.add(&entry{kind: kindAssistant, text: "an answer with some **markdown** and\n\n```go\ncode := true\n```\n"})
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		tr.view(40)
+	}
+}
+
+func BenchmarkTranscriptView50Turns(b *testing.B)  { benchTranscript(b, 50) }
+func BenchmarkTranscriptView500Turns(b *testing.B) { benchTranscript(b, 500) }

@@ -137,6 +137,10 @@ Beyond the expected commands, a few are Switchboard's own:
   session, visible immediately in the status bar.
 - `/context` draws the window filling before it is fatal, and `/export`
   writes the session record as markdown.
+- `/cost` totals the running session, and `sb cost` prints the same
+  accounting for every session the workspace has recorded, from the
+  command line, with the three meterings kept apart throughout: dollars
+  are summed, local sessions say local, plan sessions say plan.
 - `/undo` takes back the last turn's file changes, turn by turn: write
   and edit capture what a file looked like before the turn first touched
   it, and a restored file forces the model to re-read before it may write

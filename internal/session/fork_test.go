@@ -144,3 +144,19 @@ func TestForkBoundsAndProvenance(t *testing.T) {
 		t.Errorf("reopened fork cost = %d, want the full 600", reopened.State().CostMicroUSD)
 	}
 }
+
+func TestReadStateNeedsNoLock(t *testing.T) {
+	_, src := forkFixture(t) // src stays open, holding the append lock
+
+	state, err := ReadState(src.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Messages) != 6 || state.CostMicroUSD != 600 {
+		t.Fatalf("read-only replay saw %d messages costing %d, want the full 6 and 600",
+			len(state.Messages), state.CostMicroUSD)
+	}
+	if state.ID != src.ID() {
+		t.Errorf("ID = %s, want the source's own", state.ID)
+	}
+}
