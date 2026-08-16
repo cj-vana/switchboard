@@ -2,8 +2,10 @@
 //
 // The suite stays small on purpose. Everything beyond it arrives over MCP,
 // because a one-person project cannot build the long tail but can build the
-// socket the long tail plugs into (design principle 5). Phase 0 ships the four
-// tools §19.2 names: read, write, edit, and exec.
+// socket the long tail plugs into (design principle 5). Phase 0 shipped the
+// four tools §19.2 names — read, write, edit, and exec — and glob and grep
+// joined them so a model can search a tree without shelling out to whatever
+// this host happens to have installed.
 package tools
 
 import (
@@ -91,6 +93,8 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 	r.add(&writeTool{r})
 	r.add(&editTool{r})
 	r.add(&execTool{r})
+	r.add(&globTool{r})
+	r.add(&grepTool{r})
 	return r, nil
 }
 
