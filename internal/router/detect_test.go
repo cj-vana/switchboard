@@ -221,3 +221,70 @@ func TestStickySurvivesConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestVerifierFailuresShareTheToolResultSignatureWindow(t *testing.T) {
+	d := NewDetector()
+
+	// The model's own test run surfaces the failure first.
+	signals := d.ToolResult("exec", "go test ./...", "--- FAIL: TestAlpha", true)
+	if !has(signals, NewTestFailure) {
+		t.Fatal("the model's own run did not report the failure")
+	}
+
+	// The verifier seeing the same failure is one problem observed twice.
+	sigs := []string{SignatureOf("--- FAIL: TestAlpha")}
+	if got := d.VerifierFailures(sigs); len(got) != 0 {
+		t.Errorf("the verifier double-counted a known failure: %v", got)
+	}
+
+	// A failure only the verifier saw is news.
+	fresh := []string{SignatureOf("--- FAIL: TestBeta")}
+	if got := d.VerifierFailures(fresh); !has(got, NewTestFailure) {
+		t.Errorf("a fresh verifier failure went unreported: %v", got)
+	}
+}
+
+func TestOneVerifierRunIsOneSignalHoweverManyFailures(t *testing.T) {
+	d := NewDetector()
+	sigs := []string{
+		SignatureOf("--- FAIL: TestAlpha"),
+		SignatureOf("--- FAIL: TestBeta"),
+		SignatureOf("--- FAIL: TestGamma"),
+	}
+	if got := d.VerifierFailures(sigs); len(got) != 1 {
+		t.Fatalf("one run produced %d signals; the verifier must not vote louder than a test the model ran", len(got))
+	}
+	// Every signature was still recorded, so none of them is news later.
+	for _, sig := range sigs {
+		if got := d.VerifierFailures([]string{sig}); len(got) != 0 {
+			t.Errorf("signature %s was reported but not recorded", sig)
+		}
+	}
+}
+
+func TestVerifierFailuresDoNotCountTowardTheErrorSpike(t *testing.T) {
+	d := NewDetector()
+	for range DefaultErrorSpikeAt {
+		d.VerifierFailures([]string{SignatureOf("--- FAIL: TestAlpha")})
+	}
+	// The next actual tool failure should be failure one, not the spike.
+	if signals := d.ToolResult("exec", "ls", "no such file", true); has(signals, ToolErrorSpike) {
+		t.Error("verifier runs counted as tool errors")
+	}
+}
+
+func TestExtractFailuresKeepsEveryFailingLine(t *testing.T) {
+	out := "ok   pkg/a\n--- FAIL: TestAlpha (0.01s)\n    alpha_test.go:42: wanted 3\n--- FAIL: TestBeta (0.02s)\nFAIL\n"
+	fs := ExtractFailures(out)
+	if len(fs) < 3 {
+		t.Fatalf("want at least the two FAIL lines and the file:line, got %d: %+v", len(fs), fs)
+	}
+	if fs[0].Line != "--- FAIL: TestAlpha (0.01s)" {
+		t.Errorf("the line did not survive verbatim: %q", fs[0].Line)
+	}
+	// Digits are stripped before hashing, so a shifted line number is the
+	// same failure.
+	if SignatureOf("alpha_test.go:42: wanted 3") != SignatureOf("alpha_test.go:57: wanted 8") {
+		t.Error("a shifted line number changed the signature")
+	}
+}

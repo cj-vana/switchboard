@@ -163,6 +163,10 @@ type tuiModel struct {
 	quitArmed   bool
 	quitting    bool
 
+	// watchFails is the last /watch run's failure count for the status
+	// chip: 0 is green, -1 means the verifier itself could not run.
+	watchFails int
+
 	turnCtx    context.Context
 	initialCmd tea.Cmd
 }
@@ -244,6 +248,9 @@ func runTUI(
 	app.watcher = newWatcher(obs, sticky, len(cfg.Tiers)-1, app.moveTo)
 	loop.Observer = app.watcher
 	loop.Asker = &tuiAsker{p: p}
+	// The injection seam is composed once and never swapped: the advisor and
+	// the watch each contribute nothing while off.
+	loop.Inject = app.inject
 
 	m.addBanner(sess, resumed)
 	// Startup notes render into the model directly, because the program is
@@ -324,6 +331,9 @@ func newTextarea() textarea.Model {
 // newTUIModel assembles the model around an app. It is separate from runTUI so
 // tests can drive the model without a terminal.
 func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiModel {
+	if app.watchSt == nil {
+		app.watchSt = &watchState{}
+	}
 	m := &tuiModel{
 		app:      app,
 		th:       th,
@@ -391,6 +401,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case noticeMsg:
 		m.addNotice(msg.level, msg.text)
+		return m, nil
+
+	case watchReportMsg:
+		m.onWatchReport(msg)
 		return m, nil
 
 	case usageMsg:
@@ -750,7 +764,7 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 	// here, not at submit, so a queued prompt reads its files when it runs.
 	m.addUser(prompt)
 	expanded, images := m.expandMentions(prompt)
-	prompt = m.adviceContext(m.shellContext(expanded))
+	prompt = m.watchContext(m.adviceContext(m.shellContext(expanded)))
 	if len(images) > 0 {
 		if reason, refused := m.visionRefusal(); refused {
 			m.addNotice("error", reason)
@@ -825,6 +839,7 @@ func (m *tuiModel) beginTurn(prompt string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.turnCancel = cancel
 	m.turnCtx = ctx
+	m.app.watchSt.beginTurn(ctx)
 }
 
 // runTurn drives one turn on its own goroutine. Everything it reports arrives
@@ -851,6 +866,10 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 	m.busy = false
 	m.turnCancel = nil
 	m.turnCtx = nil
+	// The final round's edits have no later round boundary; this is theirs.
+	// Batched into every exit path, because a tier restore or a queued
+	// prompt does not unhappen the edits.
+	watchCmd := m.watchTurnEnd()
 	m.tr.finalizeAll()
 	m.refreshCost(msg.after)
 	m.app.route = nil // the opening decision describes the opening choice only
@@ -881,7 +900,7 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		restore := *m.restoreTier
 		m.restoreTier = nil
 		if m.app.tier.ID == m.turnStarted.ID {
-			return m.restoreCmd(restore)
+			return tea.Batch(watchCmd, m.restoreCmd(restore))
 		}
 	}
 
@@ -892,15 +911,15 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		pct := m.callTokens * 100 / m.ctxWindow
 		m.addNotice("", fmt.Sprintf("context at %d%% of %s tokens; compacting automatically (/compact auto off disables this)",
 			pct, compact(m.ctxWindow)))
-		return compactCmd(m, "", true)
+		return tea.Batch(watchCmd, compactCmd(m, "", true))
 	}
 
 	if len(m.queue) > 0 {
 		next := m.queue[0]
 		m.queue = m.queue[1:]
-		return m.startTurn(next, "")
+		return tea.Batch(watchCmd, m.startTurn(next, ""))
 	}
-	return nil
+	return watchCmd
 }
 
 // shouldAutoCompact decides at turn end. callTokens is the size of the last

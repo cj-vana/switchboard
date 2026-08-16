@@ -88,6 +88,16 @@ func (w *watcher) ToolEnd(name string, res tools.Result, took time.Duration) {
 
 func (w *watcher) Notice(level, text string) { w.inner.Notice(level, text) }
 
+// VerifierFailures feeds a /watch run's failures into the same evidence
+// stream the model's own test runs feed, then weighs a move the way a tool
+// result does: it is called from the loop's goroutine at a round boundary,
+// which is also the one safe moment to rebind the primary — no call is
+// outstanding.
+func (w *watcher) VerifierFailures(sigs []string) {
+	w.observe(w.detector.VerifierFailures(sigs))
+	w.assess()
+}
+
 func (w *watcher) TurnUsage(u session.Usage) { w.inner.TurnUsage(u) }
 
 func (w *watcher) observe(signals []route.Signal) {

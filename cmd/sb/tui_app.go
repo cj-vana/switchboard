@@ -74,6 +74,11 @@ type tuiApp struct {
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.
 	advisor *advisor.Advisor
 
+	// watchSt holds the /watch verifier and its per-turn accounting
+	// (tui_watch.go). The struct is always present; an unarmed watch
+	// contributes nothing at the injection seam.
+	watchSt *watchState
+
 	obs *tuiObserver
 	p   *tea.Program
 }

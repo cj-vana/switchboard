@@ -112,6 +112,34 @@ func (d *Detector) ToolResult(name, argv, output string, failed bool) []Signal {
 	return signals
 }
 
+// VerifierFailures reports a failing run of the user's declared verifier —
+// the /watch command. §8.4 calls a task-specific verifier stronger evidence
+// than the harness's own completion signal, and the declaration is what
+// separates this from ToolResult: no command-shape check, because the user
+// said this is the verifier, and no error-spike count, because the verifier
+// failing means the task is broken, not that a tool call went wrong. The
+// signature set is shared with ToolResult, so a failure the model's own test
+// run already surfaced is one problem observed twice, not two problems.
+//
+// However many signatures one run produced, it contributes at most one
+// signal: one run is one observation, the same weight ToolResult gives it.
+func (d *Detector) VerifierFailures(sigs []string) []Signal {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fresh := false
+	for _, sig := range sigs {
+		if sig == "" || d.failures[sig] {
+			continue
+		}
+		d.failures[sig] = true
+		fresh = true
+	}
+	if fresh {
+		return []Signal{NewTestFailure}
+	}
+	return nil
+}
+
 // AssistantText reports model output. Hedging is reported at most once per
 // turn: §8.3 makes it a weak signal, and repeating it would let volume stand in
 // for evidence.
@@ -136,28 +164,50 @@ func looksLikeTests(argv string) bool { return testCommand.MatchString(argv) }
 // one failure distinguishable from another.
 var failureLine = regexp.MustCompile(`(?i)^\s*(---\s*FAIL|FAIL|PASS.*FAIL|E\s|ERROR|assert|panic:|\S+\.go:\d+:|\S+\.(py|rs|ts|js|java):\d+)`)
 
-// failureSignature reduces output to something stable enough to compare.
-//
-// It is the first line that looks like a failure rather than the whole output,
-// because output carries timings, paths, and counts that differ between two
-// runs of the same broken thing. Comparing whole outputs would make every
-// failure look new, and every retry would escalate.
-func failureSignature(output string) string {
+// Failure is one failing line reduced to something comparable: the line as
+// printed, for a human or a model to read, and its signature, for telling
+// whether two runs failed the same way.
+type Failure struct {
+	Signature string
+	Line      string
+}
+
+// SignatureOf reduces one line to its comparable form. Digits are dropped so
+// a line number shifting by one edit does not make the same failure look like
+// a different one.
+func SignatureOf(line string) string {
+	normalized := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(line))
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:8])
+}
+
+// ExtractFailures finds every line in the output that names a failure. It is
+// lines rather than the whole output, because output carries timings, paths,
+// and counts that differ between two runs of the same broken thing. Comparing
+// whole outputs would make every failure look new, and every retry would
+// escalate.
+func ExtractFailures(output string) []Failure {
+	var out []Failure
 	for _, line := range strings.Split(output, "\n") {
 		if !failureLine.MatchString(line) {
 			continue
 		}
-		// Digits are dropped so a line number shifting by one edit does not
-		// make the same failure look like a different one.
-		normalized := strings.Map(func(r rune) rune {
-			if r >= '0' && r <= '9' {
-				return -1
-			}
-			return r
-		}, strings.TrimSpace(line))
+		out = append(out, Failure{Signature: SignatureOf(line), Line: strings.TrimSpace(line)})
+	}
+	return out
+}
 
-		sum := sha256.Sum256([]byte(normalized))
-		return hex.EncodeToString(sum[:8])
+// failureSignature is the first failing line's signature, which is what one
+// tool result contributes as evidence: one run is one observation, however
+// many assertions it took down with it.
+func failureSignature(output string) string {
+	if fs := ExtractFailures(output); len(fs) > 0 {
+		return fs[0].Signature
 	}
 	return ""
 }

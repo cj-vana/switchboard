@@ -133,6 +133,21 @@ func (r *Recorder) Record(abs string) {
 	r.cur.files[abs] = fileState{existed: true, mode: info.Mode().Perm(), content: content}
 }
 
+// PendingFiles counts what the open turn scope has captured so far,
+// paths over the snapshot cap included: those were mutations too, just ones
+// undo cannot cover. It is the loop's own evidence that the current turn has
+// changed files — the same evidence /undo restores from — which is what lets
+// a surface ask "has anything changed since I last looked" without the loop
+// keeping an edit history it does not have.
+func (r *Recorder) PendingFiles() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cur == nil {
+		return 0
+	}
+	return len(r.cur.files) + len(r.cur.skipped)
+}
+
 // Turns lists checkpoints oldest first, including the still-open scope if
 // it has captures.
 func (r *Recorder) Turns() []Info {

@@ -163,3 +163,36 @@ func TestRecordOutsideATurnIsIgnored(t *testing.T) {
 		t.Errorf("a capture with no turn scope must not invent a checkpoint: %v", turns)
 	}
 }
+
+func TestPendingFilesCountsTheOpenScope(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	write(t, a, "one")
+	write(t, b, "two")
+
+	r := NewRecorder()
+	if r.PendingFiles() != 0 {
+		t.Error("counted files with no scope open")
+	}
+
+	r.Begin("first turn")
+	if r.PendingFiles() != 0 {
+		t.Error("counted files before any capture")
+	}
+	r.Record(a)
+	r.Record(a) // the same file twice is one capture
+	if got := r.PendingFiles(); got != 1 {
+		t.Errorf("want 1 pending after one capture, got %d", got)
+	}
+	r.Record(b)
+	if got := r.PendingFiles(); got != 2 {
+		t.Errorf("want 2 pending, got %d", got)
+	}
+
+	// A new turn opens a fresh scope; the committed turn no longer counts.
+	r.Begin("second turn")
+	if got := r.PendingFiles(); got != 0 {
+		t.Errorf("the previous turn's captures leaked into the new scope: %d", got)
+	}
+}

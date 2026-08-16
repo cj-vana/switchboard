@@ -166,6 +166,19 @@ Beyond the expected commands, a few are Switchboard's own:
   the cache layout is half the product. Changes a shell command made are
   outside the boundary, and `/undo` says so rather than half-covering
   them.
+- `/watch go test ./...` declares your verifier, and from then on it runs
+  after the model's edits — at the round boundary inside a turn, and once
+  more at the turn's end — with only the delta reported: a failure no
+  earlier run produced, or the run going green after being red. An
+  unchanged verdict is silence, because a verifier that repeats itself
+  every round teaches the model to stop reading it. The status bar keeps
+  the current color either way. A new failure also counts toward
+  escalation, with the same weight as a test run the model made itself:
+  the design calls a task-specific verifier stronger evidence than the
+  agent's own sense that things went well, and `/watch` is where you
+  declare one. The command runs unconfined, as you would run it — it is
+  yours, typed in your own session, and there is deliberately no way for
+  a repository to declare one.
 - `/race t3 review this diff` runs one prompt on the current rung and t3
   at once, side by side; `/race t2 t3 …` names both lanes. Each branch is
   a fork of the session, so the sitting rung rides its warm prefix, and

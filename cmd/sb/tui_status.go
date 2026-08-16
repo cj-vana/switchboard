@@ -52,6 +52,9 @@ func (m *tuiModel) statusLine() string {
 	if effort := effortOf(m.app.tier.Target); effort != "" {
 		right = append(right, th.onBar(th.dim).Render("think "+effort))
 	}
+	if chip := m.watchChip(); chip != "" {
+		right = append(right, chip)
+	}
 	if m.updateAvail != "" {
 		right = append(right, th.onBar(th.warn).Render("↑ "+m.updateAvail))
 	}

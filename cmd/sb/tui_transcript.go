@@ -358,6 +358,8 @@ func (t *transcript) renderNotice(level, text string, w int) []string {
 		style, glyph = t.th.accent, "◆"
 	case "advisor":
 		style, glyph = t.th.accent, "◇"
+	case "watch":
+		style, glyph = t.th.ok, "✓"
 	}
 	var lines []string
 	for i, l := range wrapPlain(text, max(w-2, 20)) {

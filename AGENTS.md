@@ -31,6 +31,9 @@ point into it, and this file restates the constraints that bind the code.
                          because nothing executes at read time
     internal/trust/      per-workspace grants that gate repository-declared
                          MCP servers, hooks, and the language server
+    internal/watch/      the /watch verifier: the user's own command, run at
+                         a turn's seams when the checkpoint recorder says
+                         files changed, reporting only the delta
     internal/lsp/        a deliberately narrow LSP client: initialize,
                          didOpen, definition, references; the tools take
                          {path, line, symbol} and resolve the column
@@ -201,6 +204,26 @@ unconditionally — the record is a summary, not the transcript, and must
 not carry what the gate scrubbed from the sends. Do not add a pattern
 without a length floor, and do not give a finding a rendering that shows
 the match.
+
+**The watch verifier is declared, never inferred, and speaks only in deltas.**
+/watch (`internal/watch`, `cmd/sb/tui_watch.go`) is §8.4's task-specific
+verifier given a declaration point: the user types the command into their own
+session, which is the hook posture — the user's standing policy, run
+unconfined and unprompted — and there is deliberately no repository-declared
+form, because a checkout must not get a command executed by the act of being
+opened. What decides a run is due is the checkpoint recorder's capture count,
+the same evidence /undo restores from; mutations the recorder cannot see (a
+shell command's side effects) do not trip it, which is the absent-not-guessed
+trigger rule applied here. Reports reach the model through the loop's
+round-boundary injection seam and the turn-end fold, never by rewriting
+history, and only a change travels: new failure signatures, or red turning
+green. A failing run feeds the escalation detector through
+`Detector.VerifierFailures` at the weight of one signal per run — the
+declaration removes the test-command regex gate, not the parity with a test
+run the model made itself — and skips the error-spike count, because the
+verifier failing means the task is broken, not that a tool call went wrong.
+The injected text passes `credential.ScanPrompt` and redacts unconditionally,
+the race record's posture, because a round boundary has no one to ask.
 
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by

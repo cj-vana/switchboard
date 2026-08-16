@@ -45,7 +45,6 @@ func cmdAdvisor(m *tuiModel, args string) tea.Cmd {
 		}
 		m.app.advisor = nil
 		m.app.loop.Observer = m.app.watcher
-		m.app.loop.Inject = nil
 		return noticeCmd("", "advisor is off")
 	default:
 		return noticeCmd("error", advisorUsage)
@@ -111,7 +110,6 @@ func (m *tuiModel) onAdvisorReady(msg advisorReadyMsg) {
 	}
 	m.app.advisor = msg.adv
 	m.app.loop.Observer = msg.adv
-	m.app.loop.Inject = msg.adv.Drain
 	m.addNotice("advisor", "watching this session with "+string(msg.adv.Target().ID())+
 		"; advice appears here and is passed to the model")
 }
