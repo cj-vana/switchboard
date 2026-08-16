@@ -173,7 +173,10 @@ lacks it.
 
 The built-in suite is small on purpose: read, write, edit, exec, glob,
 grep, and a task list the transcript renders live as the model works
-through it. Everything else arrives over MCP. Declare servers in
+through it. A repeated read of an unchanged file answers with a short
+marker rather than the bytes, because the content already sits in the
+context — token reduction that never moves a block the cache is holding.
+Everything else arrives over MCP. Declare servers in
 `~/.switchboard/mcp.toml`:
 
 ```toml

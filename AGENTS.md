@@ -245,6 +245,18 @@ change, per turn, and a restored file already forces a re-read through the
 stale check, while the conversation that produced the change stays exactly
 as sent. Do not add an undo path that mutates already-sent messages.
 
+An unchanged file is not read into the context twice. A full, uncapped
+read arms a per-file record, and a later full read of byte-identical
+content answers with a short marker instead of the bytes, which is §6.7's
+own framing: hashing prevents re-injection, never relocation — the content
+already sits in the prefix, exactly where the cache wants it. The skip is
+armed only by a complete read (a partial read updates the stale check and
+proves nothing about what the context holds), a mutation or external
+change disarms it by hash inequality, and /undo and every session swap
+clear it alongside the read versions, in the same struct so the two cannot
+drift. A skipped read still refreshes the stale check, so write-after-read
+behaves identically either way.
+
 Going back in the conversation is /fork, for the same reason:
 `internal/session/fork.go` copies a log's prefix into a new session and
 never writes the source, so the fork's messages are byte-identical to what

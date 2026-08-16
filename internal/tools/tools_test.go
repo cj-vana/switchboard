@@ -449,3 +449,65 @@ func TestForgetAllVersionsReimposesReadBeforeWrite(t *testing.T) {
 		t.Fatalf("write after the swap = %+v, want a refusal demanding a fresh read", res)
 	}
 }
+
+// The §6.7 re-injection skip: a full read of a byte-identical file answers
+// with a marker instead of the content, and everything that could make the
+// marker a lie — a partial first read, a mutation, an external change, a
+// context swap — degrades to full injection.
+func TestUnchangedFullReadSkipsReinjection(t *testing.T) {
+	r, root := newRegistry(t)
+	writeFile(t, filepath.Join(root, "a.txt"), "the contents")
+
+	first := run(t, r, "read", map[string]any{"path": "a.txt"})
+	if first.Content != "the contents" {
+		t.Fatalf("first read = %q, want the bytes", first.Content)
+	}
+	again := run(t, r, "read", map[string]any{"path": "a.txt"})
+	if !strings.Contains(again.Content, "unchanged since you last read it") || strings.Contains(again.Content, "the contents") {
+		t.Fatalf("second read = %q, want the marker and not the bytes", again.Content)
+	}
+	// The skipped read still refreshes the stale check, so writing after it
+	// works the way it would after a full injection.
+	if res := run(t, r, "write", map[string]any{"path": "a.txt", "content": "new"}); res.IsError {
+		t.Fatalf("write after a skipped read failed: %s", res.Content)
+	}
+}
+
+func TestPartialReadNeverArmsTheSkip(t *testing.T) {
+	r, root := newRegistry(t)
+	writeFile(t, filepath.Join(root, "a.txt"), "one\ntwo\nthree")
+
+	run(t, r, "read", map[string]any{"path": "a.txt", "offset": 1, "limit": 1})
+	full := run(t, r, "read", map[string]any{"path": "a.txt"})
+	if !strings.Contains(full.Content, "three") {
+		t.Fatalf("full read after a slice = %q, want the whole file: the context never held it", full.Content)
+	}
+}
+
+func TestMutationAndExternalChangeDisarmTheSkip(t *testing.T) {
+	r, root := newRegistry(t)
+	path := filepath.Join(root, "a.txt")
+	writeFile(t, path, "original")
+
+	run(t, r, "read", map[string]any{"path": "a.txt"})
+	run(t, r, "edit", map[string]any{"path": "a.txt", "old_string": "original", "new_string": "edited"})
+	if res := run(t, r, "read", map[string]any{"path": "a.txt"}); res.Content != "edited" {
+		t.Fatalf("read after edit = %q, want the new bytes injected", res.Content)
+	}
+
+	writeFile(t, path, "changed outside")
+	if res := run(t, r, "read", map[string]any{"path": "a.txt"}); res.Content != "changed outside" {
+		t.Fatalf("read after external change = %q, want the new bytes injected", res.Content)
+	}
+}
+
+func TestSessionSwapDisarmsTheSkip(t *testing.T) {
+	r, root := newRegistry(t)
+	writeFile(t, filepath.Join(root, "a.txt"), "the contents")
+
+	run(t, r, "read", map[string]any{"path": "a.txt"})
+	r.ForgetAllVersions()
+	if res := run(t, r, "read", map[string]any{"path": "a.txt"}); res.Content != "the contents" {
+		t.Fatalf("read after the swap = %q, want full injection: the new context holds nothing", res.Content)
+	}
+}

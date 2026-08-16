@@ -79,7 +79,8 @@ func (t *readTool) read(abs string, in readInput) (Result, error) {
 	// The hash covers the whole file even when only a slice is returned. A
 	// partial read still tells the agent what version it saw, and a write must
 	// be checked against the file as a whole.
-	t.r.versions.record(abs, hashContent(data))
+	current := hashContent(data)
+	t.r.versions.record(abs, current)
 
 	if len(data) > maxReadBytes && in.Limit == 0 {
 		return errorf("%s is %d bytes, over the %d byte limit for a whole-file read; "+
@@ -88,6 +89,18 @@ func (t *readTool) read(abs string, in readInput) (Result, error) {
 
 	content := string(data)
 	if in.Offset <= 0 && in.Limit <= 0 {
+		// §6.7's re-injection skip: content the context already holds
+		// complete and unchanged is answered with a marker, not repeated.
+		// Only a full, uncapped read arms this — the whole map, not the
+		// stale-check hash above — and mutation, external change, /undo,
+		// and every session swap disarm it, so the skip can never stand in
+		// for content the model does not actually have.
+		if prior, ok := t.r.versions.getWhole(abs); ok && prior == current {
+			return Result{Content: fmt.Sprintf("%s is unchanged since you last read it in this session; "+
+				"the content you already have is still current, so it is not repeated. "+
+				"Use offset and limit if you need a slice shown again.", t.r.display(abs))}, nil
+		}
+		t.r.versions.recordWhole(abs, current)
 		if content == "" {
 			return Result{Content: fmt.Sprintf("%s is empty", t.r.display(abs))}, nil
 		}

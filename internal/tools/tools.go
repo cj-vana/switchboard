@@ -126,7 +126,7 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 	r := &Registry{
 		root:       root,
 		capability: capability,
-		versions:   &fileVersions{seen: map[string]string{}},
+		versions:   &fileVersions{seen: map[string]string{}, whole: map[string]string{}},
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 	}
@@ -222,6 +222,13 @@ func (r *Registry) Definitions() []provider.ToolDefinition {
 type fileVersions struct {
 	mu   sync.Mutex
 	seen map[string]string
+
+	// whole records the hash of content the model received complete: a full
+	// read, uncapped. It backs the read tool's re-injection skip (§6.7) and
+	// is deliberately narrower than seen — a partial read updates seen for
+	// the stale check while proving nothing about what the context holds, so
+	// it must never arm the skip.
+	whole map[string]string
 }
 
 func (v *fileVersions) record(path, hash string) {
@@ -241,12 +248,27 @@ func (v *fileVersions) forget(path string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.seen, path)
+	delete(v.whole, path)
 }
 
 func (v *fileVersions) forgetAll() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.seen = map[string]string{}
+	v.whole = map[string]string{}
+}
+
+func (v *fileVersions) recordWhole(path, hash string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.whole[path] = hash
+}
+
+func (v *fileVersions) getWhole(path string) (string, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	hash, ok := v.whole[path]
+	return hash, ok
 }
 
 func hashContent(b []byte) string {
