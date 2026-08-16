@@ -191,7 +191,10 @@ Beyond the expected commands, a few are Switchboard's own:
   outlives session swaps — `/clear`, `/fork`, `/resume` — until
   `/watch off`. The command runs unconfined, as you would run it — it is
   yours, typed in your own session, and there is deliberately no way for
-  a repository to declare one.
+  a repository to declare one. Bare `/watch` with nothing armed reads the
+  workspace and offers the verifier it implies — a Makefile's test
+  target, `go test ./...` for a module, `npm test` when the script is
+  real — but only ever offers: arming stays a thing you type.
 - `/race t3 review this diff` runs one prompt on the current rung and t3
   at once, side by side; `/race t2 t3 …` names both lanes. Each branch is
   a fork of the session, so the sitting rung rides its warm prefix, and
@@ -455,6 +458,21 @@ qwen3.5:9b-mlx` and the same model through an OpenAI-compatible proxy are
 not interchangeable to the router, and the catalog prices them separately.
 A provider can be redirected at a gateway with `[providers.<name>]
 base_url`, which changes the address and deliberately nothing else.
+
+## Where this stands
+
+The build plan behind this tool runs in gated phases, and every phase up
+to and including orchestration is built, tested, and in this tree: the
+loop, the provider layer, the caching and routing core the thesis rides
+on, the TUI, the extensibility surface (MCP, hooks, trust, subagents,
+skills, custom commands), and delegation. What is absent is absent by the
+plan's own gates, not by omission: a learned router ships only if it
+beats the heuristic on the eval harness, summary handoff on escalation
+ships only once that harness shows quality holds, and the hosted platform
+program is out of scope for the CLI on purpose. Feature-complete here
+means every feature whose preconditions exist has been built — the
+remainder are conditional on evidence, and the instrument that gathers
+the evidence is in the tree.
 
 ## Documentation
 

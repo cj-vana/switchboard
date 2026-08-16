@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -176,5 +178,61 @@ func TestAStaleTurnEndRunCannotBlindTheNextTurn(t *testing.T) {
 	// One capture into the new turn must be news.
 	if _, _, _, ok := ws.due(1); !ok {
 		t.Fatal("a stale ran() blinded the new turn")
+	}
+}
+
+func TestSuggestVerifierReadsTheWorkspaceNotTheImagination(t *testing.T) {
+	write := func(dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	empty := t.TempDir()
+	if got := suggestVerifier(empty); got != "" {
+		t.Errorf("an empty workspace implied %q", got)
+	}
+
+	goDir := t.TempDir()
+	write(goDir, "go.mod", "module example.com/x\n")
+	if got := suggestVerifier(goDir); got != "go test ./..." {
+		t.Errorf("a Go module implied %q", got)
+	}
+
+	// The Makefile's own test target outranks the language manifest: it is
+	// the project's declaration, not an implication.
+	write(goDir, "Makefile", "build:\n\tgo build\n\ntest:\n\tgo test ./...\n")
+	if got := suggestVerifier(goDir); got != "make test" {
+		t.Errorf("a declared test target lost to the manifest: %q", got)
+	}
+
+	npmDir := t.TempDir()
+	write(npmDir, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	if got := suggestVerifier(npmDir); got != "npm test" {
+		t.Errorf("a test script implied %q", got)
+	}
+
+	// The npm placeholder fails on purpose; suggesting it would arm a
+	// verifier that is red by construction.
+	placeholder := t.TempDir()
+	write(placeholder, "package.json", `{"scripts":{"test":"echo \"Error: no test specified\" && exit 1"}}`)
+	if got := suggestVerifier(placeholder); got != "" {
+		t.Errorf("the npm placeholder was suggested: %q", got)
+	}
+}
+
+func TestBareWatchOffersTheWorkspaceVerifier(t *testing.T) {
+	m := testModel(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.app.workspace = dir
+
+	cmdWatch(m, "")
+	hint := m.tr.entries[len(m.tr.entries)-1].text
+	if !strings.Contains(hint, "go test ./...") {
+		t.Fatalf("the hint does not offer the implied verifier: %q", hint)
 	}
 }

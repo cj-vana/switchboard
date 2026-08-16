@@ -17,7 +17,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -304,13 +308,60 @@ func (m *tuiModel) watchChip() string {
 	}
 }
 
+// suggestVerifier names the verifier this workspace's own files imply, for
+// the bare /watch hint. It suggests and never arms: the constraint is that
+// a verifier is declared, not inferred, so the user's typing stays the only
+// way one starts running. A Makefile's test target outranks the language
+// manifests because it is the project's own declaration rather than an
+// implication.
+func suggestVerifier(workspace string) string {
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(workspace, name))
+		if err != nil {
+			return ""
+		}
+		return string(data)
+	}
+	if makeTestTarget.MatchString(read("Makefile")) {
+		return "make test"
+	}
+	if read("go.mod") != "" {
+		return "go test ./..."
+	}
+	if read("Cargo.toml") != "" {
+		return "cargo test"
+	}
+	if read("pytest.ini") != "" || strings.Contains(read("pyproject.toml"), "[tool.pytest") {
+		return "pytest"
+	}
+	if pkg := read("package.json"); pkg != "" {
+		var manifest struct {
+			Scripts map[string]string `json:"scripts"`
+		}
+		// The npm placeholder script fails on purpose; suggesting it would
+		// arm a verifier that is red by construction.
+		if err := json.Unmarshal([]byte(pkg), &manifest); err == nil {
+			if s := manifest.Scripts["test"]; s != "" && !strings.Contains(s, "no test specified") {
+				return "npm test"
+			}
+		}
+	}
+	return ""
+}
+
+var makeTestTarget = regexp.MustCompile(`(?m)^test:`)
+
 func cmdWatch(m *tuiModel, args string) tea.Cmd {
 	args = strings.TrimSpace(args)
 	switch {
 	case args == "":
 		w := m.app.watchSt.armed()
 		if w == nil {
-			m.addInfo("  no watch set; /watch <command> arms one — it runs after the model's edits, and only changes are reported")
+			hint := "/watch <command> arms one"
+			if s := suggestVerifier(m.app.workspace); s != "" {
+				hint = fmt.Sprintf("this workspace implies `%s`; /watch %s arms it", s, s)
+			}
+			m.addInfo("  no watch set; " + hint + " — it runs after the model's edits, and only changes are reported")
 			return nil
 		}
 		state := "green"

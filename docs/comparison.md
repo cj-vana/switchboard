@@ -77,7 +77,10 @@ context; here the same want is answered by `/fork`
 into a new log and continue there, the original untouched and the fork's
 prefix byte-identical to what was already sent — so a provider still
 holding it warm serves the fork warm, and going back costs nothing in
-cache. Rewind mutates history to move; fork moves without mutating.
+cache. Rewind mutates history to move; fork moves without mutating. And
+`/pin` gives the cut a name: mark a point once, `/fork <name>` returns to
+it whenever, the pin a plain record that survives resume and rides any
+fork containing it.
 
 **An outbound credential gate.** The credential posture points both ways:
 the keys the tool holds are unprintable by type
@@ -91,6 +94,31 @@ one to ask is refused, `-allow-secrets` being the stated widening. The
 neighbors' guidance for this is hooks the user writes themselves; none
 ships the gate, and none promises that the warning itself cannot quote
 the key.
+
+**A declared verifier wired into routing.** `/watch go test ./...` makes
+the user's own check ambient: it runs after the model's edits — the
+checkpoint recorder's capture count is the trigger, so a delegate's edits
+count too — and only the delta travels, a failure no earlier run produced
+or the run going green, because a verifier that repeats itself teaches
+its reader to stop reading it (`internal/watch`, `cmd/sb/tui_watch.go`).
+A new failure feeds the same escalation evidence as a test run the model
+made itself, which is §8.4's claim — a task-specific verifier outranks
+the agent's own sense that things went well — given a place to be
+declared. The neighbors' answer to "run my tests after edits" is a hook
+the user writes, whose output replays in full every time and informs no
+routing, because there is no routing to inform. None ships a verifier
+that speaks in deltas, colors the status bar, and moves the ladder.
+
+**A rerun that is a controlled experiment.** `/retry` takes the last turn
+back — files revert through the undo checkpoints, the conversation forks
+at the turn's opening — and replays the recorded opening byte-for-byte,
+optionally one rung up (`cmd/sb/tui_retry.go`). Because nothing is
+re-expanded, the second rung reads exactly what the first one read: same
+input, different model, the user's judgment as the verdict, and the
+set-aside answer's log labelled `user_corrected` for the same corpus the
+race verdicts feed. The neighbors can edit a message and regenerate, at
+the cost of rewriting history; none can hand the identical turn to a
+different model and keep both outcomes as routing evidence.
 
 **A paired trial the user judges.** `/race` runs one prompt on two rungs
 at once, each arm a fork of the session riding the same prefix, both
@@ -162,14 +190,16 @@ the capability of the core, the thing a terminal coding agent is for,
 Switchboard now concedes nothing: the converged skeleton is fully present
 (tools, MCP on both transports, hooks, subagents with named definitions,
 custom commands, skills that load the neighbors' own packs, availability
-fallbacks, per-turn undo, session fork, structural search, and
-language-server symbol lookup), and
-on top of it sit nine axes — evidence-based routing with `/why`,
+fallbacks, per-turn undo, session fork with named pins, structural search,
+and language-server symbol lookup), and
+on top of it sit eleven axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
 verified-or-absent sandboxing, delegation priced on the ladder, the
-`/race` paired trial whose verdicts feed that harness, and the outbound
-credential gate — where the neighbors have no counterpart at all.
+`/race` paired trial whose verdicts feed that harness, the `/watch`
+verifier that speaks in deltas and moves the ladder, the byte-identical
+`/retry` whose verdicts join the same corpus, and the outbound credential
+gate — where the neighbors have no counterpart at all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
