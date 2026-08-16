@@ -49,7 +49,11 @@ credential. Then you pick the model t1 starts on, and you are in a session.
 
 Nothing requires editing a file, then or later. `/models` browses what your
 server and the catalog offer and binds rungs. `/login` and `/logout` manage
-keys. `/setup` reopens the checklist. `/theme`, `/think`, `/update`,
+keys. `/setup` reopens the checklist. When something is not working, `sb
+doctor` checks every gate between this machine and a working session — each
+rung probed the way session start probes it, credentials, the sandbox
+self-test, the conditional tools, every declared MCP server — and a row
+that fails names the next action, not just the diagnosis. `/theme`, `/think`, `/update`,
 `/compact`, and `/budget` settings persist themselves. The config is ordinary TOML at
 `~/.switchboard/config.toml` and hand-editing still works, but the tool
 writes it, and the file's own header says so.

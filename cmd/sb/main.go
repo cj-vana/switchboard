@@ -76,6 +76,21 @@ func run() error {
 		}
 		return runUpdateCLI(context.Background(), cfg)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		cat, err := catalog.Load()
+		if err != nil {
+			return err
+		}
+		return runDoctorCLI(context.Background(), os.Stdout, cfg, cat, newProviders("", cfg), cwd)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cost" {
 		cwd, err := os.Getwd()
 		if err != nil {
