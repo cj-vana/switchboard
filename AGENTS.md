@@ -383,6 +383,27 @@ calls without results and every request built from it is malformed (§10.3).
 Fork branches the log only: files are /undo's job, and the checkpoint
 recorder is process-scoped, so it keeps working across the swap.
 
+A pin is a name for a cut, and nothing more. /pin records the message
+count the session held when the user said so (`session.AppendPin`), /fork
+resolves the name back to that count, a reused name moves its pin rather
+than stacking a second, and a numeric name is refused because /fork
+already reads a number as a turn count. A pin past a fork's cut does not
+ride the fork — it names a point the new log does not contain — and no
+pin promises anything about files, because the log cannot keep that
+promise.
+
+/retry is a composition, not a mechanism: the last turn's files revert
+through the checkpoint recorder only when the stack's top turn carries the
+retried prompt's label, the conversation goes back via the same fork
+machinery with its same guarantees, and the recorded opening replays
+byte-for-byte — deliberately not re-expanded, so the retried rung reads
+what the original rung read and the pair is a controlled comparison. A
+retry onto another rung is the /tN one-shot, probe and restore included.
+The set-aside answer's log gets a user_corrected note before the fork
+cuts, and routing consumes none of it. `lastTurnOpening` exists because
+injected advice and watch reports are user-role messages that did not open
+a turn; a retry that replayed one would replay a fragment.
+
 **A race arm is byte-identical upstream and read-only downstream.** /race
 (`cmd/sb/race.go`) runs one prompt on two rungs from two forks of the
 session, and every constraint follows from one of two facts. Fact one: the
