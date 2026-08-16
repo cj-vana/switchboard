@@ -896,6 +896,10 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	if old != nil && old != msg.sess {
 		old.Close()
 	}
+	// The swapped-in context has read nothing, whatever the registry
+	// remembers from the old one: reads must happen again before writes,
+	// the same contract resume enforces by starting a fresh process.
+	m.app.loop.Tools.ForgetAllVersions()
 	m.tr.reset()
 	m.addBanner(msg.sess, !msg.fresh)
 	if !msg.fresh {

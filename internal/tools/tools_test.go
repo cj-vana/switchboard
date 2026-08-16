@@ -429,3 +429,23 @@ func TestRestrictNarrowsAndOnlyNarrows(t *testing.T) {
 		t.Error("a name outside the suite must be an error, never an addition")
 	}
 }
+
+// TestForgetAllVersionsReimposesReadBeforeWrite pins what a session swap
+// relies on: a fresh context must read a file again before it may write it,
+// whatever the registry remembered from the context that is gone.
+func TestForgetAllVersionsReimposesReadBeforeWrite(t *testing.T) {
+	r, root := newRegistry(t)
+	path := filepath.Join(root, "kept.txt")
+	writeFile(t, path, "original")
+
+	run(t, r, "read", map[string]any{"path": "kept.txt"})
+	if res := run(t, r, "write", map[string]any{"path": "kept.txt", "content": "updated"}); res.IsError {
+		t.Fatalf("write after read failed: %s", res.Content)
+	}
+
+	r.ForgetAllVersions()
+	res := run(t, r, "write", map[string]any{"path": "kept.txt", "content": "again"})
+	if !res.IsError || !strings.Contains(res.Content, "not been read") {
+		t.Fatalf("write after the swap = %+v, want a refusal demanding a fresh read", res)
+	}
+}

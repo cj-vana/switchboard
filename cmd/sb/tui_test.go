@@ -13,6 +13,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 func testModel(t *testing.T) *tuiModel {
@@ -29,9 +30,14 @@ func testModel(t *testing.T) *tuiModel {
 	t.Cleanup(func() { sess.Close() })
 
 	cfg := &config.Config{Tiers: []config.Tier{{ID: "t1", Label: "light", Target: target}}}
+	registry, err := tools.NewRegistry(t.TempDir(), execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	loop := &agent.Loop{
 		Session: sess,
 		Target:  target,
+		Tools:   registry,
 		Perms:   permission.NewEngine(permission.ModeDefault, execution.Capability{}),
 	}
 	app := &tuiApp{

@@ -91,6 +91,15 @@ func (r *Registry) ForgetVersions(paths []string) {
 	}
 }
 
+// ForgetAllVersions drops every recorded read. It belongs to a session
+// swap — /clear, /compact, /fork, an in-place /resume — because those
+// replace the context the reads lived in, and the resume rationale on
+// fileVersions applies unchanged: the agent's knowledge of a file came from
+// a context that no longer exists, so it must read again before it may
+// overwrite. A registry that remembered reads across the swap would let a
+// fresh context write files it has never seen.
+func (r *Registry) ForgetAllVersions() { r.versions.forgetAll() }
+
 // recordUndo is called by mutating tools before they touch a file.
 func (r *Registry) recordUndo(abs string) {
 	if r.checkpoints != nil {
@@ -232,6 +241,12 @@ func (v *fileVersions) forget(path string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.seen, path)
+}
+
+func (v *fileVersions) forgetAll() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.seen = map[string]string{}
 }
 
 func hashContent(b []byte) string {
