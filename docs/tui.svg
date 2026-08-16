@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="812" height="610" viewBox="0 0 812 610" font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
+<rect width="812" height="610" rx="8" fill="#101114"/>
+<rect x="343.6" y="492.0" width="117.0" height="17" fill="#303030"/>
+<rect x="16.0" y="577.0" width="70.2" height="17" fill="#af5fd7"/>
+<rect x="86.2" y="577.0" width="163.8" height="17" fill="#1c1c1c"/>
+<rect x="250.0" y="577.0" width="140.4" height="17" fill="#1c1c1c"/>
+<rect x="390.4" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
+<rect x="398.2" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
+<rect x="406.0" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
+<rect x="413.8" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
+<rect x="421.6" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
+<rect x="437.2" y="577.0" width="54.6" height="17" fill="#1c1c1c"/>
+<rect x="491.8" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
+<rect x="507.4" y="577.0" width="78.0" height="17" fill="#1c1c1c"/>
+<rect x="585.4" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
+<rect x="601.0" y="577.0" width="62.4" height="17" fill="#1c1c1c"/>
+<rect x="663.4" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
+<rect x="679.0" y="577.0" width="78.0" height="17" fill="#1c1c1c"/>
+<rect x="757.0" y="577.0" width="31.2" height="17" fill="#1c1c1c"/>
+<rect x="788.2" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
+<text x="23.8" y="147.5" fill="#5fafaf" xml:space="preserve">▌ </text>
+<text x="39.4" y="147.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">switchboard</text>
+<text x="23.8" y="164.5" fill="#5fafaf" xml:space="preserve">▌ </text>
+<text x="39.4" y="164.5" fill="#5fafaf" xml:space="preserve">t1</text>
+<text x="70.6" y="164.5" fill="#d0d0d0" xml:space="preserve">qwen3.5:9b-mlx           </text>
+<text x="281.2" y="164.5" fill="#444444" xml:space="preserve">local   </text>
+<text x="39.4" y="181.5" fill="#5f87d7" xml:space="preserve">t2</text>
+<text x="70.6" y="181.5" fill="#d0d0d0" xml:space="preserve">qwen3.8:27b-mlx          </text>
+<text x="281.2" y="181.5" fill="#444444" xml:space="preserve">local   </text>
+<text x="39.4" y="198.5" fill="#af5fd7" xml:space="preserve">t3</text>
+<text x="70.6" y="198.5" fill="#d0d0d0" xml:space="preserve">kimi-for-coding-highspeed</text>
+<text x="281.2" y="198.5" fill="#444444" xml:space="preserve">plan    </text>
+<text x="39.4" y="215.5" fill="#d7875f" xml:space="preserve">t4</text>
+<text x="70.6" y="215.5" fill="#d0d0d0" xml:space="preserve">gpt-5.6-sol              </text>
+<text x="281.2" y="215.5" fill="#444444" xml:space="preserve">plan    </text>
+<text x="23.8" y="232.5" fill="#444444" xml:space="preserve">  ~/code/switchboard · default · sandboxed (seatbelt, verified)</text>
+<text x="23.8" y="249.5" fill="#444444" xml:space="preserve">  session 20260816T091402 · /help for commands</text>
+<text x="23.8" y="283.5" fill="#ffffaf" font-weight="600" xml:space="preserve">▌ </text>
+<text x="39.4" y="283.5" fill="#d0d0d0" xml:space="preserve">fix the failing test in internal/config and explain what broke</text>
+<text x="23.8" y="317.5" fill="#5fafaf" xml:space="preserve">◆ </text>
+<text x="39.4" y="317.5" fill="#808080" xml:space="preserve">t1 via heuristic (short prompt, tools needed)</text>
+<text x="23.8" y="334.5" fill="#5fafaf" xml:space="preserve">│ </text>
+<text x="39.4" y="334.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">exec</text>
+<text x="70.6" y="334.5" fill="#808080" xml:space="preserve"> go test ./internal/config/</text>
+<text x="23.8" y="351.5" fill="#5fafaf" xml:space="preserve">└ </text>
+<text x="39.4" y="351.5" fill="#ff0000" xml:space="preserve">failed 3s</text>
+<text x="23.8" y="368.5" fill="#ff0000" xml:space="preserve">    FAIL: TestSaveRoundTrips (0.01s)</text>
+<text x="23.8" y="385.5" fill="#00afff" xml:space="preserve">◆ </text>
+<text x="39.4" y="385.5" fill="#808080" xml:space="preserve">escalated: two tool errors in a row</text>
+<text x="23.8" y="402.5" fill="#af5fd7" xml:space="preserve">◆ </text>
+<text x="39.4" y="402.5" fill="#808080" xml:space="preserve">moved to t3 (error spike)</text>
+<text x="23.8" y="419.5" fill="#af5fd7" xml:space="preserve">│ </text>
+<text x="39.4" y="419.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">edit</text>
+<text x="70.6" y="419.5" fill="#808080" xml:space="preserve"> internal/config/save.go</text>
+<text x="23.8" y="436.5" fill="#af5fd7" xml:space="preserve">└ </text>
+<text x="39.4" y="436.5" fill="#808080" xml:space="preserve">ok 1s</text>
+<text x="78.4" y="436.5" fill="#808080" xml:space="preserve"> · 1 replacement</text>
+<text x="23.8" y="453.5" fill="#00afff" xml:space="preserve">◇ </text>
+<text x="39.4" y="453.5" fill="#808080" xml:space="preserve">The failure is the omitempty tag, not the encoder; check the struct tags before rerunning the</text>
+<text x="39.4" y="470.5" fill="#808080" xml:space="preserve">suite.</text>
+<text x="23.8" y="504.5" fill="#d0d0d0" xml:space="preserve">Fixed. The round-trip test broke because </text>
+<text x="343.6" y="504.5" fill="#ff5f5f" xml:space="preserve"> updates.check </text>
+<text x="460.6" y="504.5" fill="#d0d0d0" xml:space="preserve"> serialized explicitly;</text>
+<text x="23.8" y="521.5" fill="#d0d0d0" xml:space="preserve">the tag now omits</text>
+<text x="156.4" y="521.5" fill="#d0d0d0" xml:space="preserve"> it.</text>
+<text x="23.8" y="555.5" fill="#d0d0d0" xml:space="preserve">▌ </text>
+<text x="23.8" y="572.5" fill="#444444" xml:space="preserve">──────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="589.5" fill="#262626" font-weight="600" xml:space="preserve"> t3 kimi </text>
+<text x="86.2" y="589.5" fill="#808080" xml:space="preserve"> kimi/kimi-for-coding</text>
+<text x="390.4" y="589.5" fill="#5fafaf" xml:space="preserve">▂</text>
+<text x="398.2" y="589.5" fill="#5f87d7" xml:space="preserve">▂</text>
+<text x="406.0" y="589.5" fill="#af5fd7" xml:space="preserve">█</text>
+<text x="413.8" y="589.5" fill="#d7875f" xml:space="preserve">▂</text>
+<text x="437.2" y="589.5" fill="#444444" xml:space="preserve">default</text>
+<text x="507.4" y="589.5" fill="#808080" xml:space="preserve">think high</text>
+<text x="601.0" y="589.5" fill="#00d787" xml:space="preserve">plan    </text>
+<text x="679.0" y="589.5" fill="#00afff" xml:space="preserve">▓▓▓░░░░░░░</text>
+<text x="757.0" y="589.5" fill="#808080" xml:space="preserve"> 34%</text>
+</svg>
