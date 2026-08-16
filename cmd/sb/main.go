@@ -619,7 +619,14 @@ func listSessions(store *session.Store, workspace string) error {
 		return nil
 	}
 	for _, info := range infos {
-		fmt.Printf("%s  %s  %d bytes\n", info.ID, info.Modified.Local().Format("2006-01-02 15:04:05"), info.Size)
+		// The same first-words label the /resume picker shows, for the same
+		// reason: an id names a file, the opening names a conversation. The
+		// read stops at the head of each log and takes no lock.
+		line := fmt.Sprintf("%s  %s  %d bytes", info.ID, info.Modified.Local().Format("2006-01-02 15:04:05"), info.Size)
+		if opening, err := session.ReadOpening(info.Path); err == nil && opening != "" {
+			line += "  " + truncate(strings.Join(strings.Fields(opening), " "), 56)
+		}
+		fmt.Println(line)
 	}
 	return nil
 }
