@@ -1065,16 +1065,22 @@ func (m *tuiModel) inputZoneView() string {
 	return strings.Join(lines, "\n")
 }
 
+// workVerbs are the operator's verbs: what the person behind a switchboard
+// did all day. One is chosen every few seconds of a running turn, so the
+// working line has a pulse beyond the spinner without inventing progress.
+var workVerbs = []string{"patching", "routing", "switching", "relaying", "bridging", "ringing", "connecting", "listening"}
+
 // workingLine is the row that appears under the input while a turn runs:
-// spinner, who, elapsed, the way out. The spinner and the rung name wear the
-// active rung's heat, so "who is working" is answered by color before it is
-// answered by text. Token counts live in the completion line and /cost; six
-// segments animating against a timer was five too many.
+// spinner, who, what, elapsed, the way out. The spinner and the rung name
+// wear the active rung's heat, so "who is working" is answered by color
+// before it is answered by text. Token counts live in the completion line
+// and /cost; six segments animating against a timer was five too many.
 func (m *tuiModel) workingLine() string {
-	who := "working"
+	verb := workVerbs[int(time.Since(m.started).Seconds()/3)%len(workVerbs)]
+	who := verb + "…"
 	spin := m.spin.View()
 	if rank := m.activeRank(); rank >= 0 {
-		who = m.app.tier.ID + " working"
+		who = m.app.tier.ID + " " + verb + "…"
 		spin = m.th.rung(rank).Render(spin)
 		who = m.th.rung(rank).Render(who)
 	}

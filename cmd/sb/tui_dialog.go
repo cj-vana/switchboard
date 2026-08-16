@@ -91,16 +91,22 @@ func (d *permissionDialog) view(width int, th *theme) string {
 	}
 	for i, opt := range options {
 		if i == d.sel {
-			b.WriteString(th.accent.Render(" ▌ "+opt) + "\n")
+			b.WriteString(th.accent.Render(" ▌ ") + th.bold.Render(opt) + "\n")
 		} else {
 			b.WriteString(th.dim.Render("   "+opt) + "\n")
 		}
 	}
 	b.WriteString(th.faint.Render(" y yes · a always · n no · ↑↓ choose"))
 
+	// The border states the stakes: accent for a routine ask, amber the moment
+	// the command leaves the sandbox. Color is information here, not chrome.
+	frame := th.accent
+	if d.out.SandboxAbsent {
+		frame = th.warn
+	}
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor(th)).
+		BorderForeground(frame.GetForeground()).
 		Padding(0, 1).
 		Width(max(width-4, 40))
 	return box.Render(strings.TrimRight(b.String(), "\n"))

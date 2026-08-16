@@ -31,6 +31,12 @@ type theme struct {
 	selected lipgloss.Style
 	border   lipgloss.Style
 
+	// surface is the raised ground a user message sits on: one shade lifted
+	// from the page, so what the user plugged in reads as a card among the
+	// stream of rung-colored activity. The transcript owns it the way the
+	// status bar owns barBg.
+	surface lipgloss.Color
+
 	// rungs is the heat ramp: the ladder rendered as temperature. t1 sits at
 	// cool teal and each rung above it runs warmer, ending at amber, so a
 	// glance at any routing surface says where on the ladder work is running
@@ -48,6 +54,12 @@ type theme struct {
 // continuous surface under every segment drawn on it.
 func (t *theme) onBar(s lipgloss.Style) lipgloss.Style {
 	return s.Background(t.barBg)
+}
+
+// onSurface grounds a style on the user-message card, so the card stays one
+// continuous surface under every segment drawn on it.
+func (t *theme) onSurface(s lipgloss.Style) lipgloss.Style {
+	return s.Background(t.surface)
 }
 
 // rung returns the heat style for a ladder rank, clamped: a ladder deeper
@@ -74,16 +86,19 @@ func (t *theme) rungChip(rank int) lipgloss.Style {
 
 func darkTheme() *theme {
 	t := &theme{name: "dark", dark: true}
+	// The neutral scale does most of the hierarchy work: body, metadata,
+	// whisper. Weight and these three grays carry a line before color ever
+	// speaks, so color stays free to mean something (a rung, a severity).
 	t.text = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	t.dim = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	t.faint = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	t.dim = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	t.faint = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	t.bold = lipgloss.NewStyle().Bold(true)
 	t.accent = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 	t.user = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true)
 	t.ok = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	t.warn = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	t.err = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	t.thinking = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
+	t.thinking = lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Italic(true)
 
 	t.tierChip = lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Background(lipgloss.Color("39")).Bold(true)
 	t.modeChip = map[string]lipgloss.Style{
@@ -97,6 +112,7 @@ func darkTheme() *theme {
 	t.selected = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 	t.border = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	t.barBg = lipgloss.Color("234")
+	t.surface = lipgloss.Color("235")
 
 	// Cool to warm, muted rather than neon: teal, steel blue, violet, copper,
 	// amber, coral. Mid-brightness values chosen to read on a dark ground.
@@ -133,6 +149,7 @@ func lightTheme() *theme {
 	t.selected = lipgloss.NewStyle().Background(lipgloss.Color("254"))
 	t.border = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	t.barBg = lipgloss.Color("253")
+	t.surface = lipgloss.Color("255")
 
 	// The same ramp, darkened to hold contrast on a light ground.
 	for _, c := range []string{"30", "25", "91", "130", "136", "161"} {

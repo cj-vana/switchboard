@@ -31,9 +31,13 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 
 	if len(app.config.Tiers) > 0 {
 		widest := 0
+		idWidest := 0
 		for _, t := range app.config.Tiers {
 			if n := len(t.Target.ModelID); n > widest {
 				widest = n
+			}
+			if n := len(t.ID); n > idWidest {
+				idWidest = n
 			}
 		}
 		for rank, t := range app.config.Tiers {
@@ -41,7 +45,7 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 			if rank == activeRank {
 				bar = th.rung(rank).Render("▌ ")
 			}
-			row := bar + th.rung(rank).Render(t.ID) + "  " +
+			row := bar + th.rung(rank).Render(padRight(t.ID, idWidest)) + "  " +
 				th.text.Render(padRight(t.Target.ModelID, min(widest, 40))) +
 				"  " + th.faint.Render(meteringWord(app.catalog, t))
 			lines = append(lines, row)

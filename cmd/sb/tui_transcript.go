@@ -228,18 +228,30 @@ func (t *transcript) renderUncached(e *entry) []string {
 // the user plugged in, thin rails carry tool activity, and a diamond junction
 // marks the router switching jacks. Box-drawing characters only, because
 // they render everywhere a terminal does.
+//
+// A user turn renders as a card on the surface ground, bar on the first line
+// and the rest padded flush: in a stream of rung-colored rails the eye needs
+// what *you* said to land as one object, not as lines that happen to share a
+// prefix. Every segment carries the ground, the way the status bar does.
 func (t *transcript) renderUser(text string, w int) []string {
-	inner := w - 2
+	inner := w - 4 // the 1-cell page margin, the two-cell bar, a right pad
 	if inner < 20 {
 		inner = 20
 	}
+	on := t.th.onSurface
+	bar := on(t.th.user).Render("▌ ")
+	pad := on(t.th.user).Render("  ")
 	var lines []string
 	for i, l := range wrapPlain(text, inner) {
+		lead := pad
 		if i == 0 {
-			lines = append(lines, t.th.user.Render("▌ ")+t.th.text.Render(l))
-		} else {
-			lines = append(lines, t.th.user.Render("▌ ")+t.th.text.Render(l))
+			lead = bar
 		}
+		gap := w - 1 - 2 - lipgloss.Width(l)
+		if gap < 1 {
+			gap = 1
+		}
+		lines = append(lines, lead+on(t.th.text).Render(l)+on(t.th.text).Render(strings.Repeat(" ", gap)))
 	}
 	return lines
 }
@@ -256,9 +268,11 @@ func (t *transcript) renderTool(tool *toolEntry, expanded bool, rank int, w int)
 	if !tool.done {
 		return []string{head}
 	}
-	status := t.th.dim.Render("ok " + formatDuration(tool.took))
+	// Completion is a verdict glyph, not a word: ✓ and ✗ read at scroll speed,
+	// where "ok" and "failed" read at reading speed.
+	status := t.th.ok.Render("✓") + t.th.dim.Render(" "+formatDuration(tool.took))
 	if tool.failed {
-		status = t.th.err.Render("failed " + formatDuration(tool.took))
+		status = t.th.err.Render("✗ " + formatDuration(tool.took))
 	}
 	lines := []string{head, rail.Render("└ ") + status}
 
@@ -294,7 +308,7 @@ func (t *transcript) renderNotice(level, text string, w int) []string {
 	case "warn":
 		style, glyph, body = t.th.warn, "△", t.th.warn
 	case "error":
-		style, glyph, body = t.th.err, "✕", t.th.err
+		style, glyph, body = t.th.err, "✗", t.th.err
 	case "route":
 		style, glyph = t.th.accent, "◆"
 	case "advisor":
