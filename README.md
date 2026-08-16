@@ -167,8 +167,10 @@ Beyond the expected commands, a few are Switchboard's own:
   most valuable verdict the ladder can hear: direct evidence the cheap
   model was enough, which no amount of watching one model succeed can
   establish. Every verdict is recorded on the session as paired routing
-  evidence and shows in `/why`; the router deliberately does not consume
-  it — collecting the corpus honestly comes before acting on it.
+  evidence and shows in `/why`, and `sb races` sums the whole workspace's
+  verdicts per pair from the command line; the router deliberately does
+  not consume any of it — collecting the corpus honestly comes before
+  acting on it.
 - `/fork` is how the conversation goes back without rewriting anything:
   it branches the session into a new log and continues there, `/fork 2`
   leaving the last two user turns behind. The original is read, never

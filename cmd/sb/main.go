@@ -111,6 +111,17 @@ func run() error {
 		}
 		return runCostCLI(os.Stdout, store, cat, cwd)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "races" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		return runRacesCLI(os.Stdout, store, cwd)
+	}
 
 	var opts options
 	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
