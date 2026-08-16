@@ -96,8 +96,8 @@ statement is: the mechanism ships, the verdict is pending.
 ## What the neighbors do better
 
 Claude Code has a skills and plugin ecosystem, agent teams, IDE
-integrations, and MCP OAuth flows, and its checkpoints rewind conversation
-as well as files; it is the deepest single-vendor experience. Codex CLI has
+integrations, and MCP OAuth flows; it is the deepest single-vendor
+experience. Codex CLI has
 the most configurable profile-per-workload setup, several sandbox postures
 to choose between, and cloud execution. OpenCode has the broadest provider
 matrix, LSP integration, a desktop app, and the largest open-source
@@ -111,11 +111,13 @@ provider count, IDE surfaces, plugin ecosystems, community — the neighbors
 lead, and those leads are functions of scale and time, not of design. On
 the capability of the core, the thing a terminal coding agent is for,
 Switchboard now concedes nothing: the converged skeleton is fully present
-(tools, MCP on both transports, hooks, subagents, custom commands, per-turn
-undo), and on top of it sit six axes — evidence-based routing with `/why`,
-three-way cost honesty, the measured estimator, the falsification harness
-with its runs in the tree, verified-or-absent sandboxing, and delegation
-priced on the ladder — where the neighbors have no counterpart at all.
+(tools, MCP on both transports, hooks, subagents with named definitions,
+custom commands, availability fallbacks, per-turn undo, session fork), and
+on top of it sit seven axes — evidence-based routing with `/why`,
+three-way cost honesty, a hard budget the machinery itself obeys, the
+measured estimator, the falsification harness with its runs in the tree,
+verified-or-absent sandboxing, and delegation priced on the ladder — where
+the neighbors have no counterpart at all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
