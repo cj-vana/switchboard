@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/tools"
 )
 
 // dialog is a modal that takes over the input zone until it resolves. The
@@ -69,10 +68,7 @@ func (d *permissionDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
 }
 
 func (d *permissionDialog) view(width int, th *theme) string {
-	desc := d.req.Path
-	if d.req.Effect == permission.EffectExecute {
-		desc = tools.Describe(d.req.Argv, d.req.Shell)
-	}
+	desc := describeRequest(d.req)
 
 	var b strings.Builder
 	b.WriteString(th.bold.Render(" approve "+d.req.Tool) + " " + th.dim.Render(desc) + "\n")
@@ -84,9 +80,15 @@ func (d *permissionDialog) view(width int, th *theme) string {
 	}
 	b.WriteString("\n")
 
+	always := "yes, and don't ask again for this exact command"
+	if d.req.Effect == permission.EffectExternal {
+		// The remembered answer for an external tool covers the tool, not one
+		// byte-exact invocation; the label has to say what it grants.
+		always = "yes, and allow this tool for the rest of the session"
+	}
 	options := []string{
 		"yes",
-		"yes, and don't ask again for this exact command",
+		always,
 		"no",
 	}
 	for i, opt := range options {

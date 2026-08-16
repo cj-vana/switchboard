@@ -151,6 +151,9 @@ func describeRequest(req permission.Request) string {
 	if req.Effect == permission.EffectExecute {
 		return tools.Describe(req.Argv, req.Shell)
 	}
+	if req.Detail != "" {
+		return req.Detail
+	}
 	return req.Path
 }
 

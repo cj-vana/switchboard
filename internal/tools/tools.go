@@ -107,6 +107,18 @@ func (r *Registry) add(t Tool) {
 	sort.Strings(r.order)
 }
 
+// AddExternal registers a tool provided from outside the suite — an MCP
+// server's, bridged. It exists for session assembly only: the definitions
+// sit in the frozen zone of the context layout (§6.1), so the set must be
+// complete before the first request goes out and must not change after.
+func (r *Registry) AddExternal(t Tool) error {
+	if _, exists := r.tools[t.Name()]; exists {
+		return fmt.Errorf("tool %s is already registered", t.Name())
+	}
+	r.add(t)
+	return nil
+}
+
 func (r *Registry) Root() string { return r.root }
 
 func (r *Registry) Get(name string) (Tool, bool) {

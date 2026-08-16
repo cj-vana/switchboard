@@ -171,6 +171,9 @@ func runTUI(
 	sess *session.Session,
 	resumed bool,
 	updateCheck bool,
+	trustStore *trust.Store,
+	trustErr error,
+	mcpEnv *mcpState,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -201,11 +204,11 @@ func runTUI(
 		route:      routeDec,
 		sticky:     sticky,
 		obs:        obs,
+		trust:      trustStore,
+		mcp:        mcpEnv,
 	}
-	if ts, err := trust.Open(); err != nil {
-		app.trustErr = err.Error()
-	} else {
-		app.trust = ts
+	if trustErr != nil {
+		app.trustErr = trustErr.Error()
 	}
 
 	m := newTUIModel(app, th, md, ta)
@@ -218,6 +221,13 @@ func runTUI(
 	loop.Asker = &tuiAsker{p: p}
 
 	m.addBanner(sess, resumed)
+	for _, n := range mcpEnv.notes {
+		if n.level == "" {
+			m.addInfo("  " + n.text)
+		} else {
+			m.addNotice(n.level, n.text)
+		}
+	}
 	if routeDec != nil {
 		m.addRoute(routeSummary(*routeDec), describeRoute(*routeDec))
 	}
@@ -941,11 +951,7 @@ func (m *tuiModel) activeRank() int {
 
 func (m *tuiModel) onToolStart(msg toolStartMsg) {
 	m.tr.finalize(m.tr.last())
-	desc := msg.req.Path
-	if msg.req.Effect == permission.EffectExecute {
-		desc = tools.Describe(msg.req.Argv, msg.req.Shell)
-	}
-	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: msg.name, desc: desc}, rank: m.activeRank()})
+	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: msg.name, desc: describeRequest(msg.req)}, rank: m.activeRank()})
 }
 
 func (m *tuiModel) onToolEnd(msg toolEndMsg) {

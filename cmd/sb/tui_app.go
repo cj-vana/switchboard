@@ -45,6 +45,9 @@ type tuiApp struct {
 	trust    *trust.Store
 	trustErr string
 
+	// mcp holds the session's connected servers, for /mcp and shutdown.
+	mcp *mcpState
+
 	// advisor, when non-nil, wraps the watcher as the loop's observer and
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.
 	advisor *advisor.Advisor

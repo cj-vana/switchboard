@@ -11,6 +11,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/mcp"
 	"github.com/cj-vana/switchboard/internal/permission"
 )
 
@@ -45,6 +46,7 @@ func commands() []commandItem {
 		{name: "session", desc: "session id, target, and message count", busySafe: true, run: cmdSession},
 		{name: "sandbox", desc: "what isolation this host provides", busySafe: true, run: cmdSandbox},
 		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
+		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
@@ -249,6 +251,36 @@ func cmdDiff(m *tuiModel, _ string) tea.Cmd {
 	return openDiff(m.app.workspace, m.th.dark)
 }
 
+// cmdMCP reports the session's external tooling: which servers connected,
+// what each brought, and which died since. It reads live state rather than
+// startup state, because a server that crashed an hour ago is the thing the
+// user is here to find out.
+func cmdMCP(m *tuiModel, _ string) tea.Cmd {
+	st := m.app.mcp
+	if st == nil || len(st.clients) == 0 {
+		m.addInfo("  no MCP servers connected\n" +
+			"  declare them in ~/.switchboard/mcp.toml, or in this repository's .switchboard/mcp.toml behind /trust grant:\n\n" +
+			"    [mcp.github]\n" +
+			"    command = \"github-mcp-server\"\n" +
+			"    args = [\"stdio\"]\n\n" +
+			"  a url key instead of command reaches a Streamable HTTP server")
+		return nil
+	}
+	var b strings.Builder
+	for _, c := range st.clients {
+		fmt.Fprintf(&b, "  %s  %s", c.Name(), c.ServerLine())
+		if err := c.Err(); err != nil {
+			fmt.Fprintf(&b, "\n    dead: %v", err)
+		}
+		for _, t := range c.Tools() {
+			fmt.Fprintf(&b, "\n    %s", mcp.Namespaced(c.Name(), t.Name))
+		}
+		b.WriteString("\n")
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
 // cmdTrust shows and edits the standing grant that lets a checkout start the
 // processes it declares. The wording stays concrete about what a grant
 // enables, because "trust this workspace?" answered without knowing the
@@ -270,12 +302,12 @@ func cmdTrust(m *tuiModel, args string) tea.Cmd {
 		if err := s.Grant(ws); err != nil {
 			return noticeCmd("error", "grant failed: "+err.Error())
 		}
-		m.addInfo("  workspace trusted; repository-declared MCP servers and hooks start with the next session (/clear)")
+		m.addInfo("  workspace trusted; repository-declared MCP servers and hooks start on the next run of sb")
 	case "revoke":
 		if err := s.Revoke(ws); err != nil {
 			return noticeCmd("error", "revoke failed: "+err.Error())
 		}
-		m.addInfo("  trust withdrawn; repository-declared MCP servers and hooks stay off from the next session")
+		m.addInfo("  trust withdrawn; repository-declared MCP servers and hooks stay off from the next run of sb")
 	case "list":
 		granted := s.Granted()
 		if len(granted) == 0 {

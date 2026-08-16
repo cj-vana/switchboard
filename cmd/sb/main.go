@@ -25,6 +25,7 @@ import (
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
 	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/cj-vana/switchboard/internal/trust"
 )
 
 func main() {
@@ -165,6 +166,12 @@ func run() error {
 		return err
 	}
 
+	// The trust store is opened before MCP assembly because it is what
+	// decides whether a repository's declared servers may start.
+	trustStore, trustErr := trust.Open()
+	mcpEnv, mcpRules := connectMCP(ctx, workspace, trustStore, registry)
+	defer mcpEnv.Close()
+
 	// §6 is only live if something wires it. The loop assembles a request from
 	// the session by default, so without this the zones, the breakpoint
 	// manager, and the tracker are all present and never consulted.
@@ -174,7 +181,7 @@ func run() error {
 		Provider: client,
 		Target:   tier.Target,
 		Tools:    registry,
-		Perms:    permission.NewEngine(mode, capability),
+		Perms:    permission.NewEngine(mode, capability, mcpRules...),
 		Session:  sess,
 		Catalog:  cat,
 		Cache:    cache,
@@ -205,7 +212,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv)
 	}
 
 	out := newRenderer(os.Stdout)
@@ -230,6 +237,9 @@ func run() error {
 	r.watcher = loop.Observer.(*watcher)
 
 	r.banner(sess, resumed)
+	for _, n := range mcpEnv.notes {
+		out.Notice(n.level, n.text)
+	}
 
 	if opts.prompt != "" {
 		return r.once(ctx, opts.prompt)

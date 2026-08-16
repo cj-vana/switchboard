@@ -57,6 +57,14 @@ const (
 	EffectRead    Effect = "read"
 	EffectWrite   Effect = "write"
 	EffectExecute Effect = "execute"
+
+	// EffectExternal marks a tool whose action happens outside the workspace
+	// and outside any sandbox this host verified: an MCP server's tool, acting
+	// wherever that server acts. No mode auto-allows it, bypass included,
+	// because bypass suppresses prompts inside a granted sandbox and an
+	// external tool is never inside one. Only an explicit rule or a
+	// remembered answer lets one run without asking.
+	EffectExternal Effect = "external"
 )
 
 // Request is a tool call described in the terms rules match on.
@@ -79,6 +87,13 @@ type Request struct {
 	// a command that can reach the internet can send the workspace anywhere,
 	// which is a different decision from letting it run at all.
 	Network bool
+
+	// Detail is display only: the prompt and the transcript show it, rules
+	// never match it and the remember key never includes it. External tools
+	// use it to show their arguments while the remembered answer stays
+	// per-tool, since a user approving an MCP tool approves the tool, not one
+	// byte-exact invocation.
+	Detail string
 }
 
 type Rule struct {
@@ -207,6 +222,9 @@ func (e *Engine) Check(req Request) Outcome {
 func (e *Engine) modeDefault(mode Mode, req Request) Outcome {
 	if req.Effect == EffectRead {
 		return Outcome{Decision: Allow, Reason: "reads do not change the workspace"}
+	}
+	if req.Effect == EffectExternal {
+		return Outcome{Decision: Ask, Reason: "an MCP tool acts outside the sandbox; its effect is whatever the server does"}
 	}
 
 	switch mode {

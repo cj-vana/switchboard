@@ -301,3 +301,45 @@ func TestParseMode(t *testing.T) {
 		t.Error("an unknown mode must be an error, not a silent default")
 	}
 }
+
+func external() Request {
+	return Request{Tool: "mcp__gh__search", Effect: EffectExternal, Detail: `{"q":"x"} (gh server)`}
+}
+
+// An MCP tool acts outside every boundary this engine can reason about, so no
+// mode auto-allows it — bypass included, even on a host with a verified
+// sandbox, because the server was never inside it.
+func TestExternalEffectAsksInEveryMode(t *testing.T) {
+	for _, mode := range []Mode{ModeDefault, ModeAcceptEdits, ModeBypass} {
+		for _, cap := range []execution.Capability{noSandbox, verifiedSandbox} {
+			e := NewEngine(mode, cap)
+			if got := e.Check(external()).Decision; got != Ask {
+				t.Errorf("mode %s: external = %s, want Ask", mode, got)
+			}
+		}
+	}
+	e := NewEngine(ModePlan, noSandbox)
+	if got := e.Check(external()).Decision; got != Deny {
+		t.Errorf("plan mode: external = %s, want Deny", got)
+	}
+}
+
+func TestExternalAllowRuleAndRememberArePerTool(t *testing.T) {
+	e := NewEngine(ModeDefault, noSandbox,
+		Rule{Decision: Allow, Tool: "mcp__gh__search", Effect: EffectExternal})
+	if got := e.Check(external()).Decision; got != Allow {
+		t.Errorf("allow rule: external = %s, want Allow", got)
+	}
+
+	// Detail is display only: two invocations that differ only there are the
+	// same request to the remember table, which is what makes "allow this
+	// tool for the session" mean what it says.
+	e = NewEngine(ModeDefault, noSandbox)
+	first := external()
+	e.Remember(first, true)
+	second := external()
+	second.Detail = `{"q":"totally different"} (gh server)`
+	if got := e.Check(second).Decision; got != Allow {
+		t.Errorf("remembered external tool = %s, want Allow across argument changes", got)
+	}
+}
