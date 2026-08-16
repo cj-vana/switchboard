@@ -200,6 +200,12 @@ Beyond the expected commands, a few are Switchboard's own:
   prefix warm serves the fork warm — going back costs nothing in cache.
   Files are not rewound; that is `/undo`, and it keeps working across
   the branch.
+- `/pin before-refactor` names the point you are standing on, and
+  `/fork before-refactor` branches back to it later — no counting turns.
+  A pin is a record in the session log and nothing else, so it survives
+  resume, rides any fork whose prefix contains it, and moves if you use
+  the name again. `/pin` alone lists them, each placed in user turns
+  behind the tip.
 
 Custom commands are markdown files in `.switchboard/commands/` (project) or
 `~/.switchboard/commands/` (global): `$ARGUMENTS` and `$1..$9` substitute,

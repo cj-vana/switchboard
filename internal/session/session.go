@@ -72,6 +72,10 @@ type State struct {
 	// invoice (§15).
 	CostMicroUSD int64
 
+	// Pins are the named points /fork can cut back to, in the order set,
+	// with a re-used name moving its pin rather than stacking a second.
+	Pins []Pin
+
 	// CatalogRevision is the revision the session started against.
 	CatalogRevision string
 }
@@ -338,6 +342,12 @@ func (s *Session) apply(rec Record) error {
 		s.state.Usage = s.state.Usage.Add(p.Usage)
 		s.state.CostMicroUSD += p.CostMicroUSD
 		s.state.Calls++
+	case RecordPin:
+		var p Pin
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		s.state.setPin(p)
 	case RecordPermission, RecordNote, RecordRoute, RecordRace:
 		// Recorded for audit and for §8.4's training signal; none of them carry
 		// conversation state, so replay skips them without losing anything.
@@ -421,11 +431,49 @@ func (s *Session) AppendNote(level, text string) error {
 	return s.append(RecordNote, Note{Level: level, Text: text})
 }
 
+// AppendPin marks the current point in the conversation under a name. The
+// count is taken here, under the lock, so the pin means "everything the log
+// held when the user said so" whatever arrives next.
+func (s *Session) AppendPin(name string) (Pin, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := Pin{Name: name, Messages: len(s.state.Messages)}
+	if err := s.append(RecordPin, p); err != nil {
+		return Pin{}, err
+	}
+	s.state.setPin(p)
+	return p, nil
+}
+
+// setPin keeps one pin per name: setting a name again moves it, because two
+// cut points under one name would make /fork's answer depend on which the
+// reader found first.
+func (st *State) setPin(p Pin) {
+	for i, have := range st.Pins {
+		if have.Name == p.Name {
+			st.Pins[i] = p
+			return
+		}
+	}
+	st.Pins = append(st.Pins, p)
+}
+
+// Pin resolves a name to its recorded point.
+func (st State) Pin(name string) (Pin, bool) {
+	for _, p := range st.Pins {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Pin{}, false
+}
+
 func (s *Session) State() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := s.state
 	out.Messages = append([]provider.Message(nil), s.state.Messages...)
+	out.Pins = append([]Pin(nil), s.state.Pins...)
 	return out
 }
 

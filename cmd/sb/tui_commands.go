@@ -35,7 +35,8 @@ func commands() []commandItem {
 		{name: "exit", aliases: []string{"quit"}, desc: "leave", busySafe: true, run: cmdExit},
 		{name: "clear", aliases: []string{"new", "reset"}, desc: "start a fresh session", run: cmdClear},
 		{name: "resume", usage: "[id]", desc: "pick up an earlier session", run: cmdResume},
-		{name: "fork", usage: "[n]", desc: "branch this session, less its last n user turns", run: cmdFork},
+		{name: "fork", usage: "[n|pin]", desc: "branch this session, less its last n user turns, or back to a pin", run: cmdFork},
+		{name: "pin", usage: "[name]", desc: "name this point in the session; /fork <name> branches back to it", run: cmdPin},
 		{name: "tier", usage: "<id>", desc: "switch tier (bare /t2 works too)", run: cmdTier},
 		{name: "tiers", desc: "show the configured ladder", busySafe: true, run: cmdTiers},
 		{name: "why", desc: "how this tier was chosen, and what the others would have cost", busySafe: true, run: cmdWhy},
@@ -192,8 +193,26 @@ func cmdFork(m *tuiModel, args string) tea.Cmd {
 	n := 0
 	if args = strings.TrimSpace(args); args != "" {
 		v, err := strconv.Atoi(args)
-		if err != nil || v < 0 {
-			return noticeCmd("error", "/fork takes how many user turns to leave behind, e.g. /fork 2")
+		if err != nil {
+			// Not a number: a pin name. The pin recorded its cut when it was
+			// set, so the fork lands exactly where the user stood then.
+			pin, ok := state.Pin(args)
+			if !ok {
+				return noticeCmd("error", "no pin named "+args+"; /pin lists them, /fork n counts turns instead")
+			}
+			if pin.Messages < 1 {
+				return noticeCmd("error", "pin "+args+" marks the session's start; /clear is how an empty session starts")
+			}
+			dropped := 0
+			for _, msg := range state.Messages[min(pin.Messages, len(state.Messages)):] {
+				if msg.Role == provider.RoleUser {
+					dropped++
+				}
+			}
+			return m.app.forkSession(m.app.loop.Session.ID(), pin.Messages, dropped)
+		}
+		if v < 0 {
+			return noticeCmd("error", "/fork takes how many user turns to leave behind, e.g. /fork 2, or a /pin name")
 		}
 		n = v
 	}

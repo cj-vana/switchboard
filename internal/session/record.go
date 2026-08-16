@@ -56,6 +56,14 @@ const (
 	// distribution that matters is the one people actually work in.
 	RecordRoute RecordType = "route"
 
+	// RecordPin is a named point in the conversation: how many messages the
+	// session held when the user marked it. It exists for /fork by name —
+	// the cut point survives in the log, so it survives resume and rides a
+	// fork's copied prefix — and it is log-only by design: files are /undo's
+	// job, and a pin that also promised file state would be promising what
+	// the log cannot keep.
+	RecordPin RecordType = "pin"
+
 	// RecordRace is one /race verdict: the same prompt, from the same prefix,
 	// run on two rungs at once and judged by the user. §8.4's complaint about
 	// natural outcomes is that they are weak — a clean completion says nothing
@@ -145,6 +153,14 @@ type RaceArm struct {
 	Usage        provider.Usage `json:"usage"`
 	CostMicroUSD int64          `json:"cost_micro_usd"`
 	WallTimeMS   int64          `json:"wall_time_ms"`
+}
+
+// Pin is a named point in the conversation. Messages is the count when the
+// pin was set, which is the fork cut that returns there: set between turns,
+// it always lands on the boundary /fork requires.
+type Pin struct {
+	Name     string `json:"name"`
+	Messages int    `json:"messages"`
 }
 
 type Record struct {
