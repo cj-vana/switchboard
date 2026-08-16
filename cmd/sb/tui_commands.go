@@ -258,7 +258,11 @@ func cmdDiff(m *tuiModel, _ string) tea.Cmd {
 // user is here to find out.
 func cmdMCP(m *tuiModel, _ string) tea.Cmd {
 	st := m.app.mcp
-	if st == nil || len(st.clients) == 0 {
+	var clients []*mcp.Client
+	if st != nil {
+		clients = st.clientList()
+	}
+	if len(clients) == 0 {
 		m.addInfo("  no MCP servers connected\n" +
 			"  declare them in ~/.switchboard/mcp.toml, or in this repository's .switchboard/mcp.toml behind /trust grant:\n\n" +
 			"    [mcp.github]\n" +
@@ -268,7 +272,7 @@ func cmdMCP(m *tuiModel, _ string) tea.Cmd {
 		return nil
 	}
 	var b strings.Builder
-	for _, c := range st.clients {
+	for _, c := range clients {
 		fmt.Fprintf(&b, "  %s  %s", c.Name(), c.ServerLine())
 		if err := c.Err(); err != nil {
 			fmt.Fprintf(&b, "\n    dead: %v", err)

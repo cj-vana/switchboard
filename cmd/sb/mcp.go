@@ -27,15 +27,61 @@ type mcpNote struct {
 	text  string
 }
 
+// maxBufferedNotes bounds what accumulates while no surface is listening. A
+// chatty server must not grow memory forever into a buffer nobody reads.
+const maxBufferedNotes = 200
+
 // mcpState is what the session keeps of its MCP wiring: the live clients for
-// /mcp and shutdown, and the startup notes the surface shows once.
+// /mcp and shutdown, and the notes those clients produce. Notes arrive from
+// the connect goroutines and from every client's read loop for as long as
+// the session lives, while the surfaces and main append and read their own,
+// so every access goes through the mutex here rather than through whatever
+// lock a caller happens to hold.
 type mcpState struct {
+	mu      sync.Mutex
 	clients []*mcp.Client
 	notes   []mcpNote
+	deliver func(mcpNote)
+}
+
+// add records a note, or hands it straight to the surface once one attached.
+func (s *mcpState) add(n mcpNote) {
+	s.mu.Lock()
+	d := s.deliver
+	if d == nil {
+		if len(s.notes) < maxBufferedNotes {
+			s.notes = append(s.notes, n)
+		}
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	// Delivery happens outside the lock: the TUI's deliver blocks until the
+	// program's event loop consumes it, and holding the lock across that
+	// would stall every client's read loop behind one paint.
+	d(n)
+}
+
+// attach registers where later notes go and returns what buffered before the
+// surface existed, for the caller to render directly: a surface that is not
+// yet running cannot be delivered to without deadlocking its own setup.
+func (s *mcpState) attach(d func(mcpNote)) []mcpNote {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	buffered := s.notes
+	s.notes = nil
+	s.deliver = d
+	return buffered
+}
+
+func (s *mcpState) clientList() []*mcp.Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*mcp.Client(nil), s.clients...)
 }
 
 func (s *mcpState) Close() {
-	for _, c := range s.clients {
+	for _, c := range s.clientList() {
 		c.Close()
 	}
 }
@@ -50,7 +96,7 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 	if home, err := os.UserHomeDir(); err == nil {
 		userSpecs, err := mcp.LoadSpecs(filepath.Join(home, ".switchboard", mcp.SpecFileName))
 		if err != nil {
-			state.notes = append(state.notes, mcpNote{"error", err.Error()})
+			state.add(mcpNote{"error", err.Error()})
 		}
 		specs = append(specs, userSpecs...)
 	}
@@ -60,14 +106,14 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 		if ts != nil && ts.Trusted(workspace) {
 			repoSpecs, err := mcp.LoadSpecs(repoPath)
 			if err != nil {
-				state.notes = append(state.notes, mcpNote{"error", err.Error()})
+				state.add(mcpNote{"error", err.Error()})
 			}
 			specs = append(specs, repoSpecs...)
 		} else {
 			// The repository asked for servers and the user has not said yes.
 			// Saying so once beats silently ignoring the file, which reads as
 			// a bug to whoever wrote it.
-			state.notes = append(state.notes, mcpNote{"warn",
+			state.add(mcpNote{"warn",
 				"this repository declares MCP servers in .switchboard/mcp.toml; they stay off until you run /trust grant"})
 		}
 	}
@@ -82,7 +128,7 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 	deduped := specs[:0]
 	for _, s := range specs {
 		if seen[s.Name] {
-			state.notes = append(state.notes, mcpNote{"warn",
+			state.add(mcpNote{"warn",
 				fmt.Sprintf("mcp server %s is declared twice; the first declaration wins", s.Name)})
 			continue
 		}
@@ -94,11 +140,11 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 	cctx, cancel := context.WithTimeout(ctx, mcpConnectTimeout)
 	defer cancel()
 
-	var mu sync.Mutex
+	// logf outlives this function: every connected client's read loop keeps
+	// calling it for as long as the session runs, which is why it goes
+	// through the state's own lock and not one local to this frame.
 	logf := func(level, text string) {
-		mu.Lock()
-		defer mu.Unlock()
-		state.notes = append(state.notes, mcpNote{level, text})
+		state.add(mcpNote{level, text})
 	}
 
 	clients := make([]*mcp.Client, len(specs))
@@ -119,14 +165,18 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 
 	var rules []permission.Rule
 	var bridged []tools.Tool
+	var connected []*mcp.Client
 	for _, c := range clients {
 		if c == nil {
 			continue
 		}
-		state.clients = append(state.clients, c)
+		connected = append(connected, c)
 		bridged = append(bridged, c.BridgedTools()...)
 		rules = append(rules, c.AllowRules()...)
 	}
+	state.mu.Lock()
+	state.clients = connected
+	state.mu.Unlock()
 
 	// Registration is sorted so the frozen-zone ordering never depends on
 	// which server answered first.
@@ -134,18 +184,18 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 	count := 0
 	for _, t := range bridged {
 		if err := registry.AddExternal(t); err != nil {
-			state.notes = append(state.notes, mcpNote{"warn", err.Error()})
+			state.add(mcpNote{"warn", err.Error()})
 			continue
 		}
 		count++
 	}
 	if count > 0 {
-		names := make([]string, 0, len(state.clients))
-		for _, c := range state.clients {
+		names := make([]string, 0, len(connected))
+		for _, c := range connected {
 			names = append(names, c.Name())
 		}
 		sort.Strings(names)
-		state.notes = append(state.notes, mcpNote{"",
+		state.add(mcpNote{"",
 			fmt.Sprintf("mcp: %d tools from %s", count, joinAnd(names))})
 	}
 	return state, rules

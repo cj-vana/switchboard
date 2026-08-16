@@ -173,7 +173,9 @@ func run() error {
 	defer mcpEnv.Close()
 
 	hookSet, hookNotes := loadHooks(workspace, trustStore)
-	mcpEnv.notes = append(mcpEnv.notes, hookNotes...)
+	for _, n := range hookNotes {
+		mcpEnv.add(n)
+	}
 
 	// §6 is only live if something wires it. The loop assembles a request from
 	// the session by default, so without this the zones, the breakpoint
@@ -196,7 +198,7 @@ func run() error {
 	// share the loop's permission engine and asker; it still lands before the
 	// first request, which is what the frozen zone requires.
 	if err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace); err != nil {
-		mcpEnv.notes = append(mcpEnv.notes, mcpNote{"warn", "delegate unavailable: " + err.Error()})
+		mcpEnv.add(mcpNote{"warn", "delegate unavailable: " + err.Error()})
 	}
 
 	// The sticky primary starts wherever routing landed, and the watcher feeds
@@ -249,7 +251,11 @@ func run() error {
 	r.watcher = loop.Observer.(*watcher)
 
 	r.banner(sess, resumed)
-	for _, n := range mcpEnv.notes {
+	// The REPL drains what buffered and attaches no live target: the
+	// renderer is driven from the loop's goroutine, and a client's read
+	// loop writing to it concurrently would race. Later notes buffer,
+	// capped, and are simply not the REPL's concern.
+	for _, n := range mcpEnv.attach(nil) {
 		out.Notice(n.level, n.text)
 	}
 

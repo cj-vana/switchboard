@@ -224,7 +224,11 @@ func runTUI(
 	loop.Asker = &tuiAsker{p: p}
 
 	m.addBanner(sess, resumed)
-	for _, n := range mcpEnv.notes {
+	// Startup notes render into the model directly, because the program is
+	// not consuming messages yet; whatever a server says later arrives as a
+	// notice through the observer, which is how the user learns a server
+	// died an hour into the session.
+	for _, n := range mcpEnv.attach(func(n mcpNote) { obs.Notice(n.level, n.text) }) {
 		if n.level == "" {
 			m.addInfo("  " + n.text)
 		} else {
