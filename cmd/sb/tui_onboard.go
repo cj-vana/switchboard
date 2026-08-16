@@ -43,7 +43,21 @@ type onboardChoicesMsg struct {
 }
 type onboardPickedMsg struct{ id string }
 type onboardKeyStoredMsg struct{ note string }
+type onboardWiredMsg struct {
+	note string
+	err  error
+}
 type onboardBoundMsg struct{ err error }
+
+// onboardStep orders the wizard: connect what can be connected, then pick
+// what t1 runs on. Keys first is deliberate — a key stored in the first step
+// is a cloud model offerable in the second.
+type onboardStep int
+
+const (
+	stepConnect onboardStep = iota
+	stepModel
+)
 
 type onboardModel struct {
 	reg *providers
@@ -51,6 +65,7 @@ type onboardModel struct {
 	cfg *config.Config
 	th  *theme
 
+	step   onboardStep
 	dlg    dialog
 	lines  []string
 	choice modelChoice
@@ -60,7 +75,60 @@ type onboardModel struct {
 	err       error
 }
 
-func (m *onboardModel) Init() tea.Cmd {
+func (m *onboardModel) Init() tea.Cmd { return m.connectStep() }
+
+// connectStep is /setup's checklist wearing the wizard's frame: same rows,
+// same standings, and its exit row hands over to the model picker.
+func (m *onboardModel) connectStep() tea.Cmd {
+	reg, cat, cfg := m.reg, m.cat, m.cfg
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		items := append(setupItems(ctx, reg, cat, cfg),
+			pickerItem{id: setupDoneID, label: "continue", desc: "pick the model t1 starts on"})
+		return pickerMsg{
+			title: "switchboard setup — connect providers",
+			items: items,
+			action: func(id string) tea.Cmd {
+				switch id {
+				case setupDoneID:
+					m.step = stepModel
+					return m.modelStep()
+				case setupLocalID:
+					return m.connectStep() // nothing to do but look again
+				case setupCodexID:
+					return func() tea.Msg {
+						if err := wireCodex(cfg); err != nil {
+							return onboardWiredMsg{err: err}
+						}
+						return onboardWiredMsg{note: "openai wired to your Codex CLI login"}
+					}
+				}
+				ref, err := parseRef(id)
+				if err != nil {
+					return func() tea.Msg { return onboardWiredMsg{err: err} }
+				}
+				return m.askSecret(ref)
+			},
+		}
+	}
+}
+
+func (m *onboardModel) askSecret(ref credential.Ref) tea.Cmd {
+	store := credential.NewOSStore()
+	writer, ok := any(store).(credential.Writer)
+	if !ok {
+		return func() tea.Msg {
+			return onboardWiredMsg{note: "no OS credential store here; set " +
+				credential.EnvNames(ref)[0] + " in the environment instead"}
+		}
+	}
+	return func() tea.Msg {
+		return secretPromptMsg{ref: ref, writer: writer, storeName: store.Name()}
+	}
+}
+
+func (m *onboardModel) modelStep() tea.Cmd {
 	reg, cat := m.reg, m.cat
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -73,6 +141,7 @@ func (m *onboardModel) Init() tea.Cmd {
 func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case onboardChoicesMsg:
+		m.step = stepModel // the message is the model step, however it arrived
 		if len(msg.items) == 0 {
 			m.err = errors.New("no models to offer: the Ollama server did not answer and the catalog is empty.\n" +
 				"Start Ollama and `ollama pull` a model, then run sb again")
@@ -108,7 +177,21 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case onboardKeyStoredMsg:
 		m.lines = append(m.lines, msg.note)
+		// The same message ends a key entry in both steps; what follows it
+		// depends on which step asked: the checklist reopens refreshed, the
+		// model step moves on to binding.
+		if m.step == stepConnect {
+			return m, m.connectStep()
+		}
 		return m, m.effortOrBind()
+
+	case onboardWiredMsg:
+		if msg.err != nil {
+			m.lines = append(m.lines, "error: "+msg.err.Error())
+		} else {
+			m.lines = append(m.lines, msg.note)
+		}
+		return m, m.connectStep()
 
 	case pickerMsg:
 		m.dlg = &pickerDialog{title: msg.title, items: msg.items, onPick: msg.action}

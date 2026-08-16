@@ -99,7 +99,7 @@ func TestWireCodexHelperPersists(t *testing.T) {
 	}
 
 	// Once wired, setup stops offering it.
-	if codexLoginAvailable(m.app) {
+	if codexLoginAvailable(m.app.config) {
 		t.Fatal("a wired login should not be offered again")
 	}
 }

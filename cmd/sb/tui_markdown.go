@@ -95,5 +95,10 @@ func trimBlankLines(lines []string) []string {
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
 	}
+	// Leading blanks too: the transcript owns the gaps between blocks, and a
+	// renderer that brings its own margin doubles them.
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
 	return lines
 }

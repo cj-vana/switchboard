@@ -153,12 +153,34 @@ func (t *transcript) render(e *entry) []string {
 			return lines
 		}
 	}
-	lines := t.renderUncached(e)
+	lines := t.composed(e)
 	if !e.live {
 		if e.cache == nil {
 			e.cache = map[int][]string{}
 		}
 		e.cache[t.width] = lines
+	}
+	return lines
+}
+
+// composed is renderUncached plus the page's composition rules, applied in
+// the one place every flat rebuild goes through: a one-cell left margin so
+// content never presses against the terminal edge, and a breathing line
+// after each block. Tool and thinking entries stay tight — the rail groups
+// them — and blanks do not stack.
+func (t *transcript) composed(e *entry) []string {
+	lines := t.renderUncached(e)
+	for i, l := range lines {
+		if l != "" {
+			lines[i] = " " + l
+		}
+	}
+	switch e.kind {
+	case kindTool, kindThinking, kindInfo:
+		return lines
+	}
+	if len(lines) > 0 && lines[len(lines)-1] != "" {
+		lines = append(lines, "")
 	}
 	return lines
 }
@@ -292,7 +314,7 @@ func (t *transcript) renderRoute(e *entry, w int) []string {
 	}
 	line := marker.Render("◆ ") + t.th.dim.Render(e.routeSummary)
 	if !e.expanded {
-		return []string{line + t.th.faint.Render("  (ctrl-o to expand)")}
+		return []string{line + t.th.faint.Render("  ctrl-o")}
 	}
 	lines := []string{line}
 	for _, l := range e.routeLines {

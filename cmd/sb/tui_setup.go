@@ -18,6 +18,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/credential"
 )
 
@@ -37,47 +39,55 @@ func cmdSetup(m *tuiModel, _ string) tea.Cmd {
 	return setupChecklist(m)
 }
 
+// setupItems is the checklist itself, shared by /setup and the first-run
+// wizard: same rows, same standings, different framing around them. The
+// caller supplies the exit row.
+func setupItems(ctx context.Context, reg *providers, cat *catalog.Catalog, cfg *config.Config) []pickerItem {
+	var items []pickerItem
+
+	if names, err := reg.ollama.Models(ctx); err == nil {
+		items = append(items, pickerItem{
+			id: setupLocalID, label: "ollama/local", current: true,
+			desc: fmt.Sprintf("running, %d models pulled", len(names)),
+		})
+	} else {
+		items = append(items, pickerItem{
+			id: setupLocalID, label: "ollama/local",
+			desc: "server not answering; start ollama to use local models",
+		})
+	}
+
+	for _, ref := range credentialRefs(cfg, cat) {
+		if ref.Provider == "ollama" {
+			continue // covered by the liveness row above
+		}
+		standing := credentialStanding(ctx, cfg, ref)
+		items = append(items, pickerItem{
+			id:      ref.String(),
+			label:   ref.String(),
+			desc:    standing,
+			current: standing != "not set",
+		})
+	}
+
+	if codexLoginAvailable(cfg) {
+		items = append(items, pickerItem{
+			id:    setupCodexID,
+			label: "use your Codex CLI login",
+			desc:  "~/.codex/auth.json found; wire it as openai's credential helper",
+		})
+	}
+	return items
+}
+
 func setupChecklist(m *tuiModel) tea.Cmd {
 	app := m.app
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		var items []pickerItem
-
-		if names, err := app.providers.ollama.Models(ctx); err == nil {
-			items = append(items, pickerItem{
-				id: setupLocalID, label: "ollama/local", current: true,
-				desc: fmt.Sprintf("running, %d models pulled", len(names)),
-			})
-		} else {
-			items = append(items, pickerItem{
-				id: setupLocalID, label: "ollama/local",
-				desc: "server not answering; start ollama to use local models",
-			})
-		}
-
-		for _, ref := range credentialRefs(app.config, app.catalog) {
-			if ref.Provider == "ollama" {
-				continue // covered by the liveness row above
-			}
-			standing := credentialStanding(ctx, app.config, ref)
-			items = append(items, pickerItem{
-				id:      ref.String(),
-				label:   ref.String(),
-				desc:    standing,
-				current: standing != "not set",
-			})
-		}
-
-		if codexLoginAvailable(app) {
-			items = append(items, pickerItem{
-				id:    setupCodexID,
-				label: "use your Codex CLI login",
-				desc:  "~/.codex/auth.json found; wire it as openai's credential helper",
-			})
-		}
-		items = append(items, pickerItem{id: setupDoneID, label: "done", desc: "bind rungs with /models"})
+		items := append(setupItems(ctx, app.providers, app.catalog, app.config),
+			pickerItem{id: setupDoneID, label: "done", desc: "bind rungs with /models"})
 
 		return pickerMsg{
 			title: "connect providers",
@@ -115,7 +125,7 @@ func setupSecretCmd(m *tuiModel, ref credential.Ref) tea.Cmd {
 	}
 }
 
-func codexLoginAvailable(app *tuiApp) bool {
+func codexLoginAvailable(cfg *config.Config) bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
@@ -133,22 +143,27 @@ func codexLoginAvailable(app *tuiApp) bool {
 		return false
 	}
 	// Already wired is not an offer worth repeating.
-	return len(app.config.AuthFor("openai").Helper) == 0
+	return len(cfg.AuthFor("openai").Helper) == 0
+}
+
+// wireCodex writes the helper into the config. Both entrances — /setup and
+// the first-run wizard — go through here, so the wiring is one behavior.
+func wireCodex(cfg *config.Config) error {
+	settings := cfg.AuthFor("openai")
+	settings.Helper = codexHelper
+	if cfg.Auth == nil {
+		cfg.Auth = map[string]credential.Settings{}
+	}
+	cfg.Auth["openai"] = settings
+	return cfg.Save()
 }
 
 func wireCodexHelper(m *tuiModel) tea.Cmd {
 	cfg := m.app.config
 	return func() tea.Msg {
-		settings := cfg.AuthFor("openai")
-		settings.Helper = codexHelper
-		if cfg.Auth == nil {
-			cfg.Auth = map[string]credential.Settings{}
-		}
-		cfg.Auth["openai"] = settings
-		if err := cfg.Save(); err != nil {
+		if err := wireCodex(cfg); err != nil {
 			return noticeMsg{level: "error", text: "wiring the codex login failed: " + err.Error()}
 		}
-		note := noticeMsg{text: "openai now authenticates with your Codex CLI login; when its token expires, running codex once refreshes it"}
-		return note
+		return noticeMsg{text: "openai now authenticates with your Codex CLI login; when its token expires, running codex once refreshes it"}
 	}
 }

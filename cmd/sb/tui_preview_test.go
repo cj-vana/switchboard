@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 	"strings"
@@ -53,7 +54,8 @@ func TestRenderPreview(t *testing.T) {
 	m.app.tier.Target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
 	m.callTokens, m.ctxWindow = 91_000, 262_144
 
-	frame := m.tr.view(28) + "\n" + m.ta.View() + "\n" + m.statusLine()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 34})
+	frame := m.View()
 	if err := os.WriteFile(out, []byte(frame), 0o644); err != nil {
 		t.Fatal(err)
 	}

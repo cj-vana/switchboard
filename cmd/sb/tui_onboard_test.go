@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -87,5 +88,43 @@ func TestOnboardingEscapeCancelsCleanly(t *testing.T) {
 	}
 	if len(cfg.Tiers) != 0 {
 		t.Fatal("a cancelled setup bound a tier anyway")
+	}
+}
+
+// First launch opens the connect checklist before any model is picked, and
+// its exit row hands over to the model step.
+func TestOnboardingStartsWithTheConnectChecklist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{Path: filepath.Join(home, config.FileName)}
+	m := &onboardModel{
+		reg: newProviders("http://127.0.0.1:1", cfg),
+		cat: &catalog.Catalog{Revision: "test"},
+		cfg: cfg,
+		th:  darkTheme(),
+	}
+
+	msg, ok := m.Init()().(pickerMsg)
+	if !ok {
+		t.Fatalf("first launch should open the connect checklist, got %T", msg)
+	}
+	if !strings.Contains(msg.title, "connect") {
+		t.Fatalf("unexpected first step: %q", msg.title)
+	}
+	var continueRow bool
+	for _, it := range msg.items {
+		continueRow = continueRow || (it.id == setupDoneID && it.label == "continue")
+	}
+	if !continueRow {
+		t.Fatal("the checklist needs its handover row")
+	}
+
+	next := msg.action(setupDoneID)
+	if next == nil {
+		t.Fatal("continue produced nothing")
+	}
+	if m.step != stepModel {
+		t.Fatal("continue should advance the wizard to the model step")
 	}
 }

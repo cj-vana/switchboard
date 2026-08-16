@@ -305,7 +305,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.tr.setWidth(msg.Width)
-		m.ta.SetWidth(msg.Width - 1)
+		m.ta.SetWidth(msg.Width - 8) // the composer's border, padding, and margin
 		return m, nil
 
 	case tea.MouseMsg:
@@ -944,7 +944,6 @@ func (m *tuiModel) onToolEnd(msg toolEndMsg) {
 
 func (m *tuiModel) addUser(text string) {
 	m.tr.add(&entry{kind: kindUser, text: text})
-	m.tr.add(&entry{kind: kindInfo, text: ""})
 	m.tr.scrollToBottom()
 }
 
@@ -1021,21 +1020,49 @@ func (m *tuiModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
+// inputZoneView is the composer: one rounded container holding any open
+// popup, a hairline, and the prompt. At rest its border wears the active
+// rung's color — the box says which jack you are plugged into — and while a
+// turn runs it goes faint, because the working line below has the floor.
 func (m *tuiModel) inputZoneView() string {
 	if m.dlg != nil {
 		return m.dlg.view(m.width, m.th)
 	}
+	inner := m.width - 6
+	if inner < 20 {
+		inner = 20
+	}
 	var parts []string
+	popup := ""
 	switch {
 	case m.histSearch:
-		parts = append(parts, m.historySearchView())
+		popup = m.historySearchView()
 	case m.suggestionsView() != "":
-		parts = append(parts, m.suggestionsView())
+		popup = m.suggestionsView()
 	case m.mentionsVisible():
-		parts = append(parts, m.mentionsView())
+		popup = m.mentionsView()
+	}
+	if popup != "" {
+		parts = append(parts, popup, m.th.faint.Render(strings.Repeat("─", inner)))
 	}
 	parts = append(parts, m.ta.View())
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+
+	borderColor := m.th.faint.GetForeground()
+	if !m.busy {
+		if rank := m.activeRank(); rank >= 0 {
+			borderColor = m.th.rung(rank).GetForeground()
+		}
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(m.width - 4)
+	lines := strings.Split(box.Render(lipgloss.JoinVertical(lipgloss.Left, parts...)), "\n")
+	for i, l := range lines {
+		lines[i] = " " + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // workingLine is the row that appears under the input while a turn runs. The
