@@ -20,6 +20,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/credential"
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
@@ -179,6 +180,19 @@ func (m *tuiModel) onRaceProbe(msg raceProbeMsg) tea.Cmd {
 			}
 		}
 	}
+	// The same outbound gate as a plain turn, doubled in consequence: a key
+	// in a race prompt would land in two branch logs and two providers.
+	if leaks := credential.ScanPrompt(prompt); len(leaks) > 0 {
+		return m.openSecretGate(leaks, prompt, func(p string) tea.Cmd {
+			return m.startRaceArms(msg, p, images)
+		})
+	}
+	return m.startRaceArms(msg, prompt, images)
+}
+
+// startRaceArms is onRaceProbe past the gates that can still stop it:
+// preflight, fork, wire, launch.
+func (m *tuiModel) startRaceArms(msg raceProbeMsg, prompt string, images []provider.Image) tea.Cmd {
 	opening := provider.UserText(prompt)
 	for _, img := range images {
 		opening.Content = append(opening.Content, img)

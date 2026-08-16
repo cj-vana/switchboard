@@ -1,0 +1,89 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/cj-vana/switchboard/internal/credential"
+)
+
+const testGitHubToken = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+
+// A key-shaped prompt does not start a turn; it opens the gate, and until
+// the user answers, nothing has left the machine.
+func TestStartTurnHoldsAKeyBehindTheGate(t *testing.T) {
+	m := testModel(t)
+	cmd := m.startTurn("review this: "+testGitHubToken, "")
+	if cmd != nil {
+		t.Error("a gated turn still returned a command")
+	}
+	if m.dlg == nil {
+		t.Fatal("a prompt carrying a token opened no gate")
+	}
+	if m.busy {
+		t.Error("the turn began before the gate was answered")
+	}
+	view := m.dlg.view(90, m.th)
+	if !strings.Contains(view, "GitHub token") {
+		t.Errorf("the gate does not name what it found:\n%s", view)
+	}
+	if strings.Contains(view, testGitHubToken) {
+		t.Errorf("the gate shows the secret it exists to hold back:\n%s", view)
+	}
+}
+
+// The three answers: redact rewrites the outbound copy, send passes it as
+// typed, and esc drops it — the safe direction is the default.
+func TestSecretGateAnswers(t *testing.T) {
+	m := testModel(t)
+	prompt := "use " + testGitHubToken + " for the API"
+	leaks := credential.ScanPrompt(prompt)
+	if len(leaks) == 0 {
+		t.Fatal("fixture token was not detected")
+	}
+
+	var sent string
+	m.openSecretGate(leaks, prompt, func(p string) tea.Cmd { sent = p; return nil })
+	done, _ := m.dlg.update(tea.KeyMsg{Type: tea.KeyEnter}, m.th) // first item: redact
+	if !done {
+		t.Fatal("the gate did not resolve on enter")
+	}
+	if strings.Contains(sent, testGitHubToken) {
+		t.Errorf("redact sent the secret: %q", sent)
+	}
+	if !strings.Contains(sent, "[redacted: a GitHub token]") {
+		t.Errorf("redact does not say what stood there: %q", sent)
+	}
+
+	sent = ""
+	m.openSecretGate(leaks, prompt, func(p string) tea.Cmd { sent = p; return nil })
+	if done, _ = m.dlg.update(tea.KeyMsg{Type: tea.KeyEscape}, m.th); !done {
+		t.Fatal("esc did not resolve the gate")
+	}
+	if sent != "" {
+		t.Errorf("esc sent the prompt anyway: %q", sent)
+	}
+}
+
+// The headless surface has no one to ask, so the answer is no, with the
+// widening flag named — and the refusal itself never quotes the key.
+func TestRefuseLeakedSecrets(t *testing.T) {
+	if err := refuseLeakedSecrets("a clean prompt", false); err != nil {
+		t.Errorf("a clean prompt was refused: %v", err)
+	}
+	if err := refuseLeakedSecrets("key: "+testGitHubToken, true); err != nil {
+		t.Errorf("-allow-secrets did not widen the gate: %v", err)
+	}
+	err := refuseLeakedSecrets("key: "+testGitHubToken, false)
+	if err == nil {
+		t.Fatal("a token rode through a -p prompt unchallenged")
+	}
+	if !strings.Contains(err.Error(), "-allow-secrets") {
+		t.Errorf("the refusal does not name the deliberate widening: %v", err)
+	}
+	if strings.Contains(err.Error(), testGitHubToken) {
+		t.Errorf("the refusal quotes the secret: %v", err)
+	}
+}

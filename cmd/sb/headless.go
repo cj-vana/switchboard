@@ -11,11 +11,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/credential"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
 )
@@ -29,6 +31,28 @@ func attachPipedInput(prompt string, data []byte) string {
 		return prompt
 	}
 	return prompt + "\n\nContents of standard input (piped in):\n```\n" + text + "\n```"
+}
+
+// refuseLeakedSecrets is the headless half of the outbound credential gate.
+// The TUI can hold the prompt and ask; a scripted run cannot, and the safe
+// answer to "no one to ask" is no — a diff piped through -p is exactly how
+// a .env line reaches a provider and the session log by accident. The
+// findings name their kind and prefix only: an error message quoting the
+// key would be this gate committing the leak it exists to stop.
+func refuseLeakedSecrets(prompt string, allow bool) error {
+	if allow {
+		return nil
+	}
+	leaks := credential.ScanPrompt(prompt)
+	if len(leaks) == 0 {
+		return nil
+	}
+	kinds := make([]string, len(leaks))
+	for i, l := range leaks {
+		kinds[i] = l.String()
+	}
+	return fmt.Errorf("the prompt contains %s; nothing was sent. Redact the input, or pass -allow-secrets to send it deliberately",
+		strings.Join(kinds, ", "))
 }
 
 // headlessReport is the JSON a -output json run prints: the result, what it

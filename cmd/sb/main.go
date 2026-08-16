@@ -56,6 +56,11 @@ type options struct {
 	showTiers bool
 	repl      bool
 	version   bool
+
+	// allowSecrets widens the outbound credential gate for a scripted run,
+	// the way -mode widens permissions: deliberately, on the command line,
+	// never by default.
+	allowSecrets bool
 }
 
 func run() error {
@@ -122,6 +127,7 @@ func run() error {
 	flag.BoolVar(&opts.showTiers, "tiers", false, "list the configured tiers and exit")
 	flag.BoolVar(&opts.repl, "repl", false, "use the line-oriented REPL instead of the TUI")
 	flag.BoolVar(&opts.version, "version", false, "print the version and exit")
+	flag.BoolVar(&opts.allowSecrets, "allow-secrets", false, "send a -p prompt even when it contains something key-shaped")
 	flag.Parse()
 
 	if opts.version {
@@ -375,6 +381,12 @@ func run() error {
 	}
 
 	if opts.prompt != "" {
+		// The gate has no one to ask on this surface, so a key-shaped string
+		// refuses the run outright; -allow-secrets is the deliberate widening,
+		// the way -mode is for permissions.
+		if err := refuseLeakedSecrets(opts.prompt, opts.allowSecrets); err != nil {
+			return err
+		}
 		err := r.once(ctx, opts.prompt)
 		if opts.output == "json" {
 			rep := buildHeadlessReport(loop.Session.State(), cat, r.tier, err)

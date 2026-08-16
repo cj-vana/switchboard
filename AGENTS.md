@@ -181,6 +181,20 @@ process's command line is readable by every user on the machine. Both backends
 have a test that fails if the value appears in a recorded argv; that test is the
 guarantee, not the comment above the code.
 
+The posture faces outward too. `credential.ScanPrompt` (scan.go) checks
+outbound prompts for key-shaped strings: known issuer prefixes with length
+floors only, precision over recall, because a gate that cries wolf trains
+the user to wave everything through. A `Leak` keeps its match unexported
+with masked `String`/`GoString` renderings and no accessor — redaction
+happens inside the package — so a finding cannot commit the leak it
+reports; the test that renders one every way and greps for the token is
+the guarantee. The TUI holds the send behind redact/send/drop through one
+chokepoint (`tui_secretgate.go`) that covers plain turns, /tN overrides,
+and races, with esc meaning drop; headless refuses outright and names
+`-allow-secrets` as the stated widening, because a surface with no one to
+ask fails closed. Do not add a pattern without a length floor, and do not
+give a finding a rendering that shows the match.
+
 **A permission prompt is not a sandbox.** Where OS isolation is unavailable or
 unverified, automatic execution is disabled rather than approximated by
 prompting (design principle 4, §11).

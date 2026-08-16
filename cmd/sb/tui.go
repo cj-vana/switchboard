@@ -19,6 +19,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/credential"
 	"github.com/cj-vana/switchboard/internal/delegate"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
@@ -732,10 +733,16 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 		if !ok {
 			return noticeCmd("error", "no tier "+override+" is configured; try /tiers")
 		}
-		return func() tea.Msg {
-			probed, client, note, err := m.app.providers.probeTierFallback(context.Background(), tier)
-			return overrideProbeMsg{prompt: prompt, tier: probed, client: client, note: note, err: err}
+		probe := func(p string) tea.Cmd {
+			return func() tea.Msg {
+				probed, client, note, err := m.app.providers.probeTierFallback(context.Background(), tier)
+				return overrideProbeMsg{prompt: p, tier: probed, client: client, note: note, err: err}
+			}
 		}
+		if leaks := credential.ScanPrompt(prompt); len(leaks) > 0 {
+			return m.openSecretGate(leaks, prompt, probe)
+		}
+		return probe(prompt)
 	}
 
 	// The transcript shows what was typed; the model gets that plus what the
@@ -750,6 +757,19 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 			return nil
 		}
 	}
+	// The scan runs on the expanded prompt, because an @mentioned .env or a
+	// `!env` transcript is exactly the outbound copy a key rides in on.
+	if leaks := credential.ScanPrompt(prompt); len(leaks) > 0 {
+		return m.openSecretGate(leaks, prompt, func(p string) tea.Cmd {
+			return m.launchTurn(p, images)
+		})
+	}
+	return m.launchTurn(prompt, images)
+}
+
+// launchTurn is startTurn's tail, split off so the secret gate can hold a
+// turn while the user decides what leaves the machine.
+func (m *tuiModel) launchTurn(prompt string, images []provider.Image) tea.Cmd {
 	m.beginTurn(prompt)
 	go m.runTurn(m.turnCtx, prompt, images)
 	return m.spin.Tick

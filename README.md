@@ -344,6 +344,18 @@ Linux). A credential is read from stdin or a masked prompt, never the
 command line; it is never written to the config, the session log, or any
 error, and its only rendering is a placeholder.
 
+The same posture faces outward. A prompt about to leave the machine is
+scanned for key-shaped strings — known issuer prefixes only, deliberately
+no entropy guessing, so a warning always means something — including what
+an `@mention` attached and what a `!` command printed, since a pasted
+`.env` is exactly how a key reaches a provider and the session log by
+accident. A hit holds the send behind a choice: redact it, with the model
+told what stood there; send it as typed; or drop the prompt. A `-p` run
+has no one to ask, so it is refused instead, with `-allow-secrets` as the
+deliberate override. The dialog and the refusal name the kind and prefix
+only — a gate that quoted the key would be committing the leak it exists
+to stop.
+
 There is no encrypted-file fallback. A mode 0600 file is access control, not
 encryption, and on a machine with no keyring the honest answer is the
 environment or a helper:

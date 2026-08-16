@@ -79,6 +79,19 @@ prefix byte-identical to what was already sent — so a provider still
 holding it warm serves the fork warm, and going back costs nothing in
 cache. Rewind mutates history to move; fork moves without mutating.
 
+**An outbound credential gate.** The credential posture points both ways:
+the keys the tool holds are unprintable by type
+(`internal/credential/credential.go`), and the keys the user is about to
+leak — pasted into a prompt, riding in on an @mentioned `.env` or a
+`!env` transcript — are caught before the send
+(`internal/credential/scan.go`, `cmd/sb/tui_secretgate.go`). Known issuer
+prefixes only, no entropy guessing, so a warning always means something;
+the send holds behind redact, send-as-typed, or drop; a `-p` run with no
+one to ask is refused, `-allow-secrets` being the stated widening. The
+neighbors' guidance for this is hooks the user writes themselves; none
+ships the gate, and none promises that the warning itself cannot quote
+the key.
+
 **A paired trial the user judges.** `/race` runs one prompt on two rungs
 at once, each arm a fork of the session riding the same prefix, both
 read-only until the user picks which branch continues (`cmd/sb/race.go`,
@@ -151,12 +164,12 @@ Switchboard now concedes nothing: the converged skeleton is fully present
 custom commands, skills that load the neighbors' own packs, availability
 fallbacks, per-turn undo, session fork, structural search, and
 language-server symbol lookup), and
-on top of it sit eight axes — evidence-based routing with `/why`,
+on top of it sit nine axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
-verified-or-absent sandboxing, delegation priced on the ladder, and the
-`/race` paired trial whose verdicts feed that harness — where the
-neighbors have no counterpart at all.
+verified-or-absent sandboxing, delegation priced on the ladder, the
+`/race` paired trial whose verdicts feed that harness, and the outbound
+credential gate — where the neighbors have no counterpart at all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
