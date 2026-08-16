@@ -49,8 +49,8 @@ credential. Then you pick the model t1 starts on, and you are in a session.
 
 Nothing requires editing a file, then or later. `/models` browses what your
 server and the catalog offer and binds rungs. `/login` and `/logout` manage
-keys. `/setup` reopens the checklist. `/theme`, `/think`, `/update`, and
-`/compact` settings persist themselves. The config is ordinary TOML at
+keys. `/setup` reopens the checklist. `/theme`, `/think`, `/update`,
+`/compact`, and `/budget` settings persist themselves. The config is ordinary TOML at
 `~/.switchboard/config.toml` and hand-editing still works, but the tool
 writes it, and the file's own header says so.
 
