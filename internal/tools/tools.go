@@ -66,6 +66,36 @@ type Registry struct {
 	todos      *todoState
 	tools      map[string]Tool
 	order      []string
+
+	// checkpoints, when non-nil, captures a file's prior state before write
+	// and edit mutate it. Set at assembly; nil means no undo.
+	checkpoints Checkpointer
+}
+
+// Checkpointer is what the registry needs from a checkpoint recorder. The
+// interface lives here so tools does not import the recorder's package.
+type Checkpointer interface {
+	Record(abs string)
+}
+
+// SetCheckpoints wires the recorder in at assembly time.
+func (r *Registry) SetCheckpoints(c Checkpointer) { r.checkpoints = c }
+
+// ForgetVersions drops the recorded read state for paths whose contents
+// changed outside a tool call — an undo. The next write or edit refuses
+// until the model re-reads, which is the read-before-write contract doing
+// exactly its job.
+func (r *Registry) ForgetVersions(paths []string) {
+	for _, p := range paths {
+		r.versions.forget(p)
+	}
+}
+
+// recordUndo is called by mutating tools before they touch a file.
+func (r *Registry) recordUndo(abs string) {
+	if r.checkpoints != nil {
+		r.checkpoints.Record(abs)
+	}
 }
 
 // NewRegistry binds the suite to a workspace and to whatever confinement this

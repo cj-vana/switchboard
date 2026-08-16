@@ -49,6 +49,7 @@ func commands() []commandItem {
 		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
+		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
 		{name: "models", desc: "browse models and bind tiers", run: cmdModels},
@@ -283,6 +284,63 @@ func cmdMCP(m *tuiModel, _ string) tea.Cmd {
 		b.WriteString("\n")
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+// cmdUndo takes back the most recent turn's write and edit effects. It is
+// not busy-safe on purpose: undoing under a turn still capturing into its
+// own scope would restore a state the model is mid-way through changing.
+func cmdUndo(m *tuiModel, args string) tea.Cmd {
+	rec := m.app.undo
+	if rec == nil {
+		return noticeCmd("error", "undo is unavailable in this session")
+	}
+	if strings.TrimSpace(args) == "list" {
+		turns := rec.Turns()
+		if len(turns) == 0 {
+			m.addInfo("  no turns have changed files")
+			return nil
+		}
+		var b strings.Builder
+		for i, t := range turns {
+			partial := ""
+			if t.Partial {
+				partial = "  (partial: some files were over the snapshot cap)"
+			}
+			fmt.Fprintf(&b, "  %2d  %d file(s)  %s%s\n", len(turns)-i, t.Files, t.Label, partial)
+		}
+		b.WriteString("  /undo takes back the most recent; repeat to walk further")
+		m.addInfo(strings.TrimRight(b.String(), "\n"))
+		return nil
+	}
+
+	restored, removed, skipped, failed, label, err := rec.Undo()
+	if err != nil {
+		return noticeCmd("", err.Error())
+	}
+	// Restored files changed under the model's feet; the stale check must
+	// force a re-read before the next write.
+	m.app.loop.Tools.ForgetVersions(append(append([]string(nil), restored...), removed...))
+	m.app.loop.Session.AppendNote("info", fmt.Sprintf("undo: reverted %q (%d restored, %d removed)", label, len(restored), len(removed)))
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "  took back %q\n", label)
+	for _, p := range restored {
+		fmt.Fprintf(&b, "  restored %s\n", m.app.displayPath(p))
+	}
+	for _, p := range removed {
+		fmt.Fprintf(&b, "  removed  %s\n", m.app.displayPath(p))
+	}
+	for _, p := range skipped {
+		fmt.Fprintf(&b, "  not covered (over the snapshot cap): %s\n", m.app.displayPath(p))
+	}
+	for _, f := range failed {
+		fmt.Fprintf(&b, "  failed: %s\n", f)
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	if len(failed) > 0 {
+		return noticeCmd("warn", "some files could not be restored; see above")
+	}
 	return nil
 }
 

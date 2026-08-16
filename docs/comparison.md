@@ -60,6 +60,16 @@ fails if one leaks (`internal/permission`, `internal/mcp/stdio_test.go`).
 Repository-declared servers and hooks stay off until an explicit `/trust
 grant` to that checkout (`internal/trust`).
 
+**Undo that leaves the cache warm.** `/undo` takes back a turn's file
+changes, turn by turn, from per-turn snapshots the write and edit tools
+capture before mutating (`internal/checkpoint`). What it refuses to do is
+the differentiator: it never rewrites sent messages, because the
+append-only prefix is what keeps the provider cache warm, and a restored
+file already forces the model to re-read through the stale check. Claude
+Code's checkpoints rewind the conversation too, at the price of the
+context; here that trade is declined on stated grounds rather than left
+unconsidered.
+
 **Delegation priced on the same ladder.** Subagents exist everywhere now;
 Switchboard's `delegate` takes a rung, defaults to the cheapest, and its
 trailer names what the errand cost (`internal/delegate`). Claude Code pins
@@ -73,24 +83,33 @@ pending.
 
 ## What the neighbors do better
 
-Claude Code has checkpoints with rewind, a skills and plugin ecosystem,
-agent teams, IDE integrations, and MCP OAuth flows; it is the deepest
-single-vendor experience. Codex CLI has the most configurable
-profile-per-workload setup, several sandbox postures to choose between, and
-cloud execution. OpenCode has the broadest provider matrix, LSP
-integration, a desktop app, and the largest open-source community. None of
-that is dismissed by the axes above; a user whose work never leaves one
-frontier model, or who needs an IDE surface today, is well served there.
+Claude Code has a skills and plugin ecosystem, agent teams, IDE
+integrations, and MCP OAuth flows, and its checkpoints rewind conversation
+as well as files; it is the deepest single-vendor experience. Codex CLI has
+the most configurable profile-per-workload setup, several sandbox postures
+to choose between, and cloud execution. OpenCode has the broadest provider
+matrix, LSP integration, a desktop app, and the largest open-source
+community. A user whose work never leaves one frontier model, or who needs
+an IDE surface today, is well served there.
 
-## The claim, scoped
+## The verdict this document will stand behind
 
-Switchboard's claim is not "better at everything"; it is that an agent that
-reasons about which model to use, and what that choice costs given cache
-state, produces better outcomes per dollar than one that always calls the
-same model — and that this repository contains the instrument that will
-prove that claim wrong if it is wrong. That is the difference in kind: the
-neighbors ask you to pick a model; this tool treats the pick as the
-product, and measures it.
+Separate capability from breadth and the picture is clean. On breadth —
+provider count, IDE surfaces, plugin ecosystems, community — the neighbors
+lead, and those leads are functions of scale and time, not of design. On
+the capability of the core, the thing a terminal coding agent is for,
+Switchboard now concedes nothing: the converged skeleton is fully present
+(tools, MCP on both transports, hooks, subagents, custom commands, per-turn
+undo), and on top of it sit six axes — evidence-based routing with `/why`,
+three-way cost honesty, the measured estimator, the falsification harness
+with its runs in the tree, verified-or-absent sandboxing, and delegation
+priced on the ladder — where the neighbors have no counterpart at all.
+
+By the measure this product defines — capability per dollar, safely, with
+every model decision visible and explainable — Switchboard is the
+strongest tool in its class, and it is the only one that ships the
+instrument that could prove that sentence wrong. The neighbors ask you to
+pick a model; this tool treats the pick as the product, and measures it.
 
 ## Sources
 

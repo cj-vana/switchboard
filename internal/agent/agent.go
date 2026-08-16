@@ -74,6 +74,11 @@ type Loop struct {
 	// post_tool hook's output rides back on the result. Hooks are the user's
 	// standing policy, so they run without prompting.
 	Hooks *hooks.Set
+
+	// Checkpoints, when non-nil, opens an undo scope per turn; the registry
+	// captures into it before each mutation. The interface keeps the
+	// recorder's package out of the loop's imports.
+	Checkpoints interface{ Begin(label string) }
 }
 
 // price attaches what the catalog says this call cost, along with the revision
@@ -112,6 +117,13 @@ func (l *Loop) observer() Observer {
 // out, or is denied is not an error here, because the model is expected to see
 // that result and decide what to do about it.
 func (l *Loop) Turn(ctx context.Context, input string) error {
+	// The turn is the undo unit: everything this input causes the tools to
+	// change restores together. A subagent's loop leaves this nil and its
+	// registry shares the primary recorder, so a delegate's edits file under
+	// the turn that delegated.
+	if l.Checkpoints != nil {
+		l.Checkpoints.Begin(input)
+	}
 	if err := l.Session.AppendMessage(provider.UserText(input)); err != nil {
 		return err
 	}

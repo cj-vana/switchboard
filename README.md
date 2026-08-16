@@ -117,6 +117,14 @@ Beyond the expected commands, a few are Switchboard's own:
   session, visible immediately in the status bar.
 - `/context` draws the window filling before it is fatal, and `/export`
   writes the session record as markdown.
+- `/undo` takes back the last turn's file changes, turn by turn: write
+  and edit capture what a file looked like before the turn first touched
+  it, and a restored file forces the model to re-read before it may write
+  again. The conversation is deliberately not rewound, because rewriting
+  sent messages invalidates the provider cache from that point on, and
+  the cache layout is half the product. Changes a shell command made are
+  outside the boundary, and `/undo` says so rather than half-covering
+  them.
 
 Custom commands are markdown files in `.switchboard/commands/` (project) or
 `~/.switchboard/commands/` (global): `$ARGUMENTS` and `$1..$9` substitute,

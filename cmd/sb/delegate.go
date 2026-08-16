@@ -13,6 +13,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/delegate"
 	"github.com/cj-vana/switchboard/internal/execution"
@@ -59,6 +60,7 @@ func registerDelegate(
 	hookSet *hooks.Set,
 	capability execution.Capability,
 	workspace string,
+	undoRec *checkpoint.Recorder,
 ) error {
 	if len(cfg.Tiers) == 0 {
 		return nil // no ladder, nothing to delegate on
@@ -90,6 +92,10 @@ func registerDelegate(
 			if err != nil {
 				return nil, err
 			}
+			// The sub-registry shares the primary recorder and the sub-loop
+			// opens no scope of its own, so a delegate's edits file under
+			// the turn that delegated and one /undo takes back both.
+			subRegistry.SetCheckpoints(undoRec)
 			// The mode is read at call time from the shared engine, so a
 			// session switched to plan mode delegates plan-mode subagents.
 			system := agent.SystemPrompt(workspace, primary.Perms.Mode(), capability)

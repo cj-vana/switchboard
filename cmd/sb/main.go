@@ -17,6 +17,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
@@ -166,6 +167,11 @@ func run() error {
 		return err
 	}
 
+	// The undo recorder captures prior file states before write and edit
+	// mutate them, scoped per turn by the loop.
+	undoRec := checkpoint.NewRecorder()
+	registry.SetCheckpoints(undoRec)
+
 	// The trust store is opened before MCP assembly because it is what
 	// decides whether a repository's declared servers may start.
 	trustStore, trustErr := trust.Open()
@@ -190,14 +196,15 @@ func run() error {
 		Session:  sess,
 		Catalog:  cat,
 		Cache:    cache,
-		System:   agent.SystemPrompt(workspace, mode, capability),
-		Hooks:    hookSet,
+		System:      agent.SystemPrompt(workspace, mode, capability),
+		Hooks:       hookSet,
+		Checkpoints: undoRec,
 	}
 
 	// The delegate tool joins after the loop exists because its subagents
 	// share the loop's permission engine and asker; it still lands before the
 	// first request, which is what the frozen zone requires.
-	if err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace); err != nil {
+	if err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec); err != nil {
 		mcpEnv.add(mcpNote{"warn", "delegate unavailable: " + err.Error()})
 	}
 
@@ -225,7 +232,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec)
 	}
 
 	out := newRenderer(os.Stdout)

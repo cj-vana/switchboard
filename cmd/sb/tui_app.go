@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +13,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/advisor"
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
@@ -48,12 +51,24 @@ type tuiApp struct {
 	// mcp holds the session's connected servers, for /mcp and shutdown.
 	mcp *mcpState
 
+	// undo is the per-turn file checkpoint recorder, for /undo.
+	undo *checkpoint.Recorder
+
 	// advisor, when non-nil, wraps the watcher as the loop's observer and
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.
 	advisor *advisor.Advisor
 
 	obs *tuiObserver
 	p   *tea.Program
+}
+
+// displayPath renders an absolute path workspace-relative, the way the
+// tools' own messages do.
+func (a *tuiApp) displayPath(abs string) string {
+	if rel, err := filepath.Rel(a.workspace, abs); err == nil && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return abs
 }
 
 // tuiObserver is the loop's Observer, forwarding into the Bubble Tea program.

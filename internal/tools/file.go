@@ -154,6 +154,7 @@ func (t *writeTool) Plan(input json.RawMessage) (Plan, error) {
 			if res, ok := t.r.checkStale(abs, true); !ok {
 				return res, nil
 			}
+			t.r.recordUndo(abs)
 			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 				return errorf("cannot create directory for %s: %v", t.r.display(abs), err)
 			}
@@ -227,6 +228,7 @@ func (t *editTool) edit(abs string, in editInput) (Result, error) {
 	if res, ok := t.r.checkStale(abs, false); !ok {
 		return res, nil
 	}
+	t.r.recordUndo(abs)
 
 	data, err := os.ReadFile(abs)
 	if err != nil {

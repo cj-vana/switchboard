@@ -26,6 +26,8 @@ point into it, and this file restates the constraints that bind the code.
                          ladder rung, sharing the permission engine
     internal/trust/      per-workspace grants that gate repository-declared
                          MCP servers and hooks
+    internal/checkpoint/ per-turn file snapshots behind /undo; files are
+                         restored, messages never are
     internal/config/     the ladder and settings; the TUI owns the file and
                          Save regenerates it, so nothing may depend on
                          comments in config.toml surviving
@@ -202,8 +204,11 @@ when a confinement is set and cannot be applied. See `docs/sandbox.md`.
 
 **The prefix is append-only.** Context layout exists to keep provider caches
 warm. Anything that rewrites history is a cache-invalidating event and is
-scheduled deliberately (§6.1). The zone machinery arrives in phase 2a; until
-then, do not add code that mutates already-sent messages.
+scheduled deliberately (§6.1). This is why /undo restores files and never
+messages: `internal/checkpoint` snapshots what write and edit are about to
+change, per turn, and a restored file already forces a re-read through the
+stale check, while the conversation that produced the change stays exactly
+as sent. Do not add an undo path that mutates already-sent messages.
 
 ## Build phase
 

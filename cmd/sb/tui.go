@@ -17,6 +17,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/agent"
 	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
@@ -174,6 +175,7 @@ func runTUI(
 	trustStore *trust.Store,
 	trustErr error,
 	mcpEnv *mcpState,
+	undoRec *checkpoint.Recorder,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -206,6 +208,7 @@ func runTUI(
 		obs:        obs,
 		trust:      trustStore,
 		mcp:        mcpEnv,
+		undo:       undoRec,
 	}
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()
