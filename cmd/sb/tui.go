@@ -713,10 +713,34 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 	// @mentions attach and what recent ! commands produced. Expansion happens
 	// here, not at submit, so a queued prompt reads its files when it runs.
 	m.addUser(prompt)
-	prompt = m.adviceContext(m.shellContext(m.expandMentions(prompt)))
+	expanded, images := m.expandMentions(prompt)
+	prompt = m.adviceContext(m.shellContext(expanded))
+	if len(images) > 0 {
+		if reason, refused := m.visionRefusal(); refused {
+			m.addNotice("error", reason)
+			return nil
+		}
+	}
 	m.beginTurn(prompt)
-	go m.runTurn(m.turnCtx, prompt)
+	go m.runTurn(m.turnCtx, prompt, images)
 	return m.spin.Tick
+}
+
+// visionRefusal says why an attached image cannot ride to the active
+// target. The evidence order is the §4 one: a live probe that attested
+// image input wins, then a catalog entry that carries vision from its own
+// verification; with neither, the attach is refused with the reason rather
+// than sent to fail — or worse, to be silently ignored.
+func (m *tuiModel) visionRefusal() (string, bool) {
+	target := m.app.tier.Target
+	if attested, _ := m.app.providers.probedVision(target); attested {
+		return "", false
+	}
+	if info, _, ok := m.app.catalog.Lookup(target); ok && info.Vision {
+		return "", false
+	}
+	return string(target.ID()) + " has no evidence it takes images — neither its live probe nor the catalog says so; " +
+		"switch to a rung whose model does, or send the prompt without the image mention", true
 }
 
 // onOverrideProbe rebinds to the named tier for one turn, remembering what to
@@ -737,7 +761,7 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 
 	m.addUser(msg.prompt)
 	m.beginTurn(msg.prompt)
-	go m.runTurn(m.turnCtx, msg.prompt)
+	go m.runTurn(m.turnCtx, msg.prompt, nil)
 	return m.spin.Tick
 }
 
@@ -756,12 +780,16 @@ func (m *tuiModel) beginTurn(prompt string) {
 
 // runTurn drives one turn on its own goroutine. Everything it reports arrives
 // as messages; the session stays the only thing it writes.
-func (m *tuiModel) runTurn(ctx context.Context, prompt string) {
+func (m *tuiModel) runTurn(ctx context.Context, prompt string, images []provider.Image) {
 	m.app.watcher.StartTurn()
 	if m.app.advisor != nil {
 		m.app.advisor.StartTurn(prompt)
 	}
-	err := m.app.loop.Turn(ctx, prompt)
+	opening := provider.UserText(prompt)
+	for _, img := range images {
+		opening.Content = append(opening.Content, img)
+	}
+	err := m.app.loop.TurnMessage(ctx, opening)
 
 	after := m.app.loop.Session.State()
 	if rerr := appendRouteRecord(m.app.loop.Session, prompt, m.turnStarted, m.app.tier, m.turnBefore, after, m.started, err, m.app.route, m.app.sticky); rerr != nil {

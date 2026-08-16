@@ -126,14 +126,22 @@ func (l *Loop) observer() Observer {
 // out, or is denied is not an error here, because the model is expected to see
 // that result and decide what to do about it.
 func (l *Loop) Turn(ctx context.Context, input string) error {
+	return l.TurnMessage(ctx, provider.UserText(input))
+}
+
+// TurnMessage is Turn for a caller that built the opening message itself —
+// a prompt carrying image attachments, say. The message must be user-role
+// and complete: it opens the turn, so it is the boundary /fork cuts on and
+// the message every later request replays.
+func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error {
 	// The turn is the undo unit: everything this input causes the tools to
 	// change restores together. A subagent's loop leaves this nil and its
 	// registry shares the primary recorder, so a delegate's edits file under
 	// the turn that delegated.
 	if l.Checkpoints != nil {
-		l.Checkpoints.Begin(input)
+		l.Checkpoints.Begin(messageLabel(opening))
 	}
-	if err := l.Session.AppendMessage(provider.UserText(input)); err != nil {
+	if err := l.Session.AppendMessage(opening); err != nil {
 		return err
 	}
 
@@ -515,6 +523,17 @@ func sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// messageLabel is what the checkpoint recorder files the turn under: the
+// text the user typed, whatever else the message carries.
+func messageLabel(msg provider.Message) string {
+	for _, b := range msg.Content {
+		if t, ok := b.(provider.Text); ok {
+			return t.Text
+		}
+	}
+	return ""
 }
 
 func orDefault(v, fallback int) int {

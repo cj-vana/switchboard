@@ -108,7 +108,12 @@ they are the same thing teaches it the wrong lesson about two of them.
 ## In a session
 
 The input grammar is the one the neighboring tools converged on. `@path`
-completes file names and attaches contents. `!cmd` runs a shell command as
+completes file names and attaches contents; mention a screenshot and it
+attaches as an image, provided the active rung has evidence of taking
+one — the live probe attesting vision, or the catalog's own verified
+entry — and is refused with the reason otherwise, because sending an
+image to a model that silently ignores it is worse than saying no.
+`!cmd` runs a shell command as
 you, immediately, no model in the loop, with the output carried into the
 next turn. A trailing `\` continues the line, ctrl+g opens the prompt in
 `$EDITOR`, prompt history persists per workspace, and ctrl+r searches it.

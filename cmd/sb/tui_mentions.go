@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 const (
@@ -22,7 +24,23 @@ const (
 	mentionFileCap    = 32 << 10
 	mentionWalkCap    = 20000
 	mentionListTTL    = 5 * time.Second
+
+	// mentionImageCap is the strictest per-image limit among the surfaces
+	// this program speaks; refusing above it here beats a provider error
+	// after the upload.
+	mentionImageCap = 5 << 20
 )
+
+// mentionImageTypes maps the extensions every reachable surface accepts to
+// their media types. A mentioned image attaches as an image block rather
+// than as text, when the target has evidence of taking one.
+var mentionImageTypes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+}
 
 // skipDirs are never offered and never walked. They are where completion goes
 // to die on a real repository.
@@ -144,9 +162,12 @@ func (m *tuiModel) acceptMention() {
 // expandMentions attaches the contents of every mentioned file to the prompt.
 // The prompt keeps the @path where the user typed it — that is what they
 // said — and the attachments follow, labelled, so the model knows why they
-// are there. The augmented prompt is what the session records.
-func (m *tuiModel) expandMentions(prompt string) string {
+// are there. The augmented prompt is what the session records. A mentioned
+// image comes back as an image block instead of text, with a labelled line
+// in the prompt tying the attachment to the mention.
+func (m *tuiModel) expandMentions(prompt string) (string, []provider.Image) {
 	var attached []string
+	var images []provider.Image
 	seen := map[string]bool{}
 	for _, field := range strings.Fields(prompt) {
 		token := strings.TrimPrefix(strings.Trim(field, ".,;:!?"), "@")
@@ -158,6 +179,24 @@ func (m *tuiModel) expandMentions(prompt string) string {
 		if err != nil || info.IsDir() {
 			continue
 		}
+
+		if mediaType, isImage := mentionImageTypes[strings.ToLower(filepath.Ext(token))]; isImage {
+			if info.Size() > mentionImageCap {
+				seen[token] = true
+				attached = append(attached, fmt.Sprintf("%s (mentioned above) was not attached: %d bytes is over the %d-byte image cap.",
+					token, info.Size(), mentionImageCap))
+				continue
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			seen[token] = true
+			images = append(images, provider.Image{MediaType: mediaType, Data: data})
+			attached = append(attached, fmt.Sprintf("Image %s (mentioned above) is attached.", token))
+			continue
+		}
+
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -170,7 +209,7 @@ func (m *tuiModel) expandMentions(prompt string) string {
 		attached = append(attached, fmt.Sprintf("Contents of %s (mentioned above):\n```\n%s\n```", token, strings.TrimRight(text, "\n")))
 	}
 	if len(attached) == 0 {
-		return prompt
+		return prompt, nil
 	}
-	return prompt + "\n\n" + strings.Join(attached, "\n\n")
+	return prompt + "\n\n" + strings.Join(attached, "\n\n"), images
 }

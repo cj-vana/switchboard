@@ -1,9 +1,15 @@
 package ollama
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +26,66 @@ func requireLive(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SB_LIVE") == "" {
 		t.Skip("set SB_LIVE=1 to run against a local Ollama server")
+	}
+}
+
+// TestLiveVision sends a generated solid-red PNG and asks its color: the
+// round trip that proves an image block reaches the model itself, not just
+// the wire format. This is the live verification behind letting an @mention
+// attach an image on a probed local target.
+func TestLiveVision(t *testing.T) {
+	requireLive(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	c := New()
+	target := Target(liveModel)
+	res, err := c.Probe(ctx, target)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !res.ModelPresent {
+		t.Skipf("%s is not pulled: %s", liveModel, res.Detail)
+	}
+	if !res.Vision {
+		t.Skipf("%s does not advertise vision", liveModel)
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{R: 255, A: 255}}, image.Point{}, draw.Src)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+
+	req := provider.Request{
+		Messages: []provider.Message{{
+			Role: provider.RoleUser,
+			Content: []provider.Block{
+				provider.Text{Text: "In one word: what color is this image?"},
+				provider.Image{MediaType: "image/png", Data: buf.Bytes()},
+			},
+		}},
+	}
+	s, err := c.Stream(ctx, target, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	events, err := drain(t, s)
+	if err != nil {
+		t.Fatalf("draining live stream: %v", err)
+	}
+	var text strings.Builder
+	for _, ev := range events {
+		if ev.Type == provider.EventTextDelta {
+			text.WriteString(ev.Text)
+		}
+	}
+	if !strings.Contains(strings.ToLower(text.String()), "red") {
+		t.Errorf("the model did not see the image: asked the color of solid red, answered %q", text.String())
 	}
 }
 

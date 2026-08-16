@@ -436,6 +436,13 @@ func blockTokens(b provider.Block) int {
 		return (len(v.Name) + len(v.Input)) / 4
 	case provider.ToolResult:
 		return (len(v.Name) + len(v.Content)) / 4
+	case provider.Image:
+		// Providers price images by their own geometry, not by bytes; this is
+		// the same crude floor the Ollama adapter's estimate uses, kept so an
+		// attached image never counts as free.
+		return len(v.Data) / 12
+	case provider.Document:
+		return len(v.Data) / 12
 	default:
 		return 0
 	}

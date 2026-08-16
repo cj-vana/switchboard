@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/cj-vana/switchboard/internal/config"
 	"github.com/cj-vana/switchboard/internal/credential"
@@ -41,6 +42,14 @@ type providers struct {
 	responses *openai.ResponsesClient
 
 	config *config.Config
+
+	// probes remembers what each target's own probe attested, because a
+	// capability the server reported live outranks the catalog's default for
+	// its surface — the local surface says vision: false, and the server
+	// knows which pulled model actually takes images. Guarded: probes run
+	// from the UI's goroutines as well as assembly.
+	mu     sync.Mutex
+	probes map[provider.RouteTargetID]provider.ProbeResult
 }
 
 func newProviders(host string, cfg *config.Config) *providers {
@@ -49,7 +58,19 @@ func newProviders(host string, cfg *config.Config) *providers {
 		compat: map[string]*openaicompat.Client{},
 		openai: map[string]*openaicompat.Client{},
 		config: cfg,
+		probes: map[provider.RouteTargetID]provider.ProbeResult{},
 	}
+}
+
+// probedVision reports whether this target's live probe attested image
+// input, and whether the target has been probed at all. Unknown is unknown:
+// the caller falls back to the catalog, whose entries carry their own
+// verification dates.
+func (p *providers) probedVision(target provider.RouteTarget) (attested, known bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	probe, ok := p.probes[target.ID()]
+	return probe.Vision, ok
 }
 
 // baseURL is the configured address for a provider, or empty for its default.
@@ -232,6 +253,9 @@ func (p *providers) probeTier(ctx context.Context, tier config.Tier) (config.Tie
 	if err != nil {
 		return config.Tier{}, nil, err
 	}
+	p.mu.Lock()
+	p.probes[tier.Target.ID()] = probe
+	p.mu.Unlock()
 	switch {
 	case !probe.Reachable:
 		return config.Tier{}, nil, fmt.Errorf("no server responded for %s: %s", tier.Target.ID(), probe.Detail)
