@@ -47,6 +47,7 @@ func commands() []commandItem {
 		{name: "sandbox", desc: "what isolation this host provides", busySafe: true, run: cmdSandbox},
 		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
 		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
+		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
@@ -276,6 +277,30 @@ func cmdMCP(m *tuiModel, _ string) tea.Cmd {
 			fmt.Fprintf(&b, "\n    %s", mcp.Namespaced(c.Name(), t.Name))
 		}
 		b.WriteString("\n")
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+// cmdHooks lists the loaded hooks: which event, which tools, what runs.
+func cmdHooks(m *tuiModel, _ string) tea.Cmd {
+	set := m.app.loop.Hooks
+	if set.Empty() {
+		m.addInfo("  no hooks loaded\n" +
+			"  declare them in ~/.switchboard/hooks.toml, or in this repository's .switchboard/hooks.toml behind /trust grant:\n\n" +
+			"    [[hooks.pre_tool]]\n" +
+			"    tools = [\"exec\"]\n" +
+			"    run = \"./scripts/audit.sh\"\n\n" +
+			"  a pre_tool hook that exits non-zero blocks the call; a post_tool hook's output rides back on the result")
+		return nil
+	}
+	var b strings.Builder
+	for _, h := range set.Hooks() {
+		scope := "every tool"
+		if len(h.Tools) > 0 {
+			scope = strings.Join(h.Tools, ", ")
+		}
+		fmt.Fprintf(&b, "  %-9s %-20s %s\n", h.Event, scope, h.Run)
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	return nil

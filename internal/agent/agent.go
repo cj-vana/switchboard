@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/hooks"
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
@@ -67,6 +68,12 @@ type Loop struct {
 	// call is outstanding, and a user-role message is legal in every wire
 	// format this program speaks.
 	Inject func() []provider.Message
+
+	// Hooks, when non-nil, runs the user's commands around each tool call: a
+	// pre_tool hook can block the call after permission has resolved, and a
+	// post_tool hook's output rides back on the result. Hooks are the user's
+	// standing policy, so they run without prompting.
+	Hooks *hooks.Set
 }
 
 // price attaches what the catalog says this call cost, along with the revision
@@ -353,9 +360,20 @@ func (l *Loop) execute(ctx context.Context, j *toolJob) {
 	l.observer().ToolStart(j.use.Name, j.plan.Request)
 	started := time.Now()
 
-	res, err := j.plan.Run(ctx)
-	if err != nil {
-		res = tools.Result{Content: err.Error(), IsError: true}
+	var res tools.Result
+	if msg, blocked := l.Hooks.PreTool(ctx, j.plan.Request); blocked {
+		// Blocked after approval, before effect: the hook's answer goes back
+		// as a tool error so the model reads why instead of guessing.
+		res = tools.Result{Content: msg, IsError: true}
+	} else {
+		var err error
+		res, err = j.plan.Run(ctx)
+		if err != nil {
+			res = tools.Result{Content: err.Error(), IsError: true}
+		}
+		if note := l.Hooks.PostTool(ctx, j.plan.Request, res.Content, res.IsError); note != "" {
+			res.Content = strings.TrimRight(res.Content, "\n") + "\n" + note
+		}
 	}
 	j.result = &res
 	l.observer().ToolEnd(j.use.Name, res, time.Since(started))

@@ -1,11 +1,13 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -45,6 +47,16 @@ type Command struct {
 	// running the command unconfined.
 	Confine *Confinement
 	Policy  Policy
+
+	// ExtraEnv appends to the hygienic child environment. It exists for
+	// hook payloads; it is not a way back in for the credential variables
+	// childEnv strips, so those names are rejected here too.
+	ExtraEnv []string
+
+	// Stdin, when non-empty, is fed to the child's standard input. The
+	// default remains a closed stdin: a command that waits for input would
+	// otherwise wait forever.
+	Stdin []byte
 }
 
 type Result struct {
@@ -110,7 +122,18 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	// pipe open. The whole group has to go.
 	cmd := exec.Command(name, args...)
 	cmd.Dir = c.Dir
-	cmd.Env = childEnv()
+	env := childEnv()
+	for _, kv := range c.ExtraEnv {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok && slices.Contains(providerCredentialVars, key) {
+			continue
+		}
+		env = append(env, kv)
+	}
+	cmd.Env = env
+	if len(c.Stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(c.Stdin)
+	}
 	setProcessGroup(cmd)
 
 	out := newCapture(c.MaxOutput)

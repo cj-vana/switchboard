@@ -172,6 +172,9 @@ func run() error {
 	mcpEnv, mcpRules := connectMCP(ctx, workspace, trustStore, registry)
 	defer mcpEnv.Close()
 
+	hookSet, hookNotes := loadHooks(workspace, trustStore)
+	mcpEnv.notes = append(mcpEnv.notes, hookNotes...)
+
 	// §6 is only live if something wires it. The loop assembles a request from
 	// the session by default, so without this the zones, the breakpoint
 	// manager, and the tracker are all present and never consulted.
@@ -186,6 +189,7 @@ func run() error {
 		Catalog:  cat,
 		Cache:    cache,
 		System:   agent.SystemPrompt(workspace, mode, capability),
+		Hooks:    hookSet,
 	}
 
 	// The sticky primary starts wherever routing landed, and the watcher feeds
