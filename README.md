@@ -247,7 +247,10 @@ base_url`, which changes the address and deliberately nothing else.
 
 [docs/eval.md](docs/eval.md) records what the routing gate measured,
 including the run that falsified a reputation-ordered ladder and the
-derivation that replaced it. [docs/estimator.md](docs/estimator.md)
+derivation that replaced it. [docs/comparison.md](docs/comparison.md)
+places the tool against Claude Code, Codex CLI, and OpenCode, axis by
+axis with the evidence for each claim, including the ones where the
+neighbors win. [docs/estimator.md](docs/estimator.md)
 measures the token estimator's error instead of describing it, and
 [docs/sandbox.md](docs/sandbox.md) documents the confinement profile. The
 section references scattered through the code comments (§6, §8.3, and so
