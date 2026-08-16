@@ -217,19 +217,23 @@ only after the user grants trust to that resolved path (`/trust grant`,
 that is the user speaking. Do not add a repository-provided input that starts
 a process without routing it through this gate.
 
-The language server sits behind the same gate even though gopls is the
-user's own binary, because the code it chews is the repository's: building
-the module graph runs what the module directs (toolchain directives,
-generated code paths), unconfined — confinement would deny the module
-cache and the network gopls needs. Opening a repository is not permission
-to run what its module implies. The client (`internal/lsp`) is
-deliberately narrow — initialize, didOpen, definition, references — and
-answers every server-initiated request with null rather than leaving the
-server waiting on a client that has no configuration to give; both were
-verified against a live gopls, and the tools' {path, line, symbol} input
-shape exists because models copy file:line reliably and invent column
-numbers freely. Server start is lazy; tool presence is decided at
-assembly, which is what the frozen zone requires.
+The language server sits behind the same gate even though the binary is
+the user's own, because the code it chews is the repository's: building
+the module graph runs what the workspace directs (toolchain directives,
+plugins), unconfined — confinement would deny the caches and network a
+server needs. Opening a repository is not permission to run what its
+module implies. The client (`internal/lsp`) is deliberately narrow —
+initialize, didOpen, definition, references — and answers every
+server-initiated request with null rather than leaving the server waiting
+on a client that has no configuration to give. The candidate table in
+`cmd/sb/lsp.go` holds only servers verified live on a real workspace
+(gopls, TypeScript 7's native `tsc --lsp`, pyright), which is the §5.2
+profile rule applied to language servers: the TS5-era wrapper is absent
+because no TS5 existed on the verification machine to run it against, not
+because it was forgotten. The tools' {path, line, symbol} input shape
+exists because models copy file:line reliably and invent column numbers
+freely. Server start is lazy; tool presence is decided at assembly, which
+is what the frozen zone requires.
 
 **MCP discovery is once, at session assembly.** Tool definitions sit in the
 frozen zone (§6.1), so a server that changes its tool list mid-session is

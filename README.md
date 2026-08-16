@@ -191,16 +191,20 @@ sandbox never held is one you vouch for per call. Semantic search over an
 external index is deliberately not built in — a service that receives
 your code is a destination you configure, which is what MCP is for.
 
-Precise symbol lookup joins the same way. In a Go module, with `gopls`
-installed and the workspace trusted, `definition` and `references` tools
-answer from a live language server: the model gives a file, a line, and
-the symbol as written there — straight off a grep hit — and gets exact
-`file:line` answers in milliseconds instead of approximating with search
-rounds. The trust grant is the same one a repository's declared processes
-need, because a language server builds the module's dependency graph and
-modern modules can direct that build; opening a repository is not
-permission to run what its module implies. The server starts on the
-first question, and a session that never asks pays nothing. Declare servers in
+Precise symbol lookup joins the same way. When the workspace names an
+ecosystem and its server is installed — `gopls` for a Go module, the
+TypeScript 7 compiler's own server for a `tsconfig.json` or
+`package.json` project, `pyright` for Python — and the workspace is
+trusted, `definition` and `references` tools answer from a live language
+server: the model gives a file, a line, and the symbol as written there —
+straight off a grep hit — and gets exact `file:line` answers in
+milliseconds instead of approximating with search rounds. The trust
+grant is the same one a repository's declared processes need, because a
+language server runs what the workspace's build graph directs; opening a
+repository is not permission to run what its module implies. The server
+starts on the first question, and a session that never asks pays
+nothing. Each listed server was verified live before earning its place;
+one that nobody has run for real does not get offered. Declare servers in
 `~/.switchboard/mcp.toml`:
 
 ```toml

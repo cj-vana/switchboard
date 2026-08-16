@@ -68,3 +68,23 @@ func TestSetupLSPGatesOnModuleBinaryAndTrust(t *testing.T) {
 		}
 	}
 }
+
+func TestTypeScriptNativeIsVersionGated(t *testing.T) {
+	path, err := exec.LookPath("tsc")
+	if err != nil {
+		t.Skip("no tsc on this machine")
+	}
+	out, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		t.Skip("tsc did not answer --version")
+	}
+	argv, ok := typescriptNative()
+	wantNative := strings.Contains(string(out), "Version 7.") ||
+		strings.Contains(string(out), "Version 8.")
+	if ok != wantNative {
+		t.Fatalf("typescriptNative() = %v for %q; the gate and the binary disagree", ok, strings.TrimSpace(string(out)))
+	}
+	if ok && (len(argv) != 3 || argv[1] != "--lsp") {
+		t.Fatalf("argv = %v, want the verified --lsp -stdio form", argv)
+	}
+}

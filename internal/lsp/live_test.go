@@ -91,3 +91,65 @@ func TestLiveToolRefusesWhatItCannotAnswerHonestly(t *testing.T) {
 		t.Errorf("wrong symbol = %+v, want a refusal naming the mismatch", res)
 	}
 }
+
+// liveServer builds a workspace from files and starts the named server
+// over it, skipping when the machine lacks the binary. Each ecosystem
+// listed in cmd/sb's candidate table earns its place by passing here.
+func liveServer(t *testing.T, binary string, args []string, files map[string]string) (*Server, *tools.Registry) {
+	t.Helper()
+	path, err := exec.LookPath(binary)
+	if err != nil {
+		t.Skipf("%s is not installed on this machine", binary)
+	}
+	root := t.TempDir()
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry, err := tools.NewRegistry(root, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Argv: append([]string{path}, args...), Root: registry.Root()}
+	t.Cleanup(server.Close)
+	return server, registry
+}
+
+func TestLivePyrightAnswersAcrossFiles(t *testing.T) {
+	server, registry := liveServer(t, "pyright-langserver", []string{"--stdio"}, map[string]string{
+		"pyproject.toml": "[project]\nname = \"example\"\nversion = \"0.0.1\"\n",
+		"lib.py":         "def answer() -> int:\n    return 42\n",
+		"main.py":        "from lib import answer\n\nprint(answer())\n",
+	})
+
+	def := runTool(t, NewDefinition(server, registry), `{"path":"main.py","line":3,"symbol":"answer"}`)
+	if def.IsError || !strings.Contains(def.Content, "lib.py:1") {
+		t.Fatalf("definition = %+v, want lib.py:1", def)
+	}
+	refs := runTool(t, NewReferences(server, registry), `{"path":"lib.py","line":1,"symbol":"answer"}`)
+	if refs.IsError || !strings.Contains(refs.Content, "main.py:3") {
+		t.Fatalf("references = %+v, want the use in main.py", refs)
+	}
+}
+
+// TypeScript 7's compiler carries its own language server; the wrapper the
+// TS5 era used (typescript-language-server) refuses a TS7 installation and
+// no TS5 exists on this machine to verify it against, so per the profile
+// rule it is not in the candidate table until someone runs it for real.
+func TestLiveTypeScriptNativeAnswersAcrossFiles(t *testing.T) {
+	server, registry := liveServer(t, "tsc", []string{"--lsp", "-stdio"}, map[string]string{
+		"tsconfig.json": `{"compilerOptions": {"strict": true}}`,
+		"lib.ts":        "export function answer(): number {\n  return 42;\n}\n",
+		"main.ts":       "import { answer } from \"./lib\";\n\nconsole.log(answer());\n",
+	})
+
+	def := runTool(t, NewDefinition(server, registry), `{"path":"main.ts","line":3,"symbol":"answer"}`)
+	if def.IsError || !strings.Contains(def.Content, "lib.ts:1") {
+		t.Fatalf("definition = %+v, want lib.ts:1", def)
+	}
+	refs := runTool(t, NewReferences(server, registry), `{"path":"lib.ts","line":1,"symbol":"answer"}`)
+	if refs.IsError || !strings.Contains(refs.Content, "main.ts:3") {
+		t.Fatalf("references = %+v, want the use in main.ts", refs)
+	}
+}
