@@ -479,13 +479,24 @@ func newRaceDialog(m *tuiModel, run *raceRun) *raceDialog {
 	}
 	if a.status == "completed" && b.status == "completed" {
 		cheaper := a
-		if m.app.rankOf(b.tier) < m.app.rankOf(a.tier) {
+		if raceRank(m, b.tier) < raceRank(m, a.tier) {
 			cheaper = b
 		}
 		d.add("tie", "tie — both suffice, keep the cheaper ("+cheaper.tier.ID+")")
 	}
 	d.add("drop", "neither; stay where the session was")
 	return d
+}
+
+// raceRank orders a tie: the ladder position is the cost order by
+// construction, and a tier off the ladder — a resumed ad-hoc target —
+// sorts last rather than first, because rankOf's -1 would otherwise crown
+// the one rung whose cost the ladder says nothing about.
+func raceRank(m *tuiModel, tier config.Tier) int {
+	if r := m.app.rankOf(tier); r >= 0 {
+		return r
+	}
+	return len(m.app.config.Tiers)
 }
 
 func (d *raceDialog) add(id, label string) {
@@ -542,7 +553,7 @@ func (d *raceDialog) resolve(id string) tea.Cmd {
 		return d.m.finishRace(run, id, outcome)
 	case "tie":
 		pick := "a"
-		if d.m.app.rankOf(b.tier) < d.m.app.rankOf(a.tier) {
+		if raceRank(d.m, b.tier) < raceRank(d.m, a.tier) {
 			pick = "b"
 		}
 		return d.m.finishRace(run, pick, "tie")

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -208,6 +209,79 @@ func TestRaceArmForksThePrefixAndRefusesMutation(t *testing.T) {
 	}
 	if got := len(m.app.loop.Session.State().Messages); got != len(before.Messages) {
 		t.Errorf("the race arm's turn reached the primary session: %d messages, was %d", got, len(before.Messages))
+	}
+}
+
+// The concurrent path, end to end: two arms actually racing on their own
+// goroutines, events arriving as messages, both rails resolving, and the
+// verdict dialog opening with the full vocabulary. The channel is buffered
+// and the test body is its only reader; the deadline turns a wiring
+// mistake into seconds, not a hung suite.
+func TestRaceRunsBothArmsToTheVerdict(t *testing.T) {
+	m := raceModel(t)
+	msgs := make(chan tea.Msg, 64)
+	send := func(v tea.Msg) { msgs <- v }
+
+	armA, err := assembleRaceArm(m.app, m.app.config.Tiers[0],
+		&racedProvider{turns: []racedTurn{racedText("answer from the light rung")}},
+		&raceObserver{arm: 0, send: send})
+	if err != nil {
+		t.Fatal(err)
+	}
+	armB, err := assembleRaceArm(m.app, m.app.config.Tiers[1],
+		&racedProvider{turns: []racedTurn{racedText("answer from the deep rung")}},
+		&raceObserver{arm: 1, send: send})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &raceRun{typed: "which is better", arms: [2]*raceArm{armA, armB}, send: send}
+	run.labels = [2]string{"a · t1 light", "b · t2 deep"}
+	run.rails[0] = m.tr.add(&entry{kind: kindInfo, text: run.railLine(0)})
+	run.rails[1] = m.tr.add(&entry{kind: kindInfo, text: run.railLine(1)})
+	m.race = run
+	m.busy = true
+
+	m.launchRace(run, provider.UserText("which is better"))
+	deadline := time.After(10 * time.Second)
+	for m.dlg == nil {
+		select {
+		case v := <-msgs:
+			m.Update(v)
+		case <-deadline:
+			t.Fatal("the race did not reach a verdict in time")
+		}
+	}
+
+	d, ok := m.dlg.(*raceDialog)
+	if !ok {
+		t.Fatalf("the verdict is a %T, want the race dialog", m.dlg)
+	}
+	if len(d.ids) != 4 {
+		t.Errorf("two completed arms offer %d options, want keep-a, keep-b, tie, and neither", len(d.ids))
+	}
+	for _, rail := range run.rails {
+		if strings.Contains(rail.text, "running") {
+			t.Errorf("a finished arm's rail still says running: %q", rail.text)
+		}
+	}
+	var transcript strings.Builder
+	for _, e := range m.tr.entries {
+		transcript.WriteString(e.text + "\n")
+	}
+	for _, want := range []string{"answer from the light rung", "answer from the deep rung"} {
+		if !strings.Contains(transcript.String(), want) {
+			t.Errorf("a finished answer never rendered: %q", want)
+		}
+	}
+
+	// Resolve through the dialog itself, the way a keypress would.
+	m.dlg = nil
+	d.resolve("a")
+	if m.app.tier.ID != "t1" {
+		t.Errorf("keeping a landed on %s, want t1", m.app.tier.ID)
+	}
+	if m.busy || m.race != nil {
+		t.Error("the verdict did not release the session")
 	}
 }
 
