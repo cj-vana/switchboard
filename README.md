@@ -185,11 +185,15 @@ base_url`, which changes the address and deliberately nothing else.
 
 ## Documentation
 
-`switchboard-design.md` is the design of record: long, ahead of the code,
-and written to be attacked. [docs/eval.md](docs/eval.md) records what the
-routing gate measured, including the run that falsified a reputation-ordered
-ladder and the derivation that replaced it. [docs/estimator.md](docs/estimator.md)
-measures the token estimator's error instead of describing it.
+[docs/eval.md](docs/eval.md) records what the routing gate measured,
+including the run that falsified a reputation-ordered ladder and the
+derivation that replaced it. [docs/estimator.md](docs/estimator.md)
+measures the token estimator's error instead of describing it, and
+[docs/sandbox.md](docs/sandbox.md) documents the confinement profile. The
+section references scattered through the code comments (§6, §8.3, and so
+on) point into the maintainers' design document, which is not part of the
+public tree; the constraints it imposes on the code are restated in
+[AGENTS.md](AGENTS.md).
 
 ## Contributing
 

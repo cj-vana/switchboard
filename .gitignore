@@ -19,3 +19,6 @@
 
 .DS_Store
 /eval-runs.jsonl
+
+# The design of record stays out of the public tree; a local copy may sit here
+/switchboard-design.md

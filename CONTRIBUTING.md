@@ -1,9 +1,10 @@
 # Contributing
 
 Patches are welcome. This file says how to work in the repo without fighting
-it; the design reasoning lives in `switchboard-design.md` and the standing
-constraints in [AGENTS.md](AGENTS.md). When those documents and a change
-disagree, the documents win until they are themselves changed.
+it; the standing constraints live in [AGENTS.md](AGENTS.md), and the design
+reasoning behind them is restated there and in the code's own comments.
+When those documents and a change disagree, the documents win until they
+are themselves changed.
 
 ## Building and testing
 

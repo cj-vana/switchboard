@@ -1,8 +1,9 @@
 # Switchboard
 
 Terminal coding agent whose model is a configurable slot rather than a fixed
-property of the tool. `switchboard-design.md` is the design of record; it is
-authoritative and this file only says how to work inside it.
+property of the tool. The design of record is the maintainers' design
+document, kept outside the public tree; the § references in code comments
+point into it, and this file restates the constraints that bind the code.
 
 ## Where things are
 
