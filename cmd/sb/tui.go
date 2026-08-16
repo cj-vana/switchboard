@@ -365,7 +365,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
-			return storeSecretCmd(msg.ref, msg.writer, msg.storeName, value)
+			store := storeSecretCmd(msg.ref, msg.writer, msg.storeName, value)
+			if msg.then != nil {
+				return tea.Sequence(store, msg.then)
+			}
+			return store
 		})
 		return m, nil
 
@@ -964,12 +968,18 @@ func routeSummary(d route.Decision) string {
 // --- status state ----------------------------------------------------------
 
 func (m *tuiModel) refreshCost(state session.State) {
+	// The three zero-dollar meterings stay distinct (§4), here as everywhere:
+	// a plan target consumed quota, not nothing.
 	info, _, ok := m.app.catalog.Lookup(m.app.loop.Target)
 	switch {
 	case !ok:
 		m.costLine = "unpriced"
-	case info.Free():
+	case info.Metering == catalog.Local:
 		m.costLine = "local"
+	case info.Metering == catalog.Plan:
+		m.costLine = "plan"
+	case info.Free():
+		m.costLine = "free"
 	default:
 		m.costLine = catalog.Money(state.CostMicroUSD).String()
 	}

@@ -298,10 +298,12 @@ codex CLI once refreshes it, because that file is its property, not ours.
 ## The TUI
 
 Inside a session the default surface is the TUI: streaming markdown, a
-virtualized transcript, an always-on status line with the tier, target,
-permission mode, session cost, and a context-window gauge, and interactive
-permission prompts. Router decisions render inline, collapsed to one line;
-ctrl-o expands the last route or tool entry.
+virtualized transcript, interactive permission prompts, and a status bar
+drawn as one continuous surface across the bottom — the active rung's chip
+and target, a ladder strip with every rung as a block in its heat color and
+the active one raised, then mode, reasoning effort, what the session is
+metered in, and the context gauge. Router decisions render inline,
+collapsed to one line; ctrl-o expands the last route or tool entry.
 
 The visual identity is the ladder itself. Each rung wears a stable color on
 a heat ramp, cool teal at t1 running warmer up the ladder, and every routing
@@ -335,8 +337,17 @@ opens all of them in a picker. The distinctive ones:
   transcript and is injected into the working model's turn at the next safe
   seam. Advice, never edits; bounded per turn. `[slots] advisor = "t2"` turns
   it on for every session.
+- `/setup` — every provider on one checklist with its live standing: the
+  local server's model count, where each credential resolves from today.
+  Picking a row does what that row needs — a masked key prompt, or wiring a
+  Codex CLI login already on the machine — and the checklist reopens after
+  each action, so connecting three providers is three picks.
 - `/models`, `/login`, `/logout` — discovery, binding, and credentials
   without leaving the TUI.
+- `/think [level]` — reasoning effort for the active model, this session;
+  the status bar shows it and the target ID grows a +think suffix. A
+  binding that should survive a restart is made in /models, where effort is
+  part of the rung.
 - `/compact [guidance]` — summarize the session into a fresh context; the
   old log stays on disk untouched. This also happens automatically when the
   last request crosses 85% of the target's window, measured from what the

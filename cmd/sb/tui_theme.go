@@ -38,6 +38,16 @@ type theme struct {
 	// is one no neighboring tool can wear: nothing else routes.
 	rungs     []lipgloss.Style
 	rungChips []lipgloss.Style
+
+	// barBg is the status bar's ground: one shade lifted from the terminal,
+	// so the bottom edge reads as a surface instead of floating text.
+	barBg lipgloss.Color
+}
+
+// onBar grounds a style on the status bar's background, so the bar stays one
+// continuous surface under every segment drawn on it.
+func (t *theme) onBar(s lipgloss.Style) lipgloss.Style {
+	return s.Background(t.barBg)
 }
 
 // rung returns the heat style for a ladder rank, clamped: a ladder deeper
@@ -86,6 +96,7 @@ func darkTheme() *theme {
 	t.barEmpty = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
 	t.selected = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 	t.border = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	t.barBg = lipgloss.Color("234")
 
 	// Cool to warm, muted rather than neon: teal, steel blue, violet, copper,
 	// amber, coral. Mid-brightness values chosen to read on a dark ground.
@@ -121,6 +132,7 @@ func lightTheme() *theme {
 	t.barEmpty = lipgloss.NewStyle().Foreground(lipgloss.Color("254"))
 	t.selected = lipgloss.NewStyle().Background(lipgloss.Color("254"))
 	t.border = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	t.barBg = lipgloss.Color("253")
 
 	// The same ramp, darkened to hold contrast on a light ground.
 	for _, c := range []string{"30", "25", "91", "130", "136", "161"} {

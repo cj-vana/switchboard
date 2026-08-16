@@ -50,6 +50,7 @@ func TestRenderPreview(t *testing.T) {
 	m.tr.finalizeAll()
 
 	m.app.tier = m.app.config.Tiers[2]
+	m.app.tier.Target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
 	m.callTokens, m.ctxWindow = 91_000, 262_144
 
 	frame := m.tr.view(28) + "\n" + m.ta.View() + "\n" + m.statusLine()

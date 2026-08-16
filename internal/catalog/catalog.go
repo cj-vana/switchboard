@@ -343,6 +343,32 @@ func (c *Catalog) Lookup(target provider.RouteTarget) (ModelInfo, Confidence, bo
 
 func (c *Catalog) Len() int { return len(c.entries) }
 
+// Surfaces lists every provider/surface pair the catalog knows anything
+// about, from concrete entries and surface defaults alike. This is the list
+// "connect a provider" flows offer: a surface with only a default entry is
+// still a surface a key would unlock, and hiding it because no specific
+// model is cataloged yet would make setup unable to set it up.
+func (c *Catalog) Surfaces() []ModelInfo {
+	seen := map[string]bool{}
+	var out []ModelInfo
+	for _, info := range c.defaults {
+		key := info.Provider + "/" + info.Surface
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, info)
+		}
+	}
+	for _, info := range c.entries {
+		key := info.Provider + "/" + info.Surface
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, info)
+		}
+	}
+	sortByID(out)
+	return out
+}
+
 // Entries returns every verified entry, sorted by ID.
 func (c *Catalog) Entries() []ModelInfo {
 	out := make([]ModelInfo, 0, len(c.entries))

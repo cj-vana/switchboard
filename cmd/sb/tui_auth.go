@@ -40,7 +40,7 @@ func credentialRefs(cfg *config.Config, cat *catalog.Catalog) []credential.Ref {
 		add(r)
 	}
 	var rest []credential.Ref
-	for _, info := range cat.Entries() {
+	for _, info := range cat.Surfaces() {
 		r := credential.Ref{Provider: info.Provider, Account: info.Surface}
 		if !seen[r.String()] {
 			seen[r.String()] = true
@@ -135,6 +135,10 @@ type secretPromptMsg struct {
 	ref       credential.Ref
 	writer    credential.Writer
 	storeName string
+
+	// then, when set, runs after a successful store: the flow that opened
+	// the prompt gets to continue (setup reopens its checklist).
+	then tea.Cmd
 }
 
 // secretDialog takes one secret without echoing it. The value lives in the
