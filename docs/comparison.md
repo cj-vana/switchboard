@@ -100,9 +100,10 @@ integrations, and MCP OAuth flows; it is the deepest single-vendor
 experience. Codex CLI has
 the most configurable profile-per-workload setup, several sandbox postures
 to choose between, and cloud execution. OpenCode has the broadest provider
-matrix, LSP integration, a desktop app, and the largest open-source
-community. A user whose work never leaves one frontier model, or who needs
-an IDE surface today, is well served there.
+matrix, LSP coverage across many languages where Switchboard's begins
+with Go, a desktop app, and the largest open-source community. A user
+whose work never leaves one frontier model, or who needs an IDE surface
+today, is well served there.
 
 ## In practical use
 
@@ -130,7 +131,8 @@ lead, and those leads are functions of scale and time, not of design. On
 the capability of the core, the thing a terminal coding agent is for,
 Switchboard now concedes nothing: the converged skeleton is fully present
 (tools, MCP on both transports, hooks, subagents with named definitions,
-custom commands, availability fallbacks, per-turn undo, session fork), and
+custom commands, availability fallbacks, per-turn undo, session fork,
+structural search, and language-server symbol lookup), and
 on top of it sit seven axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,

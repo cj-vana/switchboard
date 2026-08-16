@@ -26,7 +26,10 @@ point into it, and this file restates the constraints that bind the code.
                          ladder rung, sharing the permission engine; named
                          agent definitions load from .switchboard/agents/
     internal/trust/      per-workspace grants that gate repository-declared
-                         MCP servers and hooks
+                         MCP servers, hooks, and the language server
+    internal/lsp/        a deliberately narrow LSP client: initialize,
+                         didOpen, definition, references; the tools take
+                         {path, line, symbol} and resolve the column
     internal/checkpoint/ per-turn file snapshots behind /undo; files are
                          restored, messages never are
     internal/config/     the ladder and settings; the TUI owns the file and
@@ -213,6 +216,20 @@ only after the user grants trust to that resolved path (`/trust grant`,
 `internal/trust`). The same files under ~/.switchboard always run, because
 that is the user speaking. Do not add a repository-provided input that starts
 a process without routing it through this gate.
+
+The language server sits behind the same gate even though gopls is the
+user's own binary, because the code it chews is the repository's: building
+the module graph runs what the module directs (toolchain directives,
+generated code paths), unconfined — confinement would deny the module
+cache and the network gopls needs. Opening a repository is not permission
+to run what its module implies. The client (`internal/lsp`) is
+deliberately narrow — initialize, didOpen, definition, references — and
+answers every server-initiated request with null rather than leaving the
+server waiting on a client that has no configuration to give; both were
+verified against a live gopls, and the tools' {path, line, symbol} input
+shape exists because models copy file:line reliably and invent column
+numbers freely. Server start is lazy; tool presence is decided at
+assembly, which is what the frozen zone requires.
 
 **MCP discovery is once, at session assembly.** Tool definitions sit in the
 frozen zone (§6.1), so a server that changes its tool list mid-session is

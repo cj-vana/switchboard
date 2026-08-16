@@ -191,6 +191,13 @@ func (r *Registry) Restrict(names []string) error {
 
 func (r *Registry) Root() string { return r.root }
 
+// Resolve and Display expose workspace containment and the relative
+// rendering to first-party tools assembled outside this package — the LSP
+// pair — so an external tool answers with the same paths and refuses the
+// same escapes as the built-in suite.
+func (r *Registry) Resolve(path string) (string, error) { return r.resolve(path) }
+func (r *Registry) Display(abs string) string           { return r.display(abs) }
+
 func (r *Registry) Get(name string) (Tool, bool) {
 	t, ok := r.tools[name]
 	return t, ok

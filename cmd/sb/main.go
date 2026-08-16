@@ -202,6 +202,16 @@ func run() error {
 		mcpEnv.add(n)
 	}
 
+	// Precise symbol lookup joins the suite when a module, a server, and a
+	// trust grant line up; the note says which one did not.
+	lspServer, lspNote := setupLSP(workspace, trustStore, registry)
+	if lspServer != nil {
+		defer lspServer.Close()
+	}
+	if lspNote != "" {
+		mcpEnv.add(mcpNote{"", lspNote})
+	}
+
 	// A fallback substitution renders before any content is sent and is
 	// recorded on the session (§5.4): the user must know which server this
 	// conversation is actually going to.
