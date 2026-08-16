@@ -48,6 +48,7 @@ func commands() []commandItem {
 		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
 		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
+		{name: "agents", desc: "named subagents the model can delegate to", busySafe: true, run: cmdAgents},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
@@ -363,6 +364,45 @@ func cmdHooks(m *tuiModel, _ string) tea.Cmd {
 			scope = strings.Join(h.Tools, ", ")
 		}
 		fmt.Fprintf(&b, "  %-9s %-20s %s\n", h.Event, scope, h.Run)
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+// cmdAgents lists the named subagent definitions this session discovered,
+// with each one's rung, grant, and which directory spoke.
+func cmdAgents(m *tuiModel, _ string) tea.Cmd {
+	if len(m.app.agents) == 0 && len(m.app.agentNotes) == 0 {
+		m.addInfo("  no agents defined\n" +
+			"  a markdown file per agent, in this repository's .switchboard/agents/ or in ~/.switchboard/agents/:\n\n" +
+			"    ---\n" +
+			"    description: reviews a diff for correctness\n" +
+			"    tier: t2\n" +
+			"    tools: read, grep, glob\n" +
+			"    ---\n" +
+			"    You review changes. Report problems; do not fix them.\n\n" +
+			"  the model runs one by calling delegate with its name; a new file is picked up next session")
+		return nil
+	}
+	var b strings.Builder
+	for _, ag := range m.app.agents {
+		rung := ag.Tier
+		if rung == "" && len(m.app.config.Tiers) > 0 {
+			rung = m.app.config.Tiers[0].ID
+		}
+		src := "~/.switchboard/agents"
+		if !ag.FromHome {
+			src = ".switchboard/agents"
+		}
+		fmt.Fprintf(&b, "  %-14s %-4s %s\n", ag.Name, rung, ag.Description)
+		grant := "the full core suite"
+		if len(ag.Tools) > 0 {
+			grant = strings.Join(ag.Tools, ", ")
+		}
+		fmt.Fprintf(&b, "  %-14s %-4s tools: %s · from %s\n", "", "", grant, src)
+	}
+	for _, n := range m.app.agentNotes {
+		fmt.Fprintf(&b, "  ! %s\n", n)
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	return nil

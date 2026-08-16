@@ -59,11 +59,19 @@ type Config struct {
 
 	// NewLoop assembles a loop for the subagent: fresh registry without
 	// delegate, the shared permission engine and asker, the parent's hooks.
-	NewLoop func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer) (*agent.Loop, error)
+	// A non-nil named agent carries the definition's prompt and tool grant
+	// for the assembly to apply.
+	NewLoop func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent) (*agent.Loop, error)
 
 	// Forward receives the subagent's tool activity so the user watches the
 	// work as it happens. Nil means unobserved.
 	Forward func() agent.Observer
+
+	// Agents are the named definitions discovered at session assembly,
+	// sorted by name. Empty leaves the tool exactly as it is without them —
+	// same schema, same description — so a session with no definitions
+	// renders byte-identical requests.
+	Agents []Agent
 }
 
 func (c Config) defaultTier() string {
@@ -94,13 +102,30 @@ func (t *delegateTool) Description() string {
 	for _, tier := range t.c.Tiers {
 		ids = append(ids, tier.ID)
 	}
-	return fmt.Sprintf("Hand a self-contained task to a subagent with a fresh context and return "+
+	desc := fmt.Sprintf("Hand a self-contained task to a subagent with a fresh context and return "+
 		"its final answer. The subagent has the core tools but cannot delegate further, "+
 		"and it starts with no knowledge of this conversation, so the task must carry "+
 		"everything it needs: file paths, constraints, what to return. tier picks the "+
 		"ladder rung it runs on (%s); the default %s is the cheap rung, right for "+
 		"searches, surveys, and mechanical work. Use a higher tier only when the "+
 		"subtask itself is hard.", strings.Join(ids, ", "), t.c.defaultTier())
+	if len(t.c.Agents) == 0 {
+		return desc
+	}
+	var b strings.Builder
+	b.WriteString(desc)
+	b.WriteString(" Named agents carry standing instructions and their own default rung and " +
+		"tool grant; pass one as agent when its charter fits the subtask:")
+	for _, ag := range t.c.Agents {
+		fmt.Fprintf(&b, "\n- %s", ag.Name)
+		if ag.Description != "" {
+			fmt.Fprintf(&b, ": %s", ag.Description)
+		}
+		if ag.Tier != "" {
+			fmt.Fprintf(&b, " (runs on %s)", ag.Tier)
+		}
+	}
+	return b.String()
 }
 
 // ParallelSafe is false: subagents share the permission engine and the
@@ -109,7 +134,8 @@ func (t *delegateTool) Description() string {
 func (t *delegateTool) ParallelSafe() bool { return false }
 
 func (t *delegateTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+	if len(t.c.Agents) == 0 {
+		return json.RawMessage(`{
   "type": "object",
   "properties": {
     "task": {"type": "string", "description": "Complete instructions for the subagent, self-contained: it starts with no context from this conversation."},
@@ -117,11 +143,27 @@ func (t *delegateTool) Schema() json.RawMessage {
   },
   "required": ["task"]
 }`)
+	}
+	var names []string
+	for _, ag := range t.c.Agents {
+		names = append(names, ag.Name)
+	}
+	quoted, _ := json.Marshal(names)
+	return json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "task": {"type": "string", "description": "Complete instructions for the subagent, self-contained: it starts with no context from this conversation."},
+    "tier": {"type": "string", "description": "Ladder rung to run on, e.g. t1. Defaults to the agent's rung, then the bottom rung."},
+    "agent": {"type": "string", "enum": ` + string(quoted) + `, "description": "Named agent to run as: its standing instructions, default rung, and tool grant apply."}
+  },
+  "required": ["task"]
+}`)
 }
 
 type delegateInput struct {
-	Task string `json:"task"`
-	Tier string `json:"tier"`
+	Task  string `json:"task"`
+	Tier  string `json:"tier"`
+	Agent string `json:"agent"`
 }
 
 func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
@@ -131,6 +173,24 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 	}
 	if strings.TrimSpace(in.Task) == "" {
 		return tools.Plan{}, fmt.Errorf("delegate: task is required")
+	}
+	var named *Agent
+	if in.Agent != "" {
+		for i := range t.c.Agents {
+			if t.c.Agents[i].Name == in.Agent {
+				named = &t.c.Agents[i]
+				break
+			}
+		}
+		if named == nil {
+			return tools.Plan{}, fmt.Errorf("delegate: no agent %q is defined", in.Agent)
+		}
+	}
+	// An explicit tier wins over the agent's default, which wins over the
+	// ladder's bottom: the caller saying "run it on t3" is the more specific
+	// intent, whoever the agent is.
+	if in.Tier == "" && named != nil {
+		in.Tier = named.Tier
 	}
 	if in.Tier == "" {
 		in.Tier = t.c.defaultTier()
@@ -153,19 +213,23 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 	if len(summary) > 80 {
 		summary = summary[:80] + "…"
 	}
+	who := in.Tier
+	if named != nil {
+		who = named.Name + " on " + in.Tier
+	}
 	return tools.Plan{
 		Request: permission.Request{
 			Tool:   t.Name(),
 			Effect: permission.EffectRead,
-			Detail: fmt.Sprintf("%s → %s", in.Tier, summary),
+			Detail: fmt.Sprintf("%s → %s", who, summary),
 		},
 		Run: func(ctx context.Context) (tools.Result, error) {
-			return t.run(ctx, in)
+			return t.run(ctx, in, named)
 		},
 	}, nil
 }
 
-func (t *delegateTool) run(ctx context.Context, in delegateInput) (tools.Result, error) {
+func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) (tools.Result, error) {
 	tier, client, err := t.c.Probe(ctx, in.Tier)
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("tier %s cannot be served: %v", in.Tier, err), IsError: true}, nil
@@ -184,7 +248,7 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput) (tools.Result,
 		}
 	}
 
-	loop, err := t.c.NewLoop(tier, client, sess, obs)
+	loop, err := t.c.NewLoop(tier, client, sess, obs, named)
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("could not assemble the subagent: %v", err), IsError: true}, nil
 	}
@@ -194,8 +258,12 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput) (tools.Result,
 	state := sess.State()
 	answer := finalText(state)
 
-	trailer := fmt.Sprintf("[delegate on %s: %d model calls, %s]",
-		tier.ID, state.Calls, time.Since(started).Round(time.Second))
+	who := "on " + tier.ID
+	if named != nil {
+		who = named.Name + " on " + tier.ID
+	}
+	trailer := fmt.Sprintf("[delegate %s: %d model calls, %s]",
+		who, state.Calls, time.Since(started).Round(time.Second))
 
 	switch {
 	case ctx.Err() != nil:

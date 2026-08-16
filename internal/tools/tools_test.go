@@ -396,3 +396,36 @@ func TestOnlyReadsAreParallelSafe(t *testing.T) {
 		}
 	}
 }
+
+// TestCoreNamesMatchesTheRegistry is what lets assembly validate an agent's
+// tool grant against the static list instead of building a registry: the two
+// drift, this fails.
+func TestCoreNamesMatchesTheRegistry(t *testing.T) {
+	r, _ := newRegistry(t)
+	var names []string
+	for _, def := range r.Definitions() {
+		names = append(names, def.Name)
+	}
+	if got, want := strings.Join(CoreNames(), ","), strings.Join(names, ","); got != want {
+		t.Errorf("CoreNames() = %s, registry holds %s", got, want)
+	}
+}
+
+func TestRestrictNarrowsAndOnlyNarrows(t *testing.T) {
+	r, _ := newRegistry(t)
+	if err := r.Restrict([]string{"read", "grep"}); err != nil {
+		t.Fatal(err)
+	}
+	defs := r.Definitions()
+	if len(defs) != 2 || defs[0].Name != "grep" || defs[1].Name != "read" {
+		t.Errorf("Definitions() = %v, want grep and read in sorted order", defs)
+	}
+	if _, ok := r.Get("write"); ok {
+		t.Error("write survived a restriction that excluded it")
+	}
+
+	r2, _ := newRegistry(t)
+	if err := r2.Restrict([]string{"read", "delegate"}); err == nil {
+		t.Error("a name outside the suite must be an error, never an addition")
+	}
+}

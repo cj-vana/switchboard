@@ -204,8 +204,12 @@ func run() error {
 	// The delegate tool joins after the loop exists because its subagents
 	// share the loop's permission engine and asker; it still lands before the
 	// first request, which is what the frozen zone requires.
-	if err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec); err != nil {
+	agents, agentNotes, err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec)
+	if err != nil {
 		mcpEnv.add(mcpNote{"warn", "delegate unavailable: " + err.Error()})
+	}
+	for _, n := range agentNotes {
+		mcpEnv.add(mcpNote{"warn", n})
 	}
 
 	// The sticky primary starts wherever routing landed, and the watcher feeds
@@ -232,7 +236,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes)
 	}
 
 	out := newRenderer(os.Stdout)

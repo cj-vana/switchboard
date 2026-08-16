@@ -197,6 +197,28 @@ with a clean context is the ladder's whole argument applied twice.
 Subagents get the core tools, cannot delegate further, and every call
 they make passes the same permission engine as the primary's.
 
+Delegation can carry a standing charter. A markdown file per agent in
+`.switchboard/agents/` (project) or `~/.switchboard/agents/` (global)
+names a description, a default rung, and a tool grant in its
+frontmatter, with the body as the agent's instructions:
+
+```markdown
+---
+description: reviews a diff for correctness
+tier: t2
+tools: read, grep, glob
+---
+
+You review changes. Report problems; do not fix them.
+```
+
+The model runs one through the same delegate tool, an explicit rung
+still outranks the charter's default, and the grant can only narrow the
+core suite. `/agents` lists what loaded. A repository's definitions load
+without a trust grant because nothing executes at read time; every call
+a named agent makes still passes the permission engine on its own
+merits.
+
 ## Credentials
 
 Local targets need none. For everything else, the resolution order is: an

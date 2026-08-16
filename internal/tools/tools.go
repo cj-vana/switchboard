@@ -149,6 +149,37 @@ func (r *Registry) AddExternal(t Tool) error {
 	return nil
 }
 
+// CoreNames lists the built-in suite, sorted. It exists so assembly can
+// validate a configured tool grant — a named agent's — without building a
+// registry; the test tying it to NewRegistry is what keeps the two honest.
+func CoreNames() []string {
+	return []string{"edit", "exec", "glob", "grep", "read", "todo", "write"}
+}
+
+// Restrict narrows the registry to the named tools. Session assembly only,
+// for the same frozen-zone reason as AddExternal: a suite that shrinks after
+// the first request would invalidate the cached prefix. It can only narrow —
+// a name the registry does not hold is an error, never an addition.
+func (r *Registry) Restrict(names []string) error {
+	keep := map[string]bool{}
+	for _, name := range names {
+		if _, ok := r.tools[name]; !ok {
+			return fmt.Errorf("tool %s is not in the suite", name)
+		}
+		keep[name] = true
+	}
+	kept := r.order[:0]
+	for _, name := range r.order {
+		if keep[name] {
+			kept = append(kept, name)
+		} else {
+			delete(r.tools, name)
+		}
+	}
+	r.order = kept
+	return nil
+}
+
 func (r *Registry) Root() string { return r.root }
 
 func (r *Registry) Get(name string) (Tool, bool) {

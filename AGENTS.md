@@ -23,7 +23,8 @@ point into it, and this file restates the constraints that bind the code.
     internal/hooks/      user commands at the seams of a tool call; a pre_tool
                          hook blocks on non-zero exit and on timeout
     internal/delegate/   the delegate tool: one level of subagent on a chosen
-                         ladder rung, sharing the permission engine
+                         ladder rung, sharing the permission engine; named
+                         agent definitions load from .switchboard/agents/
     internal/trust/      per-workspace grants that gate repository-declared
                          MCP servers and hooks
     internal/checkpoint/ per-turn file snapshots behind /undo; files are
@@ -194,6 +195,18 @@ context that was never the user's. §19.2 phase 6 expects delegation evaluated
 against sticky single-primary baselines; that eval has not run, and the tool's
 own description does not claim it has.
 
+A named agent is a definition, not a capability. The files under
+`.switchboard/agents/` (§13) load without a trust grant because nothing
+executes at read time: a definition is a prompt, a default rung, and a tool
+grant, and the grant can only narrow — `Restrict` errors on a name outside
+the suite, and the sub-registry never held delegate or the bridged MCP tools
+to begin with. Discovery is once, at session assembly, sorted by name,
+because the definitions ride the delegate tool's schema into the frozen
+zone. A session with no definitions renders the schema byte-identical to
+what it was before the feature existed; the test that guards that is the
+cache promise, not the comment. A definition naming a rung the ladder lacks
+runs on the default rung with a note, rather than erroring on every call.
+
 There is deliberately no exported boolean for this. `execution.Capability`
 carries a `*Confinement`, which is produced only by a self-test that passed on
 this machine and is also the thing that wraps the command. Do not add a
@@ -224,11 +237,11 @@ repaints never re-render markdown, and diffs highlight once at load. Keep it
 that way.
 
 Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
-hooks, the workspace-trust flow — along with the `glob`/`grep`/`todo` tools
-and phase 6's `delegate`, each under the constraints above. Deliberately
-absent until their phases: named subagent definitions, the learned router
-(phase 7 gates it on beating the heuristic), and everything in the phase 8
-platform program.
+hooks, the workspace-trust flow, named subagent definitions — along with
+the `glob`/`grep`/`todo` tools and phase 6's `delegate`, each under the
+constraints above. Deliberately absent until their phases: the learned
+router (phase 7 gates it on beating the heuristic) and everything in the
+phase 8 platform program.
 
 ## Working here
 

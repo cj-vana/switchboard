@@ -72,14 +72,17 @@ unconsidered.
 
 **Delegation priced on the same ladder.** Subagents exist everywhere now;
 Switchboard's `delegate` takes a rung, defaults to the cheapest, and its
-trailer names what the errand cost (`internal/delegate`). Claude Code pins
-a model per agent definition; Codex fans out to a mini model; both are
-static configuration. Here the choice is the model's, per task, priced in
-the same catalog the router uses — the routing bet applied to
-orchestration. The design plan gates any claim that this *wins* on an eval
-against single-primary baselines (§19.2 phase 6), and that eval has not
-run, so the honest statement is: the mechanism ships, the verdict is
-pending.
+trailer names what the errand cost (`internal/delegate`). Named
+definitions exist here too — a markdown file in `.switchboard/agents/`
+with a charter, a default rung, and a tool grant that can only narrow —
+but the structural difference stands: Claude Code pins a model per agent
+definition and Codex fans out to a mini model, both static configuration,
+while here the per-task choice stays the model's, an explicit rung
+outranks the charter's default, and either is priced in the same catalog
+the router uses — the routing bet applied to orchestration. The design
+plan gates any claim that this *wins* on an eval against single-primary
+baselines (§19.2 phase 6), and that eval has not run, so the honest
+statement is: the mechanism ships, the verdict is pending.
 
 ## What the neighbors do better
 

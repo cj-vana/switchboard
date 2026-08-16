@@ -82,10 +82,15 @@ func testConfig(t *testing.T, answer string) Config {
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {
 			return store.Create(workspace, target, "test-revision")
 		},
-		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer) (*agent.Loop, error) {
+		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent) (*agent.Loop, error) {
 			registry, err := tools.NewRegistry(workspace, execution.Capability{})
 			if err != nil {
 				return nil, err
+			}
+			if named != nil && len(named.Tools) > 0 {
+				if err := registry.Restrict(named.Tools); err != nil {
+					return nil, err
+				}
 			}
 			return &agent.Loop{
 				Provider:      client,
@@ -194,6 +199,91 @@ func TestFinalTextSkipsIncompleteMessages(t *testing.T) {
 	}}
 	if got := finalText(state); got != "the real answer" {
 		t.Errorf("finalText = %q", got)
+	}
+}
+
+// TestNoAgentsLeavesTheToolByteIdentical guards the frozen zone: a session
+// with no definitions must render the same schema and description it always
+// has, or every existing session's cached prefix breaks on upgrade.
+func TestNoAgentsLeavesTheToolByteIdentical(t *testing.T) {
+	tool, err := New(testConfig(t, "ok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(tool.Schema()), `"agent"`) {
+		t.Error("the bare schema must not carry an agent property")
+	}
+	if strings.Contains(tool.Description(), "Named agents") {
+		t.Error("the bare description must not enumerate agents")
+	}
+}
+
+func agentConfig(t *testing.T, answer string) Config {
+	t.Helper()
+	c := testConfig(t, answer)
+	c.Agents = []Agent{
+		{Name: "reviewer", Description: "reviews a diff", Tier: "t2", Tools: []string{"read", "grep"}, Prompt: "You review changes."},
+		{Name: "scout", Description: "finds things", Prompt: "You search."},
+	}
+	return c
+}
+
+func TestAgentsAppearInSchemaAndDescription(t *testing.T) {
+	tool, err := New(agentConfig(t, "ok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(tool.Schema())
+	if !strings.Contains(schema, `"enum": ["reviewer","scout"]`) {
+		t.Errorf("schema = %s, want the agent names enumerated", schema)
+	}
+	desc := tool.Description()
+	if !strings.Contains(desc, "reviewer: reviews a diff (runs on t2)") {
+		t.Errorf("description = %q, want each agent's charter and rung", desc)
+	}
+}
+
+func TestPlanResolvesTheAgentAndItsDefaultRung(t *testing.T) {
+	tool, err := New(agentConfig(t, "ok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := tool.Plan(json.RawMessage(`{"task":"x","agent":"nobody"}`)); err == nil {
+		t.Error("an undefined agent must fail at Plan time")
+	}
+
+	p := plan(t, tool, `{"task":"check the diff","agent":"reviewer"}`)
+	if !strings.HasPrefix(p.Request.Detail, "reviewer on t2 → ") {
+		t.Errorf("Detail = %q, want the agent's default rung", p.Request.Detail)
+	}
+
+	p = plan(t, tool, `{"task":"check the diff","agent":"reviewer","tier":"t1"}`)
+	if !strings.HasPrefix(p.Request.Detail, "reviewer on t1 → ") {
+		t.Errorf("Detail = %q, want the explicit tier to win", p.Request.Detail)
+	}
+
+	p = plan(t, tool, `{"task":"look around","agent":"scout"}`)
+	if !strings.HasPrefix(p.Request.Detail, "scout on t1 → ") {
+		t.Errorf("Detail = %q, want a rungless agent on the bottom", p.Request.Detail)
+	}
+}
+
+func TestRunNamesTheAgentInTheTrailer(t *testing.T) {
+	tool, err := New(agentConfig(t, "Looks correct."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := plan(t, tool, `{"task":"check the diff","agent":"reviewer"}`)
+	res, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("run failed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "[delegate reviewer on t2:") {
+		t.Errorf("content = %q, want the trailer naming who ran", res.Content)
 	}
 }
 

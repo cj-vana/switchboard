@@ -15,6 +15,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/delegate"
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/provider"
@@ -53,6 +54,11 @@ type tuiApp struct {
 
 	// undo is the per-turn file checkpoint recorder, for /undo.
 	undo *checkpoint.Recorder
+
+	// agents are the named subagent definitions the session discovered, and
+	// agentNotes what their loading had to say; both for /agents.
+	agents     []delegate.Agent
+	agentNotes []string
 
 	// advisor, when non-nil, wraps the watcher as the loop's observer and
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.
@@ -225,4 +231,3 @@ func (a *tuiApp) clearSession() tea.Cmd {
 		return sessionSwapMsg{sess: sess, tier: a.tier, client: a.loop.Provider, fresh: true}
 	}
 }
-

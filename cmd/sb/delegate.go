@@ -50,7 +50,9 @@ var subagentForward = &delegateForward{}
 // registerDelegate adds the delegate tool to the primary registry. The
 // subagent gets a fresh registry — core tools, no delegate (depth one), no
 // MCP — the shared permission engine and asker, the same hooks, and its own
-// session in a store /resume never lists.
+// session in a store /resume never lists. It returns the named agent
+// definitions it discovered and any notes their loading produced, for
+// /agents to show.
 func registerDelegate(
 	registry *tools.Registry,
 	cfg *config.Config,
@@ -61,22 +63,39 @@ func registerDelegate(
 	capability execution.Capability,
 	workspace string,
 	undoRec *checkpoint.Recorder,
-) error {
+) ([]delegate.Agent, []string, error) {
 	if len(cfg.Tiers) == 0 {
-		return nil // no ladder, nothing to delegate on
+		return nil, nil, nil // no ladder, nothing to delegate on
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("delegate needs a home directory for its session store: %w", err)
+		return nil, nil, fmt.Errorf("delegate needs a home directory for its session store: %w", err)
 	}
 	subStore, err := session.NewStore(filepath.Join(home, ".switchboard", "delegates"))
 	if err != nil {
-		return err
+		return nil, nil, err
+	}
+
+	// A definition naming a rung this ladder does not have still loads — it
+	// was probably written for a taller ladder — but runs on the default
+	// rung, and the note says so rather than letting every call error.
+	agents, agentNotes := delegate.LoadAgents(workspace, tools.CoreNames())
+	for i := range agents {
+		if agents[i].Tier == "" {
+			continue
+		}
+		if _, ok := cfg.Tier(agents[i].Tier); !ok {
+			agentNotes = append(agentNotes, fmt.Sprintf(
+				"agent %s names tier %s, which is not on the ladder; it will run on the default rung",
+				agents[i].Name, agents[i].Tier))
+			agents[i].Tier = ""
+		}
 	}
 
 	tool, err := delegate.New(delegate.Config{
-		Tiers: cfg.Tiers,
+		Tiers:  cfg.Tiers,
+		Agents: agents,
 		Probe: func(ctx context.Context, tierID string) (config.Tier, provider.Provider, error) {
 			tier, ok := cfg.Tier(tierID)
 			if !ok {
@@ -87,10 +106,18 @@ func registerDelegate(
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {
 			return subStore.Create(workspace, target, cat.Revision)
 		},
-		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer) (*agent.Loop, error) {
+		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *delegate.Agent) (*agent.Loop, error) {
 			subRegistry, err := tools.NewRegistry(workspace, capability)
 			if err != nil {
 				return nil, err
+			}
+			// A named agent's grant narrows the suite before the first
+			// request; the grant was validated at load, so an error here is
+			// wiring, not a typo.
+			if named != nil && len(named.Tools) > 0 {
+				if err := subRegistry.Restrict(named.Tools); err != nil {
+					return nil, err
+				}
 			}
 			// The sub-registry shares the primary recorder and the sub-loop
 			// opens no scope of its own, so a delegate's edits file under
@@ -100,6 +127,9 @@ func registerDelegate(
 			// session switched to plan mode delegates plan-mode subagents.
 			system := agent.SystemPrompt(workspace, primary.Perms.Mode(), capability)
 			system = append(system, provider.Text{Text: delegate.Preamble})
+			if named != nil {
+				system = append(system, provider.Text{Text: named.Prompt})
+			}
 			return &agent.Loop{
 				Provider:      client,
 				Target:        tier.Target,
@@ -118,7 +148,7 @@ func registerDelegate(
 		Forward: subagentForward.get,
 	})
 	if err != nil {
-		return err
+		return nil, agentNotes, err
 	}
-	return registry.AddExternal(tool)
+	return agents, agentNotes, registry.AddExternal(tool)
 }
