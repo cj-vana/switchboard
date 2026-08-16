@@ -20,6 +20,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/hooks"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/skills"
 	"github.com/cj-vana/switchboard/internal/tools"
 )
 
@@ -64,6 +65,7 @@ func registerDelegate(
 	workspace string,
 	undoRec *checkpoint.Recorder,
 	budget *budgetState,
+	skillList []skills.Skill,
 ) ([]delegate.Agent, []string, error) {
 	if len(cfg.Tiers) == 0 {
 		return nil, nil, nil // no ladder, nothing to delegate on
@@ -119,6 +121,14 @@ func registerDelegate(
 			// which is right — a grant written on one machine must not
 			// depend on another machine's binaries.
 			addStructuralSearch(subRegistry)
+			// Skills too, and for the same reason as astgrep's placement: a
+			// named agent's grant validates against the core suite, so a
+			// restricted agent loses skill with everything else unnamed.
+			if len(skillList) > 0 {
+				if err := subRegistry.AddExternal(skills.NewTool(skillList)); err != nil {
+					return nil, err
+				}
+			}
 			// A named agent's grant narrows the suite before the first
 			// request; the grant was validated at load, so an error here is
 			// wiring, not a typo.

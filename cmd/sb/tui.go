@@ -25,6 +25,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/provider"
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/skills"
 	"github.com/cj-vana/switchboard/internal/tools"
 	"github.com/cj-vana/switchboard/internal/trust"
 )
@@ -183,6 +184,7 @@ func runTUI(
 	agents []delegate.Agent,
 	agentNotes []string,
 	budget *budgetState,
+	skillList []skills.Skill,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -218,6 +220,7 @@ func runTUI(
 		undo:       undoRec,
 		agents:     agents,
 		agentNotes: agentNotes,
+		skills:     skillList,
 		budget:     budget,
 	}
 	if trustErr != nil {

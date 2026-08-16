@@ -22,6 +22,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/provider"
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/cj-vana/switchboard/internal/skills"
 	"github.com/cj-vana/switchboard/internal/tools"
 	"github.com/cj-vana/switchboard/internal/trust"
 )
@@ -60,6 +61,10 @@ type tuiApp struct {
 	// agentNotes what their loading had to say; both for /agents.
 	agents     []delegate.Agent
 	agentNotes []string
+
+	// skills are the loaded skill definitions, for /skills; the tool serving
+	// them was registered at assembly.
+	skills []skills.Skill
 
 	// budget is the shared dollar ceiling, for /budget and the escalation
 	// guard; the loop reads the same state before every call.

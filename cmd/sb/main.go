@@ -219,6 +219,11 @@ func run() error {
 	// binary: looked up once, so the frozen zone never changes mid-session.
 	addStructuralSearch(registry)
 
+	// Skills load the same way named agents do — both directories, no trust
+	// gate, nothing executing at read time — and with none found the tool is
+	// absent, keeping the schemas byte-identical.
+	skillList, skillNotes := addSkills(registry, workspace)
+
 	// The trust store is opened before MCP assembly because it is what
 	// decides whether a repository's declared servers may start.
 	trustStore, trustErr := trust.Open()
@@ -227,6 +232,9 @@ func run() error {
 
 	hookSet, hookNotes := loadHooks(workspace, trustStore)
 	for _, n := range hookNotes {
+		mcpEnv.add(n)
+	}
+	for _, n := range skillNotes {
 		mcpEnv.add(n)
 	}
 
@@ -277,7 +285,7 @@ func run() error {
 	// The delegate tool joins after the loop exists because its subagents
 	// share the loop's permission engine and asker; it still lands before the
 	// first request, which is what the frozen zone requires.
-	agents, agentNotes, err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec, budget)
+	agents, agentNotes, err := registerDelegate(registry, cfg, cat, reg, loop, hookSet, capability, workspace, undoRec, budget, skillList)
 	if err != nil {
 		mcpEnv.add(mcpNote{"warn", "delegate unavailable: " + err.Error()})
 	}
@@ -309,7 +317,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget, skillList)
 	}
 
 	// With -output json, stdout carries exactly one JSON line and nothing

@@ -52,6 +52,7 @@ func commands() []commandItem {
 		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
 		{name: "agents", desc: "named subagents the model can delegate to", busySafe: true, run: cmdAgents},
+		{name: "skills", desc: "instruction packs the model pulls in when a task matches", busySafe: true, run: cmdSkills},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
@@ -509,6 +510,33 @@ func cmdAgents(m *tuiModel, _ string) tea.Cmd {
 	}
 	for _, n := range m.app.agentNotes {
 		fmt.Fprintf(&b, "  ! %s\n", n)
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+// cmdSkills lists the loaded instruction packs. The model pulls one in
+// through the skill tool when a task matches its description; this command
+// is how the user checks what the model can see.
+func cmdSkills(m *tuiModel, _ string) tea.Cmd {
+	if len(m.app.skills) == 0 {
+		m.addInfo("  no skills defined\n" +
+			"  a markdown file per skill, in this repository's .switchboard/skills/ or in ~/.switchboard/skills/,\n" +
+			"  flat (<name>.md) or packaged (<name>/SKILL.md — the shape other tools' packs use, so those port by copying):\n\n" +
+			"    ---\n" +
+			"    description: how migrations are written in this repo\n" +
+			"    ---\n" +
+			"    Migrations live in db/migrations, numbered, never edited after merge.\n\n" +
+			"  the model pulls one in with the skill tool when the task matches; a new file is picked up next session")
+		return nil
+	}
+	var b strings.Builder
+	for _, sk := range m.app.skills {
+		src := "~/.switchboard/skills"
+		if !sk.FromHome {
+			src = ".switchboard/skills"
+		}
+		fmt.Fprintf(&b, "  %-18s %s · from %s\n", sk.Name, sk.Description, src)
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	return nil

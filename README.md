@@ -303,6 +303,21 @@ without a trust grant because nothing executes at read time; every call
 a named agent makes still passes the permission engine on its own
 merits.
 
+Skills are the same idea pointed at knowledge instead of delegation:
+standing instructions for a kind of task, pulled in when the task
+matches rather than riding every request. A markdown file per skill in
+`.switchboard/skills/` (project) or `~/.switchboard/skills/` (global),
+flat as `<name>.md` or packaged as `<name>/SKILL.md` with supporting
+files beside it — the shape the neighboring tools' skill packs use, so
+a pack written for one of them loads here by copying the folder. The
+frontmatter's `description` is what the model sees up front; the body
+costs tokens only in the sessions that ask for it, and the pull is a
+tool call the transcript shows. A skill's own directory is servable
+through the same tool, nothing outside it is, and `/skills` lists what
+loaded. Like agents, skills are prompts: nothing executes at read
+time, and whatever a skill persuades the model to do still passes the
+permission engine.
+
 ## Credentials
 
 Local targets need none. For everything else, the resolution order is: an

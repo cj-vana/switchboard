@@ -25,6 +25,10 @@ point into it, and this file restates the constraints that bind the code.
     internal/delegate/   the delegate tool: one level of subagent on a chosen
                          ladder rung, sharing the permission engine; named
                          agent definitions load from .switchboard/agents/
+    internal/skills/     instruction packs the model pulls in by tool call:
+                         descriptions ride the tool's schema, bodies stay on
+                         disk until asked for; loads without a trust grant
+                         because nothing executes at read time
     internal/trust/      per-workspace grants that gate repository-declared
                          MCP servers, hooks, and the language server
     internal/lsp/        a deliberately narrow LSP client: initialize,
@@ -268,6 +272,22 @@ what it was before the feature existed; the test that guards that is the
 cache promise, not the comment. A definition naming a rung the ladder lacks
 runs on the default rung with a note, rather than erroring on every call.
 
+Skills follow the named-agent posture exactly, because a skill is a prompt
+the way a definition is (§13): both directories load without a trust grant,
+nothing executes at read time, and whatever a skill persuades the model to
+do passes the permission engine on its own merits. Discovery is once, at
+session assembly, sorted by name, because the descriptions ride the skill
+tool's schema into the frozen zone; with nothing discovered the tool is not
+registered at all, and the schemas render byte-identical to a build without
+the feature — that absence is the cache promise, and
+`TestNoSkillsLeavesTheSchemasByteIdentical` is what pins it. The tool
+serves a skill's own directory and nothing else, on resolved paths so a
+symlink cannot carry the read outside it: the workspace-rooted read tool
+cannot reach a pack under ~/.switchboard, and the skill named its own
+references, not the filesystem. Frontmatter keys other than name and
+description are ignored rather than errors, so packs written for the
+neighboring tools load as copied.
+
 There is deliberately no exported boolean for this. `execution.Capability`
 carries a `*Confinement`, which is produced only by a self-test that passed on
 this machine and is also the thing that wraps the command. Do not add a
@@ -320,9 +340,9 @@ repaints never re-render markdown, and diffs highlight once at load. Keep it
 that way.
 
 Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
-hooks, the workspace-trust flow, named subagent definitions — along with
-the `glob`/`grep`/`todo` tools and phase 6's `delegate`, each under the
-constraints above. Deliberately absent until their phases: the learned
+hooks, the workspace-trust flow, named subagent definitions, skills —
+along with the `glob`/`grep`/`todo` tools and phase 6's `delegate`, each
+under the constraints above. Deliberately absent until their phases: the learned
 router (phase 7 gates it on beating the heuristic) and everything in the
 phase 8 platform program.
 
