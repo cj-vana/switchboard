@@ -23,6 +23,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/hooks"
 	"github.com/cj-vana/switchboard/internal/mcp"
+	"github.com/cj-vana/switchboard/internal/skills"
 	"github.com/cj-vana/switchboard/internal/trust"
 )
 
@@ -83,7 +84,7 @@ func runDoctorCLI(ctx context.Context, w io.Writer, cfg *config.Config, cat *cat
 	printDoctorSection(w, "credentials", count(doctorCredentialRows(ctx, cfg)))
 	printDoctorSection(w, "sandbox", doctorSandboxRows(execution.Detect()))
 	printDoctorSection(w, "workspace", count(doctorWorkspaceRows(workspace, trustStore, trustErr)))
-	printDoctorSection(w, "tools", doctorToolRows(workspace, trustStore))
+	printDoctorSection(w, "tools", count(doctorToolRows(workspace, trustStore)))
 	printDoctorSection(w, "mcp", count(doctorMCPRows(ctx, workspace, trustStore)))
 
 	switch bad {
@@ -188,6 +189,14 @@ func doctorToolRows(workspace string, ts *trust.Store) []doctorRow {
 	}
 
 	rows = append(rows, doctorLSPRow(workspace, ts))
+
+	if list, skillNotes := skills.Load(workspace); len(list) > 0 || len(skillNotes) > 0 {
+		detail := fmt.Sprintf("%d loaded", len(list))
+		if len(skillNotes) > 0 {
+			detail += fmt.Sprintf(", %d skipped: %s", len(skillNotes), skillNotes[0])
+		}
+		rows = append(rows, doctorRow{label: "skills", detail: detail, bad: len(skillNotes) > 0})
+	}
 
 	if home, err := os.UserHomeDir(); err == nil {
 		set, _ := hooks.Load(filepath.Join(home, ".switchboard", hooks.FileName), workspace)
