@@ -344,6 +344,20 @@ loaded. Like agents, skills are prompts: nothing executes at read
 time, and whatever a skill persuades the model to do still passes the
 permission engine.
 
+Skills do not have to be written by hand. `/learn release-checklist`
+distills the running session into one: a session that just worked out a
+procedure — the flags that build this repo, the order services restart
+in, the pitfall that ate an hour — holds knowledge worth more than its
+transcript, and `/learn` extracts the repeatable method into
+`.switchboard/skills/<name>/SKILL.md`, leaving the one-off details
+behind. The distillation runs outside the loop on the summarizer slot
+when one is bound, the current rung otherwise, and the file passes the
+credential scan before it reaches disk — a key that survived into a
+skill pack would hand itself to every future session and every clone,
+so redaction there is unconditional. The new skill is offered when the
+next session assembles its tools: discovery is once per session, and
+the command says so rather than pretending otherwise.
+
 ## Credentials
 
 Local targets need none. For everything else, the resolution order is: an

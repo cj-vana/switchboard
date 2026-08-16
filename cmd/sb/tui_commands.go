@@ -55,6 +55,7 @@ func commands() []commandItem {
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
 		{name: "agents", desc: "named subagents the model can delegate to", busySafe: true, run: cmdAgents},
 		{name: "skills", desc: "instruction packs the model pulls in when a task matches", busySafe: true, run: cmdSkills},
+		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},

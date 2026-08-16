@@ -309,6 +309,19 @@ references, not the filesystem. Frontmatter keys other than name and
 description are ignored rather than errors, so packs written for the
 neighboring tools load as copied.
 
+/learn writes a skill and inherits both postures at once. The distillation
+is /compact's mechanism reused whole — one request outside the loop, the
+summarizer slot when bound, no tools, nothing appended to the session — and
+the pack it writes does not hot-register: discovery stays once-per-assembly
+because the descriptions ride the frozen zone, so the command reports
+"offered next session" rather than pretending otherwise. The composed file
+passes `credential.ScanPrompt` before anything reaches disk and redacts
+unconditionally, the race record's posture, because a skill pack outlives
+every chance to ask and may be committed; the test that greps the composed
+content for the token is the guarantee. Do not add a path that writes the
+distiller's output to disk without that scan, and do not register a freshly
+written pack into a running session's registry.
+
 There is deliberately no exported boolean for this. `execution.Capability`
 carries a `*Confinement`, which is produced only by a self-test that passed on
 this machine and is also the thing that wraps the command. Do not add a
