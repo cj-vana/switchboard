@@ -22,6 +22,25 @@ func runRacesCLI(w io.Writer, store *session.Store, workspace string) error {
 	if err != nil {
 		return err
 	}
+	return racesReport(w, infos, "for "+workspace+"; /race <tier> <prompt> runs one")
+}
+
+// runRacesAllCLI tallies the corpus across every workspace: the paired
+// verdicts are evidence for the routing eval, and that argument is global
+// even though each race ran somewhere in particular.
+func runRacesAllCLI(w io.Writer, store *session.Store) error {
+	byWorkspace, err := store.ListAll()
+	if err != nil {
+		return err
+	}
+	var infos []session.Info
+	for _, list := range byWorkspace {
+		infos = append(infos, list...)
+	}
+	return racesReport(w, infos, "anywhere; /race <tier> <prompt> runs one")
+}
+
+func racesReport(w io.Writer, infos []session.Info, where string) error {
 
 	// A verdict lives on the session that continued, but /fork copies a
 	// log's records into the branch, so the same race can sit in two logs.
@@ -76,7 +95,7 @@ func runRacesCLI(w io.Writer, store *session.Store, workspace string) error {
 	}
 
 	if races == 0 {
-		fmt.Fprintf(w, "no races recorded for %s; /race <tier> <prompt> runs one\n", workspace)
+		fmt.Fprintf(w, "no races recorded %s\n", where)
 		return nil
 	}
 

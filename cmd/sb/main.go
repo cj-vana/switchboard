@@ -161,6 +161,9 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		if len(os.Args) > 2 && os.Args[2] == "all" {
+			return runRacesAllCLI(os.Stdout, store)
+		}
 		return runRacesCLI(os.Stdout, store, cwd)
 	}
 

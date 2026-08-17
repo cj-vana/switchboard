@@ -297,7 +297,7 @@ Beyond the expected commands, a few are Switchboard's own:
   most valuable verdict the ladder can hear: direct evidence the cheap
   model was enough, which no amount of watching one model succeed can
   establish. Every verdict is recorded on the session as paired routing
-  evidence and shows in `/why`, and `sb races` (or `/races` in-session) sums the whole workspace's
+  evidence and shows in `/why`, and `sb races` (or `/races` in-session; `races all` spans workspaces, because the corpus argument is global even though each race ran somewhere in particular) sums the whole workspace's
   verdicts per pair from the command line; the router deliberately does
   not consume any of it — collecting the corpus honestly comes before
   acting on it.
