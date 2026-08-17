@@ -30,6 +30,13 @@ type FileEdit struct {
 	Turn      int       // 1-based user-turn ordinal within the session
 	Prompt    string    // the turn's opening words, untruncated
 
+	// CallID is the tool-use id the provider stamped on the call. A fork
+	// copies its source's records byte for byte, timestamps included, so
+	// the same call can sit in two logs — and CallID with At is how a
+	// reader tells a copy from a second real call, which never shares
+	// both.
+	CallID string
+
 	// Target is the provider target that emitted the call, from the usage
 	// record that follows the assistant message. Tier is the rung the
 	// turn's route record names, and only when that record's target is the
@@ -70,6 +77,7 @@ type editInput struct {
 // one; a call whose turn ended before a usage record — an interrupted
 // message — never gets a result either, so it is dropped with the rest.
 type pendingCall struct {
+	id        string
 	name      string
 	input     json.RawMessage
 	turn      int
@@ -158,6 +166,7 @@ func ReadFileEdits(path string) ([]FileEdit, error) {
 						continue
 					}
 					call := &pendingCall{
+						id:        use.ID,
 						name:      use.Name,
 						input:     use.Input,
 						turn:      turn,
@@ -208,6 +217,7 @@ func (c *pendingCall) fileEdit(at time.Time, sessionID, workspace string) (FileE
 		At:        at,
 		Turn:      c.turn,
 		Prompt:    c.prompt,
+		CallID:    c.id,
 		Target:    c.target,
 		turnDepth: c.turnDepth,
 	}

@@ -200,6 +200,69 @@ func TestBlameWorkspaceSumsSurvivorsAndKeepsMeteringsApart(t *testing.T) {
 	}
 }
 
+// A fork copies its source's records, so every call in the kept prefix
+// sits in two logs. The copy must not replay as a second mutation: an
+// edit applied twice finds nothing to match and would raise a false
+// drift alarm in the exact honesty claim blame makes.
+func TestBlameDoesNotReplayAForksCopiedPrefix(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	target := provider.RouteTargetID("ollama/local/qwen3:4b")
+	sess, err := store.Create(workspace, target, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess,
+		provider.UserText("write then rename"),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "w1", Name: "write", Input: json.RawMessage(`{"path":"f.go","content":"one\ntwo\n"}`)},
+			provider.ToolUse{ID: "e1", Name: "edit", Input: json.RawMessage(`{"path":"f.go","old_string":"two","new_string":"TWO"}`)},
+		}},
+	)
+	if err := sess.AppendUsage(session.Usage{Target: string(target)}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess, provider.Message{Role: provider.RoleTool, Content: []provider.Block{
+		provider.ToolResult{ToolUseID: "w1", Name: "write", Content: "wrote f.go"},
+		provider.ToolResult{ToolUseID: "e1", Name: "edit", Content: "edited f.go"},
+	}})
+	id := sess.State().ID
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	fork, err := store.Fork(id, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forkID := fork.State().ID
+	if err := fork.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	abs := filepath.Join(workspace, "f.go")
+	if err := os.WriteFile(abs, []byte("one\nTWO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := strings.Join(blameLines(store, workspace, abs, "f.go"), "\n")
+	if strings.Contains(out, "could not be replayed") {
+		t.Errorf("the fork's copied prefix replayed as drift:\n%s", out)
+	}
+	if !strings.Contains(out, "2 from recorded turns, 0 outside") {
+		t.Errorf("every line should still be attributed:\n%s", out)
+	}
+	if !strings.Contains(out, id+"#1") {
+		t.Errorf("attribution should name the source session:\n%s", out)
+	}
+	if strings.Contains(out, forkID) {
+		t.Errorf("a copied record must not claim authorship for the fork:\n%s", out)
+	}
+}
+
 // The drill-in: one line's story is its writer, the ask, the turn's other
 // files, and how the turn signed off — with a line nobody wrote saying so.
 func TestBlameLineTellsTheTurnsStory(t *testing.T) {

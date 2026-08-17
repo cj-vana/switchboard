@@ -37,23 +37,11 @@ func blameLines(store *session.Store, workspace, abs, shown string) []string {
 		return []string{"  cannot read " + shown + ": " + err.Error()}
 	}
 
-	infos, err := store.List(workspace)
+	byPath, _, err := gatherEdits(store, workspace)
 	if err != nil {
 		return []string{"  " + err.Error()}
 	}
-	var edits []session.FileEdit
-	for _, info := range infos {
-		fromLog, err := session.ReadFileEdits(info.Path)
-		if err != nil {
-			continue
-		}
-		for _, e := range fromLog {
-			if resolveEditPath(e) == abs {
-				edits = append(edits, e)
-			}
-		}
-	}
-	sort.SliceStable(edits, func(i, j int) bool { return edits[i].At.Before(edits[j].At) })
+	edits := byPath[abs]
 
 	if len(edits) == 0 {
 		return []string{
@@ -144,22 +132,17 @@ func blameLines(store *session.Store, workspace, abs, shown string) []string {
 // scopes and the closing line says so — money covers all of a target's
 // calls, lines only what survives on disk today.
 func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace string) []string {
-	infos, err := store.List(workspace)
+	byPath, _, err := gatherEdits(store, workspace)
 	if err != nil {
 		return []string{"  " + err.Error()}
 	}
-	byPath := map[string][]session.FileEdit{}
 	byTarget := map[string][]session.Usage{}
-	for _, info := range infos {
-		edits, err := session.ReadFileEdits(info.Path)
-		if err == nil {
-			for _, e := range edits {
-				abs := resolveEditPath(e)
-				byPath[abs] = append(byPath[abs], e)
+	if infos, err := store.List(workspace); err == nil {
+		for _, info := range infos {
+			usages, err := session.ReadUsages(info.Path)
+			if err != nil {
+				continue
 			}
-		}
-		usages, err := session.ReadUsages(info.Path)
-		if err == nil {
 			for _, u := range usages {
 				byTarget[u.Target] = append(byTarget[u.Target], u)
 			}
@@ -193,7 +176,6 @@ func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace s
 	sort.Strings(paths)
 	for _, path := range paths {
 		edits := byPath[path]
-		sort.SliceStable(edits, func(i, j int) bool { return edits[i].At.Before(edits[j].At) })
 		// A target that wrote here holds a row even when nothing of its
 		// survives; "paid, and no line of it lasted" is the receipt's
 		// sharpest sentence and must not vanish with the lines.
@@ -287,25 +269,11 @@ func blameLineLines(store *session.Store, workspace, abs, shown string, line int
 		return []string{"  cannot read " + shown + ": " + err.Error()}
 	}
 
-	infos, err := store.List(workspace)
+	byPath, logByID, err := gatherEdits(store, workspace)
 	if err != nil {
 		return []string{"  " + err.Error()}
 	}
-	var edits []session.FileEdit
-	logByID := map[string]string{}
-	for _, info := range infos {
-		logByID[info.ID] = info.Path
-		fromLog, err := session.ReadFileEdits(info.Path)
-		if err != nil {
-			continue
-		}
-		for _, e := range fromLog {
-			if resolveEditPath(e) == abs {
-				edits = append(edits, e)
-			}
-		}
-	}
-	sort.SliceStable(edits, func(i, j int) bool { return edits[i].At.Before(edits[j].At) })
+	edits := byPath[abs]
 
 	ann := blame.Annotate(disk, edits)
 	if line < 1 || line > len(ann.Lines) {
@@ -453,6 +421,46 @@ func resolveEditPath(e session.FileEdit) string {
 		return filepath.Clean(e.Path)
 	}
 	return filepath.Join(e.Workspace, e.Path)
+}
+
+// gatherEdits reads every log the workspace recorded once, returning its
+// mutations keyed by resolved path and oldest-first, plus each session's
+// log path for the surfaces that go back for the turn's story. A fork
+// copies its source's records byte for byte — /races dedupes its verdicts
+// for the same reason — so a call already seen under its id and timestamp
+// is a copy, not a second mutation, and replaying it would raise a false
+// drift alarm. Logs are read in id order, which is creation order, so the
+// copy that survives is the source's.
+func gatherEdits(store *session.Store, workspace string) (map[string][]session.FileEdit, map[string]string, error) {
+	infos, err := store.List(workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+
+	byPath := map[string][]session.FileEdit{}
+	logByID := map[string]string{}
+	seen := map[string]bool{}
+	for _, info := range infos {
+		logByID[info.ID] = info.Path
+		edits, err := session.ReadFileEdits(info.Path)
+		if err != nil {
+			continue
+		}
+		for _, e := range edits {
+			key := e.CallID + "@" + strconv.FormatInt(e.At.UnixNano(), 10)
+			if e.CallID != "" && seen[key] {
+				continue
+			}
+			seen[key] = true
+			abs := resolveEditPath(e)
+			byPath[abs] = append(byPath[abs], e)
+		}
+	}
+	for _, edits := range byPath {
+		sort.SliceStable(edits, func(i, j int) bool { return edits[i].At.Before(edits[j].At) })
+	}
+	return byPath, logByID, nil
 }
 
 // lineRuns renders which 1-based lines carry an origin, as compact runs:
