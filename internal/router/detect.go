@@ -103,7 +103,7 @@ func (d *Detector) ToolResult(name, argv, output string, failed bool) []Signal {
 	// A failing test run is the case §8.3 singles out, and only a signature not
 	// seen before counts. The same failure twice is one problem observed twice,
 	// and counting it again escalates for persistence rather than difficulty.
-	if looksLikeTests(argv) {
+	if LooksLikeTests(argv) {
 		if sig := failureSignature(output); sig != "" && !d.failures[sig] {
 			d.failures[sig] = true
 			signals = append(signals, NewTestFailure)
@@ -158,7 +158,11 @@ func (d *Detector) AssistantText(text string) []Signal {
 // false positive is half an escalation vote, which is why it is allowed to be.
 var testCommand = regexp.MustCompile(`(?i)\b(go test|npm (run )?test|yarn test|pnpm test|pytest|cargo test|make test|ctest|rspec|jest|vitest|phpunit|dotnet test|gradle(w)? test|mvn test)\b`)
 
-func looksLikeTests(argv string) bool { return testCommand.MatchString(argv) }
+// LooksLikeTests is exported because it is a vocabulary, not a detail:
+// /mistakes replays recorded sessions through the same gate the escalation
+// detector runs live, and a ledger that decided "test run" differently
+// would disagree with the routing record about what a failure was.
+func LooksLikeTests(argv string) bool { return testCommand.MatchString(argv) }
 
 // failureLine matches the first line that names a failure, which is what makes
 // one failure distinguishable from another.

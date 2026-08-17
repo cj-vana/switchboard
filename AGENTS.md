@@ -119,6 +119,23 @@ evidence about which rungs earn their keep, and one guessed line poisons
 every claim built on it, so do not widen the replay with fuzzy matching or
 nearest-edit heuristics.
 
+**A recurrence is two sessions, not two lines of output.** /mistakes
+(`cmd/sb/mistakes.go`) sums failure signatures across the workspace's
+recorded sessions, and every choice defers to machinery that already
+exists. What counts as a failure is the escalation detector's own gate,
+exported for the purpose (`router.LooksLikeTests`,
+`router.ExtractFailures`): a failing run of a test-shaped command, the
+first failing line's signature, one run one observation — a ledger that
+decided "test run" differently would disagree with the routing record
+about what a failure was. A fork's copied record deduplicates on the
+record's own timestamp, the Usage.At mechanism, and gathering runs oldest
+log first so a copy can never claim the meeting its source made. The bar
+is a second session, because recurrence across contexts is the claim: the
+same afternoon failing five times is debugging, not a standing problem.
+The scope is stated in the output — a failure the recorder cannot see is
+absent, not guessed — and the closer names /learn, the way a red watch
+names /bisect.
+
 **A bisect leaves the tree the way it found it, or that is the error.**
 `internal/bisect` probes past states in place, and its contract has three
 legs that must survive any change. The restore runs on every exit path —

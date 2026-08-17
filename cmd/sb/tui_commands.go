@@ -72,6 +72,7 @@ func commands() []commandItem {
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
 		{name: "blame", usage: "[path[:line]]", desc: "which recorded turn wrote each line, on which rung and model; bare, the workspace's yield", busySafe: true, run: cmdBlame},
+		{name: "mistakes", desc: "the failures more than one session met, from the workspace's own record", busySafe: true, run: cmdMistakes},
 		{name: "undo", usage: "[list|path]", desc: "take back the last turn's file changes, or one file's", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
 		{name: "bisect", usage: "[cmd]", desc: "binary-search this session's turns for the one that turned the verifier red", run: cmdBisect},
@@ -123,7 +124,7 @@ var helpGroups = []struct {
 }{
 	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
-	{"files and work", []string{"diff", "changes", "blame", "undo", "watch", "bisect", "copy", "init", "learn"}},
+	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }

@@ -114,12 +114,12 @@ func TestTestCommandsAreRecognisedAcrossEcosystems(t *testing.T) {
 		"go test ./...", "npm test", "pnpm test", "pytest -q",
 		"cargo test", "make test", "dotnet test", "mvn test", "npx vitest run",
 	} {
-		if !looksLikeTests(argv) {
+		if !LooksLikeTests(argv) {
 			t.Errorf("%q was not recognised as a test run", argv)
 		}
 	}
 	for _, argv := range []string{"go build ./...", "ls", "git status", "npm install"} {
-		if looksLikeTests(argv) {
+		if LooksLikeTests(argv) {
 			t.Errorf("%q was treated as a test run", argv)
 		}
 	}

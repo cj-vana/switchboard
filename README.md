@@ -282,6 +282,17 @@ Beyond the expected commands, a few are Switchboard's own:
   `/blame cache.go:42` is the drill-in — one line's whole story: who
   wrote it, asked what, what else that turn touched, how the turn
   signed off, and the `/resume` that reopens the session it came from.
+- `/mistakes` and `sb mistakes` read the record for the failures more
+  than one session met: every failing run of a test-shaped command,
+  reduced to the same digit-stripped signature the escalation detector
+  compares live, summed across the workspace's sessions. One session
+  meeting a failure is debugging; a second session meeting the same
+  signature is a lesson the workspace has not kept, and each entry names
+  its sessions so `/resume` reopens the evidence. A fork's copied prefix
+  is one observation, never a second meeting, and the boundary is stated
+  in the output: a failure printed outside the exec tool is outside the
+  record. The closer names `/learn`, because a fix that had to be found
+  twice is a method worth distilling.
 - `/copy` takes the last response to the clipboard, `/copy code` its
   newest fenced block — the thing a mouse selection across wrapped,
   styled terminal lines mangles — and `/copy code 2` the block before

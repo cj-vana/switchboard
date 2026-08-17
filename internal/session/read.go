@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cj-vana/switchboard/internal/provider"
 )
@@ -104,9 +105,15 @@ func ReadRaces(path string) ([]Race, error) {
 
 // Timeline is one of a log's records in the order it was written, shaped
 // for a surface replaying the session as a document rather than as a
-// request: exactly one field is set. Usage, pins, and permissions are
-// deliberately absent — they are accounting, and State already sums them.
+// request: exactly one of the payload fields is set. Usage, pins, and
+// permissions are deliberately absent — they are accounting, and State
+// already sums them.
 type Timeline struct {
+	// At is the record's own timestamp. A fork's copy keeps its source's,
+	// which is how an aggregate reader tells a copied record from a second
+	// real one — the same mechanism Usage.At carries.
+	At time.Time
+
 	Message *provider.Message
 	Route   *Route
 	Race    *Race
@@ -144,25 +151,25 @@ func ReadTimeline(path string) ([]Timeline, error) {
 			if err := json.Unmarshal(rec.Payload, &m); err != nil {
 				return nil, err
 			}
-			out = append(out, Timeline{Message: &m})
+			out = append(out, Timeline{At: rec.At, Message: &m})
 		case RecordRoute:
 			var route Route
 			if err := json.Unmarshal(rec.Payload, &route); err != nil {
 				return nil, err
 			}
-			out = append(out, Timeline{Route: &route})
+			out = append(out, Timeline{At: rec.At, Route: &route})
 		case RecordRace:
 			var race Race
 			if err := json.Unmarshal(rec.Payload, &race); err != nil {
 				return nil, err
 			}
-			out = append(out, Timeline{Race: &race})
+			out = append(out, Timeline{At: rec.At, Race: &race})
 		case RecordNote:
 			var note Note
 			if err := json.Unmarshal(rec.Payload, &note); err != nil {
 				return nil, err
 			}
-			out = append(out, Timeline{Note: &note})
+			out = append(out, Timeline{At: rec.At, Note: &note})
 		}
 	}
 }

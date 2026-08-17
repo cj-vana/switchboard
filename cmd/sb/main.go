@@ -181,6 +181,20 @@ func run() error {
 		}
 		return runRacesCLI(os.Stdout, store, cwd)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "mistakes" {
+		if len(os.Args) > 2 {
+			return fmt.Errorf("sb mistakes takes no argument; %q is not one", os.Args[2])
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		return runMistakesCLI(os.Stdout, store, cwd)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "blame" {
 		if len(os.Args) > 3 {
 			return fmt.Errorf("sb blame takes one file, or none for the workspace receipt; %q is extra", os.Args[3])
