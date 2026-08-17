@@ -49,6 +49,7 @@ func commands() []commandItem {
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
+		{name: "estimate", usage: "[prompt]", desc: "price the next turn on every rung before it is sent", run: cmdEstimate},
 		{name: "stats", usage: "[all]", desc: "every session this workspace has recorded, repriced on today's ladder; all spans workspaces", busySafe: true, run: cmdStats},
 		{name: "find", usage: "[all] <text>", desc: "search recorded sessions for what was said; all spans workspaces", busySafe: true, run: cmdFind},
 		{name: "cache", desc: "what the provider is believed to hold warm, and the evidence", run: cmdCache},
@@ -121,7 +122,7 @@ var helpGroups = []struct {
 	names []string
 }{
 	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
-	{"the ladder", []string{"tier", "tiers", "why", "race", "races", "cost", "stats", "budget", "think", "cache", "advisor"}},
+	{"the ladder", []string{"tier", "tiers", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"diff", "changes", "blame", "undo", "watch", "bisect", "copy", "init", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},

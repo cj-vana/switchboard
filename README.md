@@ -182,6 +182,16 @@ Beyond the expected commands, a few are Switchboard's own:
   decisions, race verdicts, and warnings land as annotations where they
   happened, because the routing record is the half of the session no
   transcript of the words can reconstruct.
+- `/estimate refactor the parser to stream` prices that prompt on every
+  rung before it is sent: the next request's zones — system, tools,
+  conversation, your prompt — estimated the way the §6.4 machinery
+  estimates them, each rung answering in its own metering with a
+  low/expected/high range, the active rung folding in the cache
+  tracker's modeled hit chance and every other rung priced cold and
+  saying so. The receipt after the fact is `/why`; this is the same
+  honesty pointed forward, and no other tool can print it because no
+  other tool holds a ladder, a cache belief, and a measured estimator
+  at once.
 - `/cost` totals the running session, and `sb cost` prints the same
   accounting for every session the workspace has recorded, from the
   command line, with the three meterings kept apart throughout: dollars

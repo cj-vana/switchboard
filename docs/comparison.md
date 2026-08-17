@@ -47,7 +47,14 @@ And the receipt scales: `/cost rungs` reprices one session cold on every
 rung, and `/stats` prices the workspace's whole recorded history the same
 way — as routed, then pinned to each rung of today's ladder
 (`cmd/sb/stats.go`) — an answer no neighbor can produce, because none has
-a ladder to price a history against.
+a ladder to price a history against. The same honesty points forward:
+`/estimate <prompt>` prices that prompt on every rung before it is sent
+(`cmd/sb/estimate.go`), the next request's zones estimated the way the
+budget gate estimates them, each rung in its own metering, the active
+rung folding in the tracker's modeled hit chance and every other rung
+priced cold and saying so — a pre-send receipt that requires the ladder,
+the cache belief, and the measured estimator at once, which is why no
+neighbor prints one.
 
 **Cache state as a belief with a surface.** Provider cache is tracked
 from what providers report, never from what was sent, as a probability
