@@ -111,7 +111,12 @@ line reads as: this rung, this model, this session and turn, the turn's
 own words — or as outside the record, the label for what hands, shell
 commands, and formatters produced, because only write and edit put their
 bytes where replay can see them. A recorded edit that no longer applies
-is counted and said, never guessed into place. The neighbors keep
+is counted and said, never guessed into place. Bare `/blame` sums the same replay across
+every file the record touched — surviving lines by target, each beside
+its own money word in the catalog's three meterings — so the ladder's
+yield is one screen: which rungs write the lines that last, and which
+target was paid for lines that were all later overwritten. The
+neighbors keep
 transcripts and checkpoints; none can tell you which lines of a file the
 cheap model wrote and which lines nobody's model wrote at all — the
 question that decides whether a ladder's lower rungs are earning their

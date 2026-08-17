@@ -182,11 +182,8 @@ func run() error {
 		return runRacesCLI(os.Stdout, store, cwd)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "blame" {
-		if len(os.Args) < 3 {
-			return fmt.Errorf("sb blame takes the file to annotate")
-		}
 		if len(os.Args) > 3 {
-			return fmt.Errorf("sb blame takes one file; %q is extra", os.Args[3])
+			return fmt.Errorf("sb blame takes one file, or none for the workspace receipt; %q is extra", os.Args[3])
 		}
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -196,7 +193,15 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		return runBlameCLI(os.Stdout, store, cwd, os.Args[2])
+		cat, err := catalog.Load()
+		if err != nil {
+			return err
+		}
+		path := ""
+		if len(os.Args) > 2 {
+			path = os.Args[2]
+		}
+		return runBlameCLI(os.Stdout, store, cat, cwd, path)
 	}
 
 	var opts options

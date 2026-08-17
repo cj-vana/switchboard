@@ -243,6 +243,11 @@ Beyond the expected commands, a few are Switchboard's own:
   Lines the record cannot explain say so: typed, shell-made, or before
   the log, never guessed. It is `git blame` for the half git cannot
   see, and it reads across every session the workspace has recorded.
+  Bare `/blame` is the ladder's yield: surviving lines summed by who
+  wrote them, each target beside its own money word in the catalog's
+  three meterings — the receipt that says whether the rungs that cost
+  nothing are writing the lines that last, and names the target that
+  was paid whose every line was later overwritten.
 - `/copy` takes the last response to the clipboard, `/copy code` its
   newest fenced block — the thing a mouse selection across wrapped,
   styled terminal lines mangles — and `/copy code 2` the block before

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
 )
@@ -103,6 +104,99 @@ func TestBlameWithNoRecordSaysWhatItCovers(t *testing.T) {
 	}
 	if !strings.Contains(out, "hands and shell commands are outside it") {
 		t.Errorf("the boundary of the claim is unstated:\n%s", out)
+	}
+}
+
+// The bare form: surviving lines by target beside the target's own money
+// word, the three meterings kept apart, and a target every line of which
+// was overwritten still on the receipt at zero.
+func TestBlameWorkspaceSumsSurvivorsAndKeepsMeteringsApart(t *testing.T) {
+	cat, priced := pricedTarget(t)
+	local := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "qwen3:4b"}
+	if info, _, ok := cat.Lookup(local); !ok || info.Metering != catalog.Local {
+		t.Fatal("the bundled catalog no longer meters ollama/local as local; pick another fixture")
+	}
+
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	sess, err := store.Create(workspace, local.ID(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Turn 1, local rung: writes two lines that survive.
+	appendMessages(t, sess,
+		provider.UserText("write the parser"),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "w1", Name: "write", Input: json.RawMessage(`{"path":"kept.go","content":"one\ntwo\n"}`)},
+		}},
+	)
+	if err := sess.AppendUsage(session.Usage{Target: string(local.ID())}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess, provider.Message{Role: provider.RoleTool, Content: []provider.Block{
+		provider.ToolResult{ToolUseID: "w1", Name: "write", Content: "wrote kept.go"},
+	}})
+
+	// Turn 2, priced rung: writes a draft the next turn fully overwrites,
+	// so it survives nowhere — and its dollars still show.
+	appendMessages(t, sess,
+		provider.UserText("draft the helper"),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "w2", Name: "write", Input: json.RawMessage(`{"path":"churned.go","content":"draft\n"}`)},
+		}},
+	)
+	if err := sess.AppendUsage(session.Usage{Target: string(priced.ID()), CostMicroUSD: 1_250_000}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess, provider.Message{Role: provider.RoleTool, Content: []provider.Block{
+		provider.ToolResult{ToolUseID: "w2", Name: "write", Content: "wrote churned.go"},
+	}})
+	appendMessages(t, sess,
+		provider.UserText("rewrite the helper"),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "w3", Name: "write", Input: json.RawMessage(`{"path":"churned.go","content":"final\n"}`)},
+		}},
+	)
+	if err := sess.AppendUsage(session.Usage{Target: string(local.ID())}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess, provider.Message{Role: provider.RoleTool, Content: []provider.Block{
+		provider.ToolResult{ToolUseID: "w3", Name: "write", Content: "wrote churned.go"},
+	}})
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(workspace, "kept.go"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "churned.go"), []byte("final\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := strings.Join(blameWorkspaceLines(store, cat, workspace), "\n")
+
+	if !strings.Contains(out, "2 files the record touched") {
+		t.Errorf("the file count is off:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing to bill") {
+		t.Errorf("the local rung lost its metering word:\n%s", out)
+	}
+	if !strings.Contains(out, "$1.25 as routed") {
+		t.Errorf("the priced rung's dollars are missing:\n%s", out)
+	}
+	if !strings.Contains(out, "0 lines") {
+		t.Errorf("a paid target with no surviving line must still show:\n%s", out)
+	}
+	if strings.Contains(out, "$0.00") {
+		t.Errorf("something rendered as free money:\n%s", out)
+	}
+	if !strings.Contains(out, "surviving or not") {
+		t.Errorf("the money scope is unstated:\n%s", out)
 	}
 }
 

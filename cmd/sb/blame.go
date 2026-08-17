@@ -20,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cj-vana/switchboard/internal/blame"
+	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/session"
 )
 
@@ -133,6 +134,197 @@ func blameLines(store *session.Store, workspace, abs, shown string) []string {
 	return lines
 }
 
+// blameWorkspaceLines is the bare form's receipt: every file the record
+// wrote, annotated, and the surviving lines summed by who wrote them —
+// beside what each target's calls cost here, kept in the three meterings.
+// The juxtaposition is the ladder's yield: whether the rungs that cost
+// nothing are writing the lines that last. Lines and money keep separate
+// scopes and the closing line says so — money covers all of a target's
+// calls, lines only what survives on disk today.
+func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace string) []string {
+	infos, err := store.List(workspace)
+	if err != nil {
+		return []string{"  " + err.Error()}
+	}
+	byPath := map[string][]session.FileEdit{}
+	byTarget := map[string][]session.Usage{}
+	for _, info := range infos {
+		edits, err := session.ReadFileEdits(info.Path)
+		if err == nil {
+			for _, e := range edits {
+				abs := resolveEditPath(e)
+				byPath[abs] = append(byPath[abs], e)
+			}
+		}
+		usages, err := session.ReadUsages(info.Path)
+		if err == nil {
+			for _, u := range usages {
+				byTarget[u.Target] = append(byTarget[u.Target], u)
+			}
+		}
+	}
+	if len(byPath) == 0 {
+		return []string{
+			"  no recorded turn has written anything here yet",
+			"  blame sees what write and edit put in the log; hands and shell commands are outside it",
+		}
+	}
+
+	type row struct {
+		lines int
+		tiers map[string]bool
+	}
+	rows := map[string]*row{}
+	rowFor := func(target string) *row {
+		r, ok := rows[target]
+		if !ok {
+			r = &row{tiers: map[string]bool{}}
+			rows[target] = r
+		}
+		return r
+	}
+	outside, files, gone, unreadable := 0, 0, 0, 0
+	paths := make([]string, 0, len(byPath))
+	for p := range byPath {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		edits := byPath[path]
+		sort.SliceStable(edits, func(i, j int) bool { return edits[i].At.Before(edits[j].At) })
+		// A target that wrote here holds a row even when nothing of its
+		// survives; "paid, and no line of it lasted" is the receipt's
+		// sharpest sentence and must not vanish with the lines.
+		for _, e := range edits {
+			r := rowFor(e.Target)
+			if e.Tier != "" {
+				r.tiers[e.Tier] = true
+			}
+		}
+		disk, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				gone++
+			} else {
+				unreadable++
+			}
+			continue
+		}
+		files++
+		ann := blame.Annotate(disk, edits)
+		for _, o := range ann.Lines {
+			if o < 0 {
+				outside++
+				continue
+			}
+			rowFor(ann.Origins[o].Target).lines++
+		}
+	}
+
+	targets := make([]string, 0, len(rows))
+	for target := range rows {
+		targets = append(targets, target)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if rows[targets[i]].lines != rows[targets[j]].lines {
+			return rows[targets[i]].lines > rows[targets[j]].lines
+		}
+		return targets[i] < targets[j]
+	})
+
+	word := "files"
+	if files == 1 {
+		word = "file"
+	}
+	lines := []string{fmt.Sprintf("  surviving lines across the %d %s the record touched", files, word)}
+	nameWidth := 0
+	names := map[string]string{}
+	for _, target := range targets {
+		name := target
+		if name == "" {
+			name = "(target unrecorded)"
+		}
+		if tier := soleTier(rows[target].tiers); tier != "" {
+			name = tier + " " + name
+		}
+		names[target] = name
+		if len(name) > nameWidth {
+			nameWidth = len(name)
+		}
+	}
+	for _, target := range targets {
+		lines = append(lines, fmt.Sprintf("  %-*s  %5d %s   %s",
+			nameWidth, names[target], rows[target].lines, lineWord(rows[target].lines), targetPay(cat, target, byTarget[target])))
+	}
+	if outside > 0 {
+		lines = append(lines, fmt.Sprintf("  %-*s  %5d %s   typed, shell-made, or before the log",
+			nameWidth, "outside the record", outside, lineWord(outside)))
+	}
+	if gone > 0 {
+		word := "files"
+		if gone == 1 {
+			word = "file"
+		}
+		lines = append(lines, fmt.Sprintf("  %d %s the record wrote are gone; whatever they held is nobody's now", gone, word))
+	}
+	if unreadable > 0 {
+		lines = append(lines, fmt.Sprintf("  %d files could not be read and are not counted", unreadable))
+	}
+	return append(lines,
+		"  lines are what survives on disk today; money is what the target's calls cost, surviving or not")
+}
+
+// lineWord keeps a one-line row from saying "1 lines"; the trailing space
+// on the singular keeps the money column aligned.
+func lineWord(n int) string {
+	if n == 1 {
+		return "line "
+	}
+	return "lines"
+}
+
+// soleTier names the one rung a target was routed on when the record
+// agrees with itself; a target seen from several rungs, or from none the
+// route records vouch for, shows bare.
+func soleTier(tiers map[string]bool) string {
+	if len(tiers) != 1 {
+		return ""
+	}
+	for tier := range tiers {
+		return tier
+	}
+	return ""
+}
+
+// targetPay is one target's money word, in the metering the catalog
+// records for it — never collapsed into "free", the §4 rule this whole
+// surface exists beside.
+func targetPay(cat *catalog.Catalog, targetStr string, usages []session.Usage) string {
+	target, err := parseRecordedTarget(targetStr)
+	if err != nil {
+		return "no price on record"
+	}
+	info, _, ok := cat.Lookup(target)
+	switch {
+	case !ok:
+		return "no price on record"
+	case info.Metering == catalog.Local:
+		return "runs locally — nothing to bill"
+	case info.Metering == catalog.Plan:
+		return "bills a plan, not dollars"
+	case info.Free():
+		return "no price on record"
+	}
+	var dollars catalog.Money
+	for _, u := range usages {
+		dollars += catalog.Money(u.CostMicroUSD)
+	}
+	if dollars == 0 {
+		return "bills dollars, but no cost was recorded"
+	}
+	return fmt.Sprintf("%s as routed", dollars)
+}
+
 // resolveEditPath maps a recorded call's path to the file it named:
 // workspace-relative paths resolve against the workspace the log's own
 // header recorded, not against whoever is asking today.
@@ -178,7 +370,9 @@ func lineRuns(lines []int, origin int) string {
 func cmdBlame(m *tuiModel, args string) tea.Cmd {
 	path := strings.TrimSpace(args)
 	if path == "" {
-		return noticeCmd("error", "/blame takes the file to annotate")
+		m.addInfo("who wrote this workspace\n" +
+			strings.Join(blameWorkspaceLines(m.app.store, m.app.catalog, m.app.workspace), "\n"))
+		return nil
 	}
 	abs := path
 	if !filepath.IsAbs(abs) {
@@ -189,7 +383,14 @@ func cmdBlame(m *tuiModel, args string) tea.Cmd {
 	return nil
 }
 
-func runBlameCLI(w io.Writer, store *session.Store, workspace, path string) error {
+func runBlameCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, workspace, path string) error {
+	if path == "" {
+		fmt.Fprintln(w, "who wrote this workspace")
+		for _, line := range blameWorkspaceLines(store, cat, workspace) {
+			fmt.Fprintln(w, strings.TrimRight(line, " "))
+		}
+		return nil
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
