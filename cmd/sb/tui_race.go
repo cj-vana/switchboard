@@ -97,14 +97,24 @@ func (o *raceObserver) TurnUsage(u session.Usage) {
 // form racing the active tier against tB. The prompt keeps its spacing;
 // only the tier tokens are cut off the front.
 func parseRaceArgs(app *tuiApp, args string) (config.Tier, config.Tier, string, error) {
-	usage := errors.New("usage: /race <tier> [tier] <prompt> — one prompt on two rungs at once; you pick which continues")
+	usage := errors.New("usage: /race [tier [tier]] <prompt> — one prompt on two rungs at once; the bare form races this rung against the next one up")
 	first, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
 	if first == "" {
 		return config.Tier{}, config.Tier{}, "", usage
 	}
 	a, ok := app.config.Tier(first)
 	if !ok {
-		return config.Tier{}, config.Tier{}, "", fmt.Errorf("no tier %s is configured; try /tiers", first)
+		// No tier named: the whole argument is the prompt, and the race is
+		// the ladder's own question — this rung against the next one up,
+		// which is the comparison every escalation decision is implicitly
+		// making. At the top there is no up, and the error says which
+		// direction is left.
+		rank := app.rankOf(app.tier)
+		if rank < 0 || rank+1 >= len(app.config.Tiers) {
+			return config.Tier{}, config.Tier{}, "", fmt.Errorf(
+				"%s is the top rung, so there is no next rung up to race; name the rungs, e.g. /race t1 <prompt>", app.tier.ID)
+		}
+		return app.tier, app.config.Tiers[rank+1], strings.TrimSpace(args), nil
 	}
 	second, tail, _ := strings.Cut(strings.TrimSpace(rest), " ")
 	if b, ok := app.config.Tier(second); ok {

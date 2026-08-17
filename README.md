@@ -253,8 +253,10 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace and offers the verifier it implies — a Makefile's test
   target, `go test ./...` for a module, `npm test` when the script is
   real — but only ever offers: arming stays a thing you type.
-- `/race t3 review this diff` runs one prompt on the current rung and t3
-  at once, side by side; `/race t2 t3 …` names both lanes. Each branch is
+- `/race review this diff` runs one prompt on this rung and the next
+  one up at once, side by side — the comparison every escalation
+  decision is implicitly making, at the cost of typing five letters;
+  `/race t3 …` picks the other lane, `/race t2 t3 …` names both. Each branch is
   a fork of the session, so the sitting rung rides its warm prefix, and
   both run read-only — enforced by the permission engine, not promised —
   until you pick which branch the session continues on. The other answer

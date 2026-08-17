@@ -145,7 +145,11 @@ func TestParseRaceArgs(t *testing.T) {
 		{args: "t2", wantsError: true},
 		{args: "t1 t2", wantsError: true},
 		{args: "", wantsError: true},
-		{args: "t9 do a thing", wantsError: true},
+		// No tier named: the whole argument is the prompt and the race is
+		// this rung against the next one up. A word that merely looks like
+		// a tier id is prose under the same rule.
+		{args: "do a thing", a: "t1", b: "t2", prompt: "do a thing"},
+		{args: "t9 do a thing", a: "t1", b: "t2", prompt: "t9 do a thing"},
 	}
 	for _, c := range cases {
 		a, b, prompt, err := parseRaceArgs(m.app, c.args)
@@ -162,6 +166,14 @@ func TestParseRaceArgs(t *testing.T) {
 		if a.ID != c.a || b.ID != c.b || prompt != c.prompt {
 			t.Errorf("parse %q: got %s vs %s %q, want %s vs %s %q", c.args, a.ID, b.ID, prompt, c.a, c.b, c.prompt)
 		}
+	}
+
+	// The bare form needs an up to race toward: at the top rung it refuses
+	// with the direction that is left, rather than inventing a downward
+	// race nobody asked for.
+	m.app.tier = m.app.config.Tiers[len(m.app.config.Tiers)-1]
+	if _, _, _, err := parseRaceArgs(m.app, "do a thing"); err == nil || !strings.Contains(err.Error(), "top rung") {
+		t.Errorf("the bare form at the top rung should refuse with the reason, got %v", err)
 	}
 }
 

@@ -42,7 +42,7 @@ func commands() []commandItem {
 		{name: "tier", usage: "<id>", desc: "switch tier (bare /t2 works too)", run: cmdTier},
 		{name: "tiers", desc: "show the configured ladder", busySafe: true, run: cmdTiers},
 		{name: "why", desc: "how this tier was chosen, and what the others would have cost", busySafe: true, run: cmdWhy},
-		{name: "race", usage: "<tier> [tier] <prompt>", desc: "one prompt on two rungs at once; you pick which continues", run: cmdRace},
+		{name: "race", usage: "[tier [tier]] <prompt>", desc: "one prompt on two rungs at once; bare form races the next rung up", run: cmdRace},
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
