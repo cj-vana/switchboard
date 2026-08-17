@@ -49,6 +49,7 @@ func statsLines(tiers []config.Tier, cat *catalog.Catalog, activeTier string, st
 		read++
 		all = append(all, usages...)
 	}
+	all = dedupeCopiedUsages(all)
 
 	var in, out, cacheRead, cacheWrite int
 	for _, u := range all {
@@ -94,8 +95,9 @@ func statsLines(tiers []config.Tier, cat *catalog.Catalog, activeTier string, st
 		lines = append(lines, fmt.Sprintf(" %s%-*s  %s", marker, width, t.String(), rungWord(cat, t, all)))
 	}
 	lines = append(lines,
-		"  race losers and forks count — their calls were real; subagent",
-		"  sessions keep their own store and do not",
+		"  race losers and forks count — their calls were real, and a fork's",
+		"  copied prefix is one spend counted once; subagent sessions keep",
+		"  their own store and do not",
 		"  an estimator and reconciliation aid, not the provider's invoice (§15)")
 	return lines
 }
@@ -105,6 +107,33 @@ func statsLines(tiers []config.Tier, cat *catalog.Catalog, activeTier string, st
 // totals. Rung repricing stays per workspace - a counterfactual prices one
 // history against one ladder over one working set - so the all-form points
 // back at the per-workspace command rather than blurring them together.
+// dedupeCopiedUsages drops the usage records a fork's copy carries: the
+// same target, timestamp, token counts, and cost is the same call in two
+// logs, because a copied record keeps its source's At and no two real
+// calls share all four. Aggregates fold them; per-session surfaces do not,
+// because a fork's inherited spend is load-bearing there — /budget gates
+// the fork's conversation on everything its log has priced. A record with
+// no timestamp, from a log written before readers surfaced one, is never
+// folded: without the discriminant, folding would be a guess.
+func dedupeCopiedUsages(all []session.Usage) []session.Usage {
+	seen := map[string]bool{}
+	out := make([]session.Usage, 0, len(all))
+	for _, u := range all {
+		if u.At.IsZero() {
+			out = append(out, u)
+			continue
+		}
+		key := fmt.Sprintf("%s@%d:%d/%d/%d/%d/%d", u.Target, u.At.UnixNano(),
+			u.Usage.InputTokens, u.Usage.OutputTokens, u.Usage.CacheReadTokens, u.Usage.CacheWriteTokens, u.CostMicroUSD)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, u)
+	}
+	return out
+}
+
 func statsAllLines(cat *catalog.Catalog, store *session.Store) []string {
 	byWorkspace, err := store.ListAll()
 	if err != nil {
@@ -137,6 +166,7 @@ func statsAllLines(cat *catalog.Catalog, store *session.Store) []string {
 			}
 			usages = append(usages, found...)
 		}
+		usages = dedupeCopiedUsages(usages)
 		sessions += len(byWorkspace[ws])
 		all = append(all, usages...)
 		lines = append(lines, fmt.Sprintf("  %-*s  %d sessions; %s", width, ws, len(byWorkspace[ws]), asRoutedLine(cat, usages)))

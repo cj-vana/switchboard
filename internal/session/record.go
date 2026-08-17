@@ -202,6 +202,13 @@ type Usage struct {
 	// default is shape rather than fact.
 	CatalogRevision string `json:"catalog_revision,omitempty"`
 	PriceConfidence string `json:"price_confidence,omitempty"`
+
+	// At is the record's own timestamp, set by ReadUsages and never
+	// serialized — the payload does not carry what the record framing
+	// already holds. A fork copies usage records with their At intact, so
+	// the timestamp is how an aggregate reader tells a copy from a second
+	// real call.
+	At time.Time `json:"-"`
 }
 
 type Permission struct {

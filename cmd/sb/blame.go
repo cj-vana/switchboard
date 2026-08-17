@@ -137,8 +137,9 @@ func blameWorkspaceLines(store, delegates *session.Store, cat *catalog.Catalog, 
 		return []string{"  " + err.Error()}
 	}
 	// Money spans the same record the lines do: the workspace's sessions
-	// and their subagent errands, whose calls were as real as any.
-	byTarget := map[string][]session.Usage{}
+	// and their subagent errands, whose calls were as real as any. A
+	// fork's copied prefix is one spend, counted once, same as its edits.
+	var gathered []session.Usage
 	for _, s := range []*session.Store{store, delegates} {
 		if s == nil {
 			continue
@@ -152,10 +153,12 @@ func blameWorkspaceLines(store, delegates *session.Store, cat *catalog.Catalog, 
 			if err != nil {
 				continue
 			}
-			for _, u := range usages {
-				byTarget[u.Target] = append(byTarget[u.Target], u)
-			}
+			gathered = append(gathered, usages...)
 		}
+	}
+	byTarget := map[string][]session.Usage{}
+	for _, u := range dedupeCopiedUsages(gathered) {
+		byTarget[u.Target] = append(byTarget[u.Target], u)
 	}
 	if len(byPath) == 0 {
 		return []string{

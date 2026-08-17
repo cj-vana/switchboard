@@ -100,3 +100,45 @@ func TestStatsAllSpansWorkspaces(t *testing.T) {
 		}
 	}
 }
+
+// A fork copies its source's usage records with their timestamps, so the
+// same call sits in two logs. The aggregate counts it once; the fork's own
+// log keeps the copy, because /budget gates the fork on its inherited
+// spend.
+func TestStatsCountsAForkedPrefixOnce(t *testing.T) {
+	cat, priced := pricedTarget(t)
+	tiers := []config.Tier{{ID: "t1", Label: "paid", Target: priced}}
+
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	sess, err := store.Create(workspace, priced.ID(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendMessage(provider.UserText("the turn the fork keeps")); err != nil {
+		t.Fatal(err)
+	}
+	usage := session.Usage{Target: string(priced.ID()), Usage: provider.Usage{InputTokens: 500, OutputTokens: 300}, CostMicroUSD: 120_000}
+	if err := sess.AppendUsage(usage); err != nil {
+		t.Fatal(err)
+	}
+	id := sess.State().ID
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := store.Fork(id, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fork.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := strings.Join(statsLines(tiers, cat, "t1", store, workspace), "\n")
+	if !strings.Contains(out, "$0.1200 across the 1 calls that bill dollars") {
+		t.Errorf("the copied usage record was counted twice:\n%s", out)
+	}
+}

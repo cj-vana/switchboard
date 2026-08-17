@@ -199,6 +199,10 @@ func ReadUsages(path string) ([]Usage, error) {
 		if err := json.Unmarshal(rec.Payload, &u); err != nil {
 			return nil, err
 		}
+		// The record's own timestamp rides along, runtime-only: a fork
+		// copies usage records with their At intact, and the timestamp is
+		// how an aggregate reader tells the copy from a second real call.
+		u.At = rec.At
 		out = append(out, u)
 	}
 }
