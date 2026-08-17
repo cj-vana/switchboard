@@ -221,7 +221,10 @@ deterministic one-task-per-package cut of the corpus — chosen in corpus
 order, fixed before any tool runs, so results cannot pick their tasks —
 and judges any tool's attempts with the same verifier the exit gate uses,
 the package tests plus the checks that keep "delete the failing test"
-from counting as a solve.
+from counting as a solve. `SB_BENCH_CUT=all` widens the cut to every
+spec, for a run that wants the corpus's full breadth rather than its
+spread; both the materialise and the verify read it, so the two cannot
+disagree about which tasks a lane holds.
 
 One lane, any agent CLI:
 

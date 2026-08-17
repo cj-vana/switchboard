@@ -19,13 +19,16 @@ import (
 	"testing"
 )
 
-// benchTasks is the per-package cut of the corpus, skipping tasks another
-// platform owns.
+// benchTasks is the cut of the corpus a lane runs, skipping tasks another
+// platform owns. The default is one task per package; SB_BENCH_CUT=all
+// widens to every spec, for a run that wants the corpus's full breadth
+// rather than its spread.
 func benchTasks(root string) []Task {
+	all := os.Getenv("SB_BENCH_CUT") == "all"
 	seen := map[string]bool{}
 	var out []Task
 	for _, s := range specs {
-		if seen[s.pkg] || (s.goos != "" && s.goos != runtime.GOOS) {
+		if (!all && seen[s.pkg]) || (s.goos != "" && s.goos != runtime.GOOS) {
 			continue
 		}
 		seen[s.pkg] = true
