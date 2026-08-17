@@ -146,7 +146,11 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		return runStatsCLI(os.Stdout, store, cat, cfg, cwd)
+		scope := ""
+		if len(os.Args) > 2 {
+			scope = os.Args[2]
+		}
+		return runStatsCLI(os.Stdout, store, cat, cfg, cwd, scope)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "races" {
 		cwd, err := os.Getwd()

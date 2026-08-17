@@ -49,7 +49,7 @@ func commands() []commandItem {
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
-		{name: "stats", desc: "every session this workspace has recorded, repriced on today's ladder", busySafe: true, run: cmdStats},
+		{name: "stats", usage: "[all]", desc: "every session this workspace has recorded, repriced on today's ladder; all spans workspaces", busySafe: true, run: cmdStats},
 		{name: "find", usage: "<text>", desc: "search this workspace's recorded sessions for what was said", busySafe: true, run: cmdFind},
 		{name: "cache", desc: "what the provider is believed to hold warm, and the evidence", run: cmdCache},
 		{name: "notify", usage: "[on|off]", desc: "ring the bell when a turn finishes or an approval waits", busySafe: true, run: cmdNotify},

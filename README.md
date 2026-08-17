@@ -194,6 +194,12 @@ Beyond the expected commands, a few are Switchboard's own:
   billed, what always-use-the-cheapest could not have held. A rung whose
   context window could not fit a call reports that instead of a price,
   because feasibility is not economics.
+- `sb stats all` (or `/stats all`) spans every workspace the store
+  holds — what sb has recorded anywhere, each workspace's as-routed
+  line, and the grand totals — resolved from the logs' own headers,
+  because the store's directory names are hashes and never held the
+  answer. Rung repricing stays per workspace, where a counterfactual
+  prices one history against one ladder over one working set.
 - `/stats` and `sb stats` are the same receipt at lifetime scale: every
   session this workspace has recorded, summed as routed and repriced on
   each rung of today's ladder, with the scope stated — race losers and

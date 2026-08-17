@@ -72,3 +72,31 @@ func TestStatsWithNoHistorySaysSo(t *testing.T) {
 		t.Errorf("an empty history did not say so: %s", out)
 	}
 }
+
+// The all-form spans workspaces from the logs' own headers - the store's
+// directory names are hashes and never held the answer - and keeps rung
+// repricing per workspace, where a counterfactual means something.
+func TestStatsAllSpansWorkspaces(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, priced := pricedTarget(t)
+	wsA, wsB := t.TempDir(), t.TempDir()
+	for _, ws := range []string{wsA, wsB} {
+		sess, err := store.Create(ws, priced.ID(), "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess.AppendUsage(session.Usage{Target: string(priced.ID()),
+			Usage: provider.Usage{InputTokens: 1000, OutputTokens: 100}, CostMicroUSD: 5000})
+		sess.Close()
+	}
+
+	out := strings.Join(statsAllLines(cat, store), "\n")
+	for _, want := range []string{wsA, wsB, "across them: 2 sessions, 2 calls", "rung repricing stays per workspace"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("all-form missing %q:\n%s", want, out)
+		}
+	}
+}

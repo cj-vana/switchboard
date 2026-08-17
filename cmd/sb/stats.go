@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -99,15 +100,79 @@ func statsLines(tiers []config.Tier, cat *catalog.Catalog, activeTier string, st
 	return lines
 }
 
-func cmdStats(m *tuiModel, _ string) tea.Cmd {
+// statsAllLines is the receipt across every workspace the store holds: what
+// sb has recorded anywhere, each workspace's as-routed line, and the grand
+// totals. Rung repricing stays per workspace - a counterfactual prices one
+// history against one ladder over one working set - so the all-form points
+// back at the per-workspace command rather than blurring them together.
+func statsAllLines(cat *catalog.Catalog, store *session.Store) []string {
+	byWorkspace, err := store.ListAll()
+	if err != nil {
+		return []string{"  " + err.Error()}
+	}
+	if len(byWorkspace) == 0 {
+		return []string{"  no sessions recorded anywhere yet"}
+	}
+	workspaces := make([]string, 0, len(byWorkspace))
+	for ws := range byWorkspace {
+		workspaces = append(workspaces, ws)
+	}
+	sort.Strings(workspaces)
+
+	var lines []string
+	var all []session.Usage
+	sessions := 0
+	width := 0
+	for _, ws := range workspaces {
+		if len(ws) > width {
+			width = len(ws)
+		}
+	}
+	for _, ws := range workspaces {
+		var usages []session.Usage
+		for _, info := range byWorkspace[ws] {
+			found, err := session.ReadUsages(info.Path)
+			if err != nil {
+				continue
+			}
+			usages = append(usages, found...)
+		}
+		sessions += len(byWorkspace[ws])
+		all = append(all, usages...)
+		lines = append(lines, fmt.Sprintf("  %-*s  %d sessions; %s", width, ws, len(byWorkspace[ws]), asRoutedLine(cat, usages)))
+	}
+
+	var in, out int
+	for _, u := range all {
+		in += u.Usage.InputTokens + u.Usage.CacheReadTokens + u.Usage.CacheWriteTokens
+		out += u.Usage.OutputTokens
+	}
+	lines = append(lines,
+		fmt.Sprintf("  across them: %d sessions, %d calls, ↓%s ↑%s tokens; %s",
+			sessions, len(all), compact(in), compact(out), asRoutedLine(cat, all)),
+		"  rung repricing stays per workspace: sb stats inside one prices its history on your ladder")
+	return lines
+}
+
+func cmdStats(m *tuiModel, args string) tea.Cmd {
 	// Read-only over the workspace's logs, the current one included; its
 	// open log reads the way `sb cost` reads it, which is what makes this
 	// busy-safe.
+	if strings.TrimSpace(args) == "all" {
+		m.addInfo(strings.Join(statsAllLines(m.app.catalog, m.app.store), "\n"))
+		return nil
+	}
 	m.addInfo(strings.Join(statsLines(m.app.config.Tiers, m.app.catalog, m.app.tier.ID, m.app.store, m.app.workspace), "\n"))
 	return nil
 }
 
-func runStatsCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, cfg *config.Config, workspace string) error {
+func runStatsCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, cfg *config.Config, workspace, scope string) error {
+	if scope == "all" {
+		for _, line := range statsAllLines(cat, store) {
+			fmt.Fprintln(w, strings.TrimRight(line, " "))
+		}
+		return nil
+	}
 	// No session is active in a CLI run, so no rung wears the marker.
 	for _, line := range statsLines(cfg.Tiers, cat, "", store, workspace) {
 		fmt.Fprintln(w, strings.TrimRight(line, " "))

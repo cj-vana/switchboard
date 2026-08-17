@@ -183,6 +183,55 @@ type Info struct {
 	Size     int64
 }
 
+// ListAll returns every workspace's sessions, keyed by the workspace path
+// each log's own header records. The store's directories are content
+// hashes, so the answer comes from the logs rather than from names that
+// never held it; a directory whose logs are all unreadable is skipped,
+// the same posture List takes per file.
+func (s *Store) ListAll() (map[string][]Info, error) {
+	dirs, err := os.ReadDir(s.root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := map[string][]Info{}
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(s.root, d.Name()))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+				continue
+			}
+			path := filepath.Join(s.root, d.Name(), e.Name())
+			if !hasValidHeader(path) {
+				continue
+			}
+			ws, err := ReadWorkspace(path)
+			if err != nil {
+				continue
+			}
+			fi, err := e.Info()
+			if err != nil {
+				continue
+			}
+			out[ws] = append(out[ws], Info{
+				ID:       strings.TrimSuffix(e.Name(), ".log"),
+				Path:     path,
+				Modified: fi.ModTime(),
+				Size:     fi.Size(),
+			})
+		}
+	}
+	return out, nil
+}
+
 // List returns a workspace's sessions, most recent first.
 func (s *Store) List(workspace string) ([]Info, error) {
 	workspace, err := filepath.Abs(workspace)

@@ -203,6 +203,35 @@ func ReadUsages(path string) ([]Usage, error) {
 	}
 }
 
+// ReadWorkspace returns the workspace a log's own header records, reading
+// only as far as the session_start record: the store's directory names are
+// hashes, so the log is the one place the path survives.
+func ReadWorkspace(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+	if err := checkHeader(r, path); err != nil {
+		return "", err
+	}
+	for {
+		rec, _, err := decodeRecord(r)
+		if err != nil {
+			return "", err
+		}
+		if rec.Type != RecordSessionStart {
+			continue
+		}
+		var start SessionStart
+		if err := json.Unmarshal(rec.Payload, &start); err != nil {
+			return "", err
+		}
+		return start.Workspace, nil
+	}
+}
+
 // ReadOpening returns the first words the user sent, for listings that need
 // to say what a session was about without replaying what it became. It stops
 // at the first user message that carries text, so labelling a directory of
