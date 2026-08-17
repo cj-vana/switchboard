@@ -147,7 +147,12 @@ Beyond the expected commands, a few are Switchboard's own:
   turn. `[slots] advisor = "t2"` turns it on for every session.
 - `/compact` summarizes the session into a fresh context, and does it
   automatically when the last request crosses 85% of the window, measured
-  from what the provider actually saw rather than an estimate. A
+  from what the provider actually saw rather than an estimate.
+  `/compact preview` states the trade before you take it — how many
+  messages and roughly how many conversation tokens a summary would
+  replace, what rides unchanged, who writes the summary — and names the
+  alternative, because compact-or-fork is a real decision and it
+  deserves the same visibility every other decision gets. A
   `[slots] summarizer` binding lets one model own the summaries whichever
   rung is active, so a session riding a small local model still gets a good
   one.

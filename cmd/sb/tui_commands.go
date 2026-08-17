@@ -52,7 +52,7 @@ func commands() []commandItem {
 		{name: "notify", usage: "[on|off]", desc: "ring the bell when a turn finishes or an approval waits", busySafe: true, run: cmdNotify},
 		{name: "queue", usage: "[clear]", desc: "what is waiting to run after this turn", busySafe: true, run: cmdQueue},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
-		{name: "compact", usage: "[guidance|auto|at]", desc: "summarize into a fresh context; auto-compacts near the window", run: cmdCompact},
+		{name: "compact", usage: "[guidance|preview|auto|at]", desc: "summarize into a fresh context; preview says what that would take", run: cmdCompact},
 		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
 		{name: "init", desc: "write an AGENTS.md for this repository", run: cmdInit},
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},

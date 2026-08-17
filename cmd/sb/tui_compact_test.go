@@ -136,3 +136,21 @@ func TestManualCompactRefusesUnreachableSummarizer(t *testing.T) {
 		t.Fatalf("the refusal must say the session is intact: %q", msg.text)
 	}
 }
+
+// The preview says what compaction would do before it does it: the
+// conversation is what a summary replaces, the frozen zone rides
+// unchanged, and the alternative is named.
+func TestCompactPreviewStatesTheTrade(t *testing.T) {
+	m := testModel(t)
+	m.app.loop.Session.AppendMessage(provider.UserText("a prompt long enough to count"))
+	cmdCompact(m, "preview")
+	joined := strings.Join(m.tr.flat, "\n")
+	for _, want := range []string{"would summarize 1 messages", "ride unchanged", "/fork"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("preview missing %q:\n%s", want, joined)
+		}
+	}
+	if len(m.app.loop.Session.State().Messages) != 1 {
+		t.Fatal("a preview must not touch the session")
+	}
+}

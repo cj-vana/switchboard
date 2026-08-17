@@ -17,12 +17,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/prefix"
 	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 const compactSystem = `You are summarizing a coding session so it can continue in a fresh context window. Write for the model that continues the work, not for a human. Capture: the task and its current state; what was tried and what failed, so nothing is repeated; decisions made and their reasons; file paths touched and what changed in each; exact commands, errors, and identifiers worth keeping; and what remains to be done, most immediate first. Plain text, no preamble, no headers about being a summary. Length proportional to what actually happened.`
 
-const compactUsage = "usage: /compact [guidance], /compact auto [on|off], or /compact at <50–95>"
+const compactUsage = "usage: /compact [guidance], /compact preview, /compact auto [on|off], or /compact at <50–95>"
 
 // compactSeedHead opens every compacted session's seed message. The session
 // listings match on it to label such a session by its summary's first words
@@ -134,6 +135,34 @@ func compactSettings(m *tuiModel, args string) (tea.Cmd, bool) {
 	value = strings.TrimSpace(value)
 	cfg := m.app.config
 	switch what {
+	case "preview":
+		// What compaction would do, before it does it: the conversation is
+		// what a summary replaces, the frozen zone rides into the fresh
+		// context unchanged, and the numbers are the estimator's own floor,
+		// said as estimates. The decision this informs is compact-or-fork,
+		// and it deserves the same visibility every other decision gets.
+		state := m.app.loop.Session.State()
+		if len(state.Messages) == 0 {
+			return noticeCmd("", "nothing to compact yet"), true
+		}
+		conv := prefix.RequestTokens(provider.Request{Messages: state.Messages})
+		sys := prefix.RequestTokens(provider.Request{System: m.app.loop.System})
+		tools := prefix.RequestTokens(provider.Request{Tools: m.app.loop.Tools.Definitions()})
+		summarizer, fromSlot, err := summarizerFor(m.app)
+		if err != nil {
+			return noticeCmd("error", err.Error()), true
+		}
+		who := "the active rung"
+		if fromSlot {
+			who = "the summarizer slot (" + summarizer.ID + ")"
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "compaction would summarize %d messages, ~%s conversation tokens, into a fresh context\n",
+			len(state.Messages), compact(conv))
+		fmt.Fprintf(&b, "system and tools (~%s) ride unchanged; %s writes the summary\n", compact(sys+tools), who)
+		b.WriteString("the alternative is /fork, which keeps the full conversation and the warm prefix; /compact runs it")
+		m.addInfo(b.String())
+		return nil, true
 	case "auto":
 		switch value {
 		case "":
