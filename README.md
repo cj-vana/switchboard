@@ -485,7 +485,11 @@ including the run that falsified a reputation-ordered ladder and the
 derivation that replaced it. [docs/comparison.md](docs/comparison.md)
 places the tool against Claude Code, Codex CLI, and OpenCode, axis by
 axis with the evidence for each claim, including the ones where the
-neighbors win. [docs/estimator.md](docs/estimator.md)
+neighbors win — and
+[docs/head-to-head-2026-08-16.md](docs/head-to-head-2026-08-16.md) is
+the measured run: all three tools headless on the same eleven-task
+corpus under the same verifier, completion tied at 11/11, and only the
+ladder noticing which tasks a free rung could carry. [docs/estimator.md](docs/estimator.md)
 measures the token estimator's error instead of describing it, and
 [docs/sandbox.md](docs/sandbox.md) documents the confinement profile. The
 section references scattered through the code comments (§6, §8.3, and so

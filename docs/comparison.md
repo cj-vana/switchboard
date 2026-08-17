@@ -204,8 +204,13 @@ gate — where the neighbors have no counterpart at all.
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
 strongest tool in its class, and it is the only one that ships the
-instrument that could prove that sentence wrong. The neighbors ask you to
-pick a model; this tool treats the pick as the product, and measures it.
+instrument that could prove that sentence wrong. The instrument has now
+been pointed at the sentence once: on the eleven-task head-to-head of
+2026-08-16, completion tied at 11/11 across all three tools while only
+this one noticed that four of the tasks were reachable from rungs that
+bill nothing — the measured shape of the claim, at the small scale one
+machine and one day allow. The neighbors ask you to pick a model; this
+tool treats the pick as the product, and measures it.
 
 ## Reproduce it
 
@@ -234,10 +239,14 @@ and judge the lane:
     SB_BENCH_VERIFY=/tmp/bench/sb go test ./internal/eval/ -run TestVerifyBench -v
 
 Verdicts land in `verdicts.jsonl`, one line per task, from the same code
-for every lane. Running all three lanes costs real subscription quota and
-an hour of wall clock, which is why this document ships the procedure
-rather than presuming to spend it; what it refuses to ship is a
-comparison that could not be rerun.
+for every lane. This procedure has been run:
+[head-to-head-2026-08-16.md](head-to-head-2026-08-16.md) records all
+three lanes on one machine — completion tied at 11/11 for every tool,
+switchboard alone put four of the eleven tasks entirely on local rungs
+and spent zero API dollars against claude code's $22.35 — with the raw
+journal beside it and the caveats stated in full. What this document
+refuses to ship is a comparison that could not be rerun; this one can be,
+with three commands.
 
 ## Sources
 

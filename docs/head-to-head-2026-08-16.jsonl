@@ -1,0 +1,33 @@
+{"tool": "switchboard", "id": "money-precision", "solved": true, "seconds": 64, "rc": 0, "ended_on": "t3", "target": "kimi/coding/kimi-for-coding-highspeed", "calls": 10, "input_tokens": 49900, "output_tokens": 1870, "metering": "plan"}
+{"tool": "switchboard", "id": "tier-order", "solved": true, "seconds": 99, "rc": 0, "ended_on": "t3", "target": "kimi/coding/kimi-for-coding-highspeed", "calls": 13, "input_tokens": 109638, "output_tokens": 1311, "metering": "plan"}
+{"tool": "switchboard", "id": "cache-read-subset", "solved": true, "seconds": 69, "rc": 0, "ended_on": "t1", "target": "ollama/local/qwen3.5:9b-mlx", "calls": 9, "input_tokens": 126974, "output_tokens": 2175, "metering": "local"}
+{"tool": "switchboard", "id": "anthropic-disjoint-usage", "solved": true, "seconds": 210, "rc": 0, "ended_on": "t4", "target": "openai/subscription/gpt-5.6-sol", "calls": 17, "input_tokens": 296406, "output_tokens": 4319, "metering": "plan"}
+{"tool": "switchboard", "id": "secret-redaction", "solved": true, "seconds": 109, "rc": 0, "ended_on": "t4", "target": "openai/subscription/gpt-5.6-sol", "calls": 14, "input_tokens": 119431, "output_tokens": 1738, "metering": "plan"}
+{"tool": "switchboard", "id": "session-ordering", "solved": true, "seconds": 315, "rc": 0, "ended_on": "t4", "target": "openai/subscription/gpt-5.6-sol", "calls": 19, "input_tokens": 270451, "output_tokens": 8251, "metering": "plan"}
+{"tool": "switchboard", "id": "prefix-seal", "solved": true, "seconds": 96, "rc": 0, "ended_on": "t1", "target": "ollama/local/qwen3.5:9b-mlx", "calls": 11, "input_tokens": 239608, "output_tokens": 1815, "metering": "local"}
+{"tool": "switchboard", "id": "breakpoint-minimum", "solved": true, "seconds": 115, "rc": 0, "ended_on": "t2", "target": "ollama/local/qwen3.8:27b-mlx+think:high", "calls": 10, "input_tokens": 154873, "output_tokens": 1711, "metering": "local"}
+{"tool": "switchboard", "id": "cache-silent-target", "solved": true, "seconds": 102, "rc": 0, "ended_on": "t3", "target": "kimi/coding/kimi-for-coding-highspeed", "calls": 10, "input_tokens": 110465, "output_tokens": 1781, "metering": "plan"}
+{"tool": "switchboard", "id": "cost-sunk-write", "solved": true, "seconds": 157, "rc": 0, "ended_on": "t4", "target": "openai/subscription/gpt-5.6-sol", "calls": 17, "input_tokens": 191825, "output_tokens": 3236, "metering": "plan"}
+{"tool": "switchboard", "id": "router-feasibility-order", "solved": true, "seconds": 206, "rc": 0, "ended_on": "t2", "target": "ollama/local/qwen3.8:27b-mlx+think:high", "calls": 17, "input_tokens": 280694, "output_tokens": 3493, "metering": "local"}
+{"tool": "claude-code", "id": "money-precision", "solved": true, "seconds": 77, "rc": 0, "model": "claude-fable-5", "cost_usd": 1.8015830000000002, "output_tokens": 3432, "turns": 14}
+{"tool": "claude-code", "id": "tier-order", "solved": true, "seconds": 57, "rc": 0, "model": "claude-fable-5", "cost_usd": 1.251033, "output_tokens": 2119, "turns": 7}
+{"tool": "claude-code", "id": "cache-read-subset", "solved": true, "seconds": 540, "rc": 137, "model": "claude-fable-5", "note": "killed by the 540s watchdog after the fix had landed; no usage report"}
+{"tool": "claude-code", "id": "anthropic-disjoint-usage", "solved": true, "seconds": 138, "rc": 0, "model": "claude-fable-5", "cost_usd": 2.894177, "output_tokens": 3947, "turns": 11}
+{"tool": "claude-code", "id": "secret-redaction", "solved": true, "seconds": 62, "rc": 0, "model": "claude-fable-5", "cost_usd": 1.370925, "output_tokens": 2328, "turns": 8}
+{"tool": "claude-code", "id": "session-ordering", "solved": true, "seconds": 185, "rc": 0, "model": "claude-fable-5", "cost_usd": 3.40112, "output_tokens": 6526, "turns": 14}
+{"tool": "claude-code", "id": "prefix-seal", "solved": true, "seconds": 81, "rc": 0, "model": "claude-fable-5", "cost_usd": 1.6355529999999998, "output_tokens": 2886, "turns": 10}
+{"tool": "claude-code", "id": "breakpoint-minimum", "solved": true, "seconds": 130, "rc": 0, "model": "claude-fable-5", "cost_usd": 2.595692, "output_tokens": 4083, "turns": 12}
+{"tool": "claude-code", "id": "cache-silent-target", "solved": true, "seconds": 74, "rc": 0, "model": "claude-fable-5", "cost_usd": 1.581861, "output_tokens": 3304, "turns": 11}
+{"tool": "claude-code", "id": "cost-sunk-write", "solved": true, "seconds": 131, "rc": 0, "model": "claude-fable-5", "cost_usd": 2.9741754999999994, "output_tokens": 3887, "turns": 13}
+{"tool": "claude-code", "id": "router-feasibility-order", "solved": true, "seconds": 130, "rc": 0, "model": "claude-fable-5", "cost_usd": 2.8416625, "output_tokens": 3628, "turns": 14}
+{"tool": "codex-cli", "id": "money-precision", "solved": true, "seconds": 98, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 56472}
+{"tool": "codex-cli", "id": "tier-order", "solved": true, "seconds": 81, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 62594}
+{"tool": "codex-cli", "id": "cache-read-subset", "solved": true, "seconds": 256, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 88289}
+{"tool": "codex-cli", "id": "anthropic-disjoint-usage", "solved": true, "seconds": 168, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 62973}
+{"tool": "codex-cli", "id": "secret-redaction", "solved": true, "seconds": 85, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 47407}
+{"tool": "codex-cli", "id": "session-ordering", "solved": true, "seconds": 146, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 59751}
+{"tool": "codex-cli", "id": "prefix-seal", "solved": true, "seconds": 114, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 62011}
+{"tool": "codex-cli", "id": "breakpoint-minimum", "solved": true, "seconds": 90, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 52915}
+{"tool": "codex-cli", "id": "cache-silent-target", "solved": true, "seconds": 70, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 49767}
+{"tool": "codex-cli", "id": "cost-sunk-write", "solved": true, "seconds": 106, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 50903}
+{"tool": "codex-cli", "id": "router-feasibility-order", "solved": true, "seconds": 94, "rc": 0, "model": "gpt-5.6-sol", "tokens_used": 48494}
