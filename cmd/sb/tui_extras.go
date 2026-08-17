@@ -16,6 +16,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/prefix"
 	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/session"
 )
 
 // initPrompt is /init: a turn like any other, using the loop and the tools it
@@ -46,29 +47,61 @@ func cmdExport(m *tuiModel, args string) tea.Cmd {
 	fmt.Fprintf(&b, "- workspace: %s\n- target: %s\n- started: %s\n- exported: %s\n\n",
 		state.Workspace, state.Target, state.CreatedAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 
-	for _, msg := range state.Messages {
-		switch msg.Role {
-		case provider.RoleUser:
-			b.WriteString("## User\n\n")
-		case provider.RoleAssistant:
-			if msg.Incomplete {
-				b.WriteString("## Assistant (interrupted)\n\n")
-			} else {
-				b.WriteString("## Assistant\n\n")
-			}
-		default:
-			continue // tool results appear under the call that made them
+	// The timeline, not just the messages: a route decision or a race
+	// verdict belongs where it happened, because the routing record is the
+	// half of the session no transcript of the words can reconstruct. A log
+	// that cannot be read as a timeline degrades to the messages alone
+	// rather than failing the export.
+	timeline, terr := session.ReadTimeline(m.app.loop.Session.Path())
+	if terr != nil {
+		timeline = nil
+		for i := range state.Messages {
+			timeline = append(timeline, session.Timeline{Message: &state.Messages[i]})
 		}
-		for _, block := range msg.Content {
-			switch blk := block.(type) {
-			case provider.Text:
-				b.WriteString(blk.Text + "\n\n")
-			case provider.Thinking:
-				// Deliberately omitted: an export is for sharing, and
-				// thinking is a working draft, not the record.
-			case provider.ToolUse:
-				fmt.Fprintf(&b, "*[tool: %s]*\n\n", blk.Name)
+	}
+	for _, ev := range timeline {
+		switch {
+		case ev.Message != nil:
+			msg := ev.Message
+			switch msg.Role {
+			case provider.RoleUser:
+				b.WriteString("## User\n\n")
+			case provider.RoleAssistant:
+				if msg.Incomplete {
+					b.WriteString("## Assistant (interrupted)\n\n")
+				} else {
+					b.WriteString("## Assistant\n\n")
+				}
+			default:
+				continue // tool results appear under the call that made them
 			}
+			for _, block := range msg.Content {
+				switch blk := block.(type) {
+				case provider.Text:
+					b.WriteString(blk.Text + "\n\n")
+				case provider.Thinking:
+					// Deliberately omitted: an export is for sharing, and
+					// thinking is a working draft, not the record.
+				case provider.ToolUse:
+					fmt.Fprintf(&b, "*[tool: %s]*\n\n", blk.Name)
+				}
+			}
+		case ev.Route != nil:
+			r := ev.Route
+			line := fmt.Sprintf("> route: %s via %s (%s)", r.Tier, r.Source, r.Rationale)
+			if r.Escalations > 0 && r.EndedOn != "" {
+				line += fmt.Sprintf("; %d escalation(s), ended on %s", r.Escalations, r.EndedOn)
+			}
+			b.WriteString(line + "\n\n")
+		case ev.Race != nil:
+			r := ev.Race
+			line := fmt.Sprintf("> race: %s vs %s — %s", r.A.Tier, r.B.Tier, r.Outcome)
+			if r.Kept != "" {
+				line += ", continued on " + r.Kept
+			}
+			b.WriteString(line + "\n\n")
+		case ev.Note != nil && ev.Note.Level != "":
+			fmt.Fprintf(&b, "> %s: %s\n\n", ev.Note.Level, ev.Note.Text)
 		}
 	}
 

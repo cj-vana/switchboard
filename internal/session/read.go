@@ -102,6 +102,71 @@ func ReadRaces(path string) ([]Race, error) {
 	}
 }
 
+// Timeline is one of a log's records in the order it was written, shaped
+// for a surface replaying the session as a document rather than as a
+// request: exactly one field is set. Usage, pins, and permissions are
+// deliberately absent — they are accounting, and State already sums them.
+type Timeline struct {
+	Message *provider.Message
+	Route   *Route
+	Race    *Race
+	Note    *Note
+}
+
+// ReadTimeline collects a log's conversation and the decisions that rode
+// beside it, in order, read-only. An export built from Messages alone
+// would drop the routing record — the half of the session no transcript
+// of the words can reconstruct.
+func ReadTimeline(path string) ([]Timeline, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+
+	if err := checkHeader(r, path); err != nil {
+		return nil, err
+	}
+
+	var out []Timeline
+	for {
+		rec, _, err := decodeRecord(r)
+		if errors.Is(err, io.EOF) || errors.Is(err, ErrCorruptRecord) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch rec.Type {
+		case RecordMessage:
+			var m provider.Message
+			if err := json.Unmarshal(rec.Payload, &m); err != nil {
+				return nil, err
+			}
+			out = append(out, Timeline{Message: &m})
+		case RecordRoute:
+			var route Route
+			if err := json.Unmarshal(rec.Payload, &route); err != nil {
+				return nil, err
+			}
+			out = append(out, Timeline{Route: &route})
+		case RecordRace:
+			var race Race
+			if err := json.Unmarshal(rec.Payload, &race); err != nil {
+				return nil, err
+			}
+			out = append(out, Timeline{Race: &race})
+		case RecordNote:
+			var note Note
+			if err := json.Unmarshal(rec.Payload, &note); err != nil {
+				return nil, err
+			}
+			out = append(out, Timeline{Note: &note})
+		}
+	}
+}
+
 // ReadUsages collects a log's per-call usage records, read-only. The replayed
 // State sums them, and a sum is the wrong shape for counterfactual pricing:
 // catalog prices are banded by the size of one call, so repricing a session on

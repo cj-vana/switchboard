@@ -167,7 +167,10 @@ Beyond the expected commands, a few are Switchboard's own:
   composition — system, tools, conversation, in the estimator's own
   terms, stated separately from the provider's reported meter because
   an estimate and a report are different facts. `/export` writes the
-  session record as markdown.
+  session record as markdown — the timeline, not just the words: route
+  decisions, race verdicts, and warnings land as annotations where they
+  happened, because the routing record is the half of the session no
+  transcript of the words can reconstruct.
 - `/cost` totals the running session, and `sb cost` prints the same
   accounting for every session the workspace has recorded, from the
   command line, with the three meterings kept apart throughout: dollars

@@ -96,3 +96,38 @@ func TestReadOpeningOnASessionWithNoUserTurn(t *testing.T) {
 		t.Fatalf("opening = %q, want empty", opening)
 	}
 }
+
+// The timeline is the log as a document: conversation and the decisions
+// that rode beside it, in the order written, with accounting left to State.
+func TestReadTimelineInterleavesInOrder(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.Create(t.TempDir(), "ollama/local/test:7b", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	sess.AppendMessage(provider.UserText("first ask"))
+	sess.AppendRoute(Route{Tier: "t1", Source: "heuristic", Rationale: "short prompt"})
+	sess.AppendMessage(provider.Message{Role: provider.RoleAssistant,
+		Content: []provider.Block{provider.Text{Text: "the answer"}}})
+	sess.AppendNote("warn", "a fallback served t2")
+	sess.AppendUsage(Usage{Target: "ollama/local/test:7b"})
+
+	timeline, err := ReadTimeline(sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline) != 4 {
+		t.Fatalf("got %d events, want 4 (usage is accounting, not timeline): %+v", len(timeline), timeline)
+	}
+	if timeline[0].Message == nil || timeline[1].Route == nil || timeline[2].Message == nil || timeline[3].Note == nil {
+		t.Fatalf("events out of order or mistyped: %+v", timeline)
+	}
+	if timeline[1].Route.Rationale != "short prompt" {
+		t.Fatalf("route payload lost: %+v", timeline[1].Route)
+	}
+}
