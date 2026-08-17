@@ -50,6 +50,7 @@ at_percent = 70
 
 [ui]
 theme = "light"
+notify = false
 `)
 	before, err := LoadFile(path)
 	if err != nil {
@@ -83,6 +84,9 @@ theme = "light"
 	}
 	if after.Theme != "light" {
 		t.Errorf("theme %q did not survive the rewrite", after.Theme)
+	}
+	if after.NotifyOn() {
+		t.Error("notify = false did not survive the rewrite")
 	}
 }
 

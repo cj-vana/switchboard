@@ -108,6 +108,33 @@ func (c *Cache) observe(usage provider.Usage, now time.Time) {
 	c.Observer(event)
 }
 
+// Expectation reports the tracker's belief about the prefix the last request
+// sent, for a surface that wants to say it. ok is false before any turn has
+// been planned or when the loop runs cache-unaware. Callers read this
+// between turns: lastHash is the loop goroutine's to write during one.
+func (c *Cache) Expectation(now time.Time) (cachestate.Expectation, bool) {
+	if c == nil || c.Tracker == nil || c.lastHash == "" {
+		return cachestate.Expectation{}, false
+	}
+	return c.Tracker.Expect(c.Target, c.lastHash, now), true
+}
+
+// SessionHealth reports the tracker's per-target summary, and Snapshot its
+// entries, newest first. Both are nil-safe the way the loop's own calls are.
+func (c *Cache) SessionHealth() (cachestate.Health, bool) {
+	if c == nil || c.Tracker == nil {
+		return cachestate.Health{}, false
+	}
+	return c.Tracker.Health(c.Target), true
+}
+
+func (c *Cache) Snapshot() []cachestate.Entry {
+	if c == nil || c.Tracker == nil {
+		return nil
+	}
+	return c.Tracker.Entries()
+}
+
 // shortestTTL is the retention the manager asks for, which is what the tracker
 // measures expiry against. They have to agree, or the tracker believes in a
 // window the request never bought.

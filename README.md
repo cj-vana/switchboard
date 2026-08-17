@@ -175,6 +175,21 @@ Beyond the expected commands, a few are Switchboard's own:
   their own store and do not. No other tool can answer "what has this
   workspace's history cost, and what would it have cost pinned to one
   model," because no other tool has a ladder to price it against.
+- `/find <text>` and `sb find` search what was actually said across the
+  workspace's recorded sessions — prompts and answers, case-insensitive —
+  and hand back the ids `/resume` takes, because "which session did I fix
+  that race in" outgrows a picker's first-words labels by lunchtime.
+- `/cache` shows the belief the routing runs on: what the active target
+  is thought to hold warm, the modeled hit chance for the next send with
+  its reason, the session's eligible-hit count, and the alarm when a
+  written prefix keeps missing. Every number keeps the tracker's honesty:
+  a probability is modeled rather than observed, and a surface that
+  reports no cache accounting stays unknown, because silence is not a
+  miss.
+- `/notify` rings the terminal bell when a turn finishes or an approval
+  is waiting, and the terminal title carries a mark while work runs, so
+  a session parked in another pane says when it needs you. Default on;
+  `/notify off` persists the quiet.
 - `/undo` takes back the last turn's file changes, turn by turn: write
   and edit capture what a file looked like before the turn first touched
   it, and a restored file forces the model to re-read before it may write

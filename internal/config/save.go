@@ -166,10 +166,17 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
-	if c.Theme != "" {
+	if c.Theme != "" || !c.NotifyOn() {
+		ui := uiEntry{Theme: c.Theme}
+		// Absent means on, so the file carries the setting only when it is
+		// the non-default quiet.
+		if !c.NotifyOn() {
+			off := false
+			ui.Notify = &off
+		}
 		if err := encode(&buf, struct {
 			UI uiEntry `toml:"ui"`
-		}{uiEntry{Theme: c.Theme}}); err != nil {
+		}{ui}); err != nil {
 			return nil, err
 		}
 		buf.WriteString("\n")

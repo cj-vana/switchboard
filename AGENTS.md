@@ -157,6 +157,12 @@ cannot see. A target with no cache accounting stays Unknown forever, because
 silence is not evidence of a miss and recording one would leave the alarm on
 permanently.
 
+/cache is that tracker's surface and adds no claim of its own: the modeled
+probability says modeled, an unsent prefix's correct expectation is a miss,
+and a no-accounting surface stays unknown. The command is deliberately not
+busy-safe, because the expectation reads the hash of the last planned
+request and that field is the loop goroutine's to write during a turn.
+
 **A capability claim gets tested against the target, not against its docs.**
 Everything the Anthropic adapter asserts was confirmed with a live request
 first: that this model rejects `adaptive` thinking and takes a token budget,

@@ -111,6 +111,17 @@ func run() error {
 		}
 		return runCostCLI(os.Stdout, store, cat, cwd)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "find" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		return runFindCLI(os.Stdout, store, cwd, strings.Join(os.Args[2:], " "))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "stats" {
 		cwd, err := os.Getwd()
 		if err != nil {

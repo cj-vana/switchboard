@@ -45,6 +45,9 @@ func commands() []commandItem {
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
 		{name: "stats", desc: "every session this workspace has recorded, repriced on today's ladder", busySafe: true, run: cmdStats},
+		{name: "find", usage: "<text>", desc: "search this workspace's recorded sessions for what was said", busySafe: true, run: cmdFind},
+		{name: "cache", desc: "what the provider is believed to hold warm, and the evidence", run: cmdCache},
+		{name: "notify", usage: "[on|off]", desc: "ring the bell when a turn finishes or an approval waits", busySafe: true, run: cmdNotify},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|auto|at]", desc: "summarize into a fresh context; auto-compacts near the window", run: cmdCompact},
 		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
@@ -689,4 +692,26 @@ func (m *tuiModel) setTheme(dark bool) {
 	m.th = themeFor(dark)
 	m.md.setDark(dark)
 	m.tr.setTheme(m.th)
+}
+
+// cmdNotify flips the bell. The setting persists the way /theme does: the
+// TUI owns the file, absent means on.
+func cmdNotify(m *tuiModel, args string) tea.Cmd {
+	switch strings.TrimSpace(args) {
+	case "":
+		word := "on"
+		if !m.app.config.NotifyOn() {
+			word = "off"
+		}
+		return noticeCmd("", "notify is "+word+"; /notify on|off changes it")
+	case "on", "off":
+		on := args == "on"
+		m.app.config.Notify = &on
+		if err := m.app.config.Save(); err != nil {
+			return noticeCmd("error", "notify is now "+args+", but saving it failed: "+err.Error())
+		}
+		return noticeCmd("", "notify is now "+args)
+	default:
+		return noticeCmd("error", "/notify takes on or off")
+	}
 }

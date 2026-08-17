@@ -184,6 +184,7 @@ type tuiModel struct {
 
 	pendingAsk  chan permission.Response
 	restoreTier *config.Tier
+	lastTitle   string
 	quitArmed   bool
 	quitting    bool
 
@@ -391,7 +392,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.tr.setWidth(msg.Width)
 		m.ta.SetWidth(msg.Width - 6) // margin, frame, and padding
-		return m, nil
+		return m, m.syncTitle()
 
 	case tea.MouseMsg:
 		if m.full != nil {
@@ -414,9 +415,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spin, cmd = m.spin.Update(msg)
 			m.sampleRate()
-			return m, cmd
+			return m, tea.Batch(cmd, m.syncTitle())
 		}
-		return m, nil
+		return m, m.syncTitle()
 
 	case deltaMsg:
 		m.onDelta(msg)
@@ -450,6 +451,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case askMsg:
 		m.pendingAsk = msg.respond
 		m.dlg = newPermissionDialog(msg.req, msg.out, msg.respond)
+		m.ring()
 		return m, nil
 
 	case pickerMsg:
@@ -467,7 +469,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case turnDoneMsg:
-		return m, m.onTurnDone(msg)
+		m.ring()
+		return m, tea.Batch(m.onTurnDone(msg), m.syncTitle())
 
 	case tierNowMsg:
 		// The policy moved the primary mid-turn: the junction marker wears
@@ -872,6 +875,7 @@ func (m *tuiModel) beginTurn(prompt string) {
 	m.busy = true
 	m.started = time.Now()
 	m.turnIn, m.turnOut = 0, 0
+	m.samples, m.tokChars, m.tokAt = nil, 0, time.Time{}
 	m.turnPrompt = prompt
 	m.turnStarted = m.app.tier
 	m.turnBefore = m.app.loop.Session.State()
@@ -1374,6 +1378,31 @@ func (m *tuiModel) sampleRate() {
 	}
 	m.tokChars = 0
 	m.tokAt = time.Now()
+}
+
+// ring speaks when the session needs its person: on the ask and on the
+// turn's end. It goes to stderr because the renderer owns stdout and a BEL
+// prints nothing; /notify off keeps the quiet.
+func (m *tuiModel) ring() {
+	if m.app.config.NotifyOn() {
+		os.Stderr.WriteString("\a")
+	}
+}
+
+// syncTitle keeps the terminal title naming the workspace, marked while a
+// turn runs, so the working pane is findable from a wall of terminals. It
+// returns nil when nothing changed, because a title rewrite per tick would
+// be chatter.
+func (m *tuiModel) syncTitle() tea.Cmd {
+	title := "sb · " + filepath.Base(m.app.workspace)
+	if m.busy {
+		title = "● " + title
+	}
+	if title == m.lastTitle {
+		return nil
+	}
+	m.lastTitle = title
+	return tea.SetWindowTitle(title)
 }
 
 func itoa(n int) string { return fmt.Sprint(n) }

@@ -96,6 +96,13 @@ type Config struct {
 	// Empty means the built-in default; the TUI owns what names are valid.
 	Theme string
 
+	// Notify rings the terminal bell when a turn finishes or a permission
+	// ask arrives, so a session left in another pane says when it needs its
+	// person. Nil is the default, which is on: a config built in code and
+	// saved must not quietly persist an opinion nobody stated. Read it
+	// through NotifyOn.
+	Notify *bool
+
 	// Budget is a per-session dollar ceiling, persisted so /budget survives a
 	// restart. Zero means no ceiling. It governs what the catalog prices in
 	// dollars; a local rung consumes nothing scarce and a plan rung consumes
@@ -120,6 +127,11 @@ func (c *Config) ProviderFor(name string) ProviderSettings {
 // environment and the platform store need no configuration.
 func (c *Config) AuthFor(providerName string) credential.Settings {
 	return c.Auth[providerName]
+}
+
+// NotifyOn is how the bell setting is read: absent means on.
+func (c *Config) NotifyOn() bool {
+	return c.Notify == nil || *c.Notify
 }
 
 // Default returns the tier a session starts on. The bottom of the ladder is
@@ -167,9 +179,12 @@ type compactEntry struct {
 
 // uiEntry holds presentation settings. They live in the config rather than a
 // separate state file because the TUI writes this file anyway, and two files
-// that both mean "how sb behaves for this user" is one file too many.
+// that both mean "how sb behaves for this user" is one file too many. Notify
+// is a *bool so "absent" and "explicitly off" are different facts: the
+// default is on.
 type uiEntry struct {
-	Theme string `toml:"theme"`
+	Theme  string `toml:"theme,omitempty"`
+	Notify *bool  `toml:"notify,omitempty"`
 }
 
 // updatesEntry holds the update settings. Booleans are *bool so "absent" and
@@ -324,6 +339,7 @@ func LoadFile(path string) (*Config, error) {
 		c.CompactAtPercent = f.Compact.AtPercent
 	}
 	c.Theme = f.UI.Theme
+	c.Notify = f.UI.Notify
 	if f.Limits.Budget < 0 {
 		return nil, fmt.Errorf("%s: limits.budget %s is negative; a ceiling below zero rules out every turn", path, f.Limits.Budget)
 	}
