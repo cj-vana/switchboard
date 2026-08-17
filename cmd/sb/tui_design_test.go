@@ -365,3 +365,24 @@ func TestTrustNamesWhatAGrantCovers(t *testing.T) {
 		}
 	}
 }
+
+// Every command appears in exactly one help group: a new command that
+// misses the page would otherwise be invisible everywhere but the
+// autocomplete, and a name in two groups would read as two commands.
+func TestHelpGroupsCoverEveryCommandOnce(t *testing.T) {
+	seen := map[string]int{}
+	for _, g := range helpGroups {
+		for _, name := range g.names {
+			seen[name]++
+		}
+	}
+	for _, c := range commands() {
+		if seen[c.name] != 1 {
+			t.Errorf("command %q appears %d times in help groups, want exactly once", c.name, seen[c.name])
+		}
+		delete(seen, c.name)
+	}
+	for name := range seen {
+		t.Errorf("help groups name %q, which is not a command", name)
+	}
+}

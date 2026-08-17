@@ -108,15 +108,42 @@ func matchingCommands(prefix string, cfg *config.Config) []commandItem {
 	return out
 }
 
+// helpGroups orders the command list by what a hand reaches for, because
+// forty entries in registry order is a wall. Grouping is presentation, so
+// it lives here with help rather than as registry structure; the test that
+// every command appears in exactly one group is what keeps a new command
+// from silently missing the page.
+var helpGroups = []struct {
+	title string
+	names []string
+}{
+	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
+	{"the ladder", []string{"tier", "tiers", "why", "race", "cost", "stats", "budget", "think", "cache", "advisor"}},
+	{"files and work", []string{"diff", "changes", "undo", "watch", "copy", "init", "learn"}},
+	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
+	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
+}
+
 func cmdHelp(m *tuiModel, _ string) tea.Cmd {
+	byName := map[string]commandItem{}
+	for _, c := range commands() {
+		byName[c.name] = c
+	}
 	var b strings.Builder
 	b.WriteString("commands\n")
-	for _, c := range commands() {
-		name := "  /" + c.name
-		if c.usage != "" {
-			name += " " + c.usage
+	for _, g := range helpGroups {
+		b.WriteString("\n " + g.title + "\n")
+		for _, name := range g.names {
+			c, ok := byName[name]
+			if !ok {
+				continue
+			}
+			entry := "  /" + c.name
+			if c.usage != "" {
+				entry += " " + c.usage
+			}
+			fmt.Fprintf(&b, "%s%s%s\n", entry, strings.Repeat(" ", max(46-len(entry), 2)), c.desc)
 		}
-		fmt.Fprintf(&b, "%s%s%s\n", name, strings.Repeat(" ", max(46-len(name), 2)), c.desc)
 	}
 	if tiers := m.app.config.Tiers; len(tiers) > 0 {
 		var ids []string
