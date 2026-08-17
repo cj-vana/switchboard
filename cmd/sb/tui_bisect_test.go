@@ -8,6 +8,8 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/bisect"
 	"github.com/cj-vana/switchboard/internal/checkpoint"
+	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/cj-vana/switchboard/internal/watch"
 )
 
 func TestBisectRefusesWithoutADeclaredVerifier(t *testing.T) {
@@ -112,5 +114,35 @@ func TestBisectDoneOnCancellationSaysRestored(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(m.tr.flat, "\n"), "workspace is restored") {
 		t.Errorf("a cancelled bisect must say the tree is back:\n%s", strings.Join(m.tr.flat, "\n"))
+	}
+}
+
+// The moment a turn-end watch verdict goes red is the moment "which turn
+// broke it" becomes askable, so /bisect is named there — once.
+func TestRedWatchVerdictNamesBisectOnce(t *testing.T) {
+	m := testModel(t)
+	m.app.undo = checkpoint.NewRecorder()
+	dir := t.TempDir()
+	for i, name := range []string{"a.go", "b.go"} {
+		path := filepath.Join(dir, name)
+		os.WriteFile(path, []byte("v0"), 0o644)
+		m.app.undo.Begin([]string{"first", "second"}[i])
+		m.app.undo.Record(path)
+		os.WriteFile(path, []byte("v1"), 0o644)
+	}
+
+	report := watchReportMsg{command: "go test ./...", turnEnd: true, rep: watch.Report{
+		New:        []route.Failure{{Line: "--- FAIL: TestX", Signature: "sig"}},
+		Signatures: []string{"sig"},
+	}}
+	m.onWatchReport(report)
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "/bisect can name the turn") {
+		t.Errorf("the red verdict did not teach /bisect:\n%s", joined)
+	}
+
+	m.onWatchReport(report)
+	if strings.Count(strings.Join(m.tr.flat, "\n"), "/bisect can name the turn") != 1 {
+		t.Error("the lesson repeated; once is the contract")
 	}
 }

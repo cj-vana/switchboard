@@ -200,6 +200,77 @@ func TestBlameWorkspaceSumsSurvivorsAndKeepsMeteringsApart(t *testing.T) {
 	}
 }
 
+// The drill-in: one line's story is its writer, the ask, the turn's other
+// files, and how the turn signed off — with a line nobody wrote saying so.
+func TestBlameLineTellsTheTurnsStory(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	target := provider.RouteTargetID("ollama/local/qwen3:4b")
+	sess, err := store.Create(workspace, target, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess,
+		provider.UserText("wire the cache header"),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "w1", Name: "write", Input: json.RawMessage(`{"path":"cache.go","content":"alpha\nbeta\n"}`)},
+			provider.ToolUse{ID: "w2", Name: "write", Input: json.RawMessage(`{"path":"cache_test.go","content":"test\n"}`)},
+		}},
+	)
+	if err := sess.AppendUsage(session.Usage{Target: string(target)}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, sess,
+		provider.Message{Role: provider.RoleTool, Content: []provider.Block{
+			provider.ToolResult{ToolUseID: "w1", Name: "write", Content: "wrote cache.go"},
+			provider.ToolResult{ToolUseID: "w2", Name: "write", Content: "wrote cache_test.go"},
+		}},
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.Text{Text: "The header rides every request now, with the test pinning it."},
+		}},
+	)
+	if err := sess.AppendUsage(session.Usage{Target: string(target)}); err != nil {
+		t.Fatal(err)
+	}
+	id := sess.State().ID
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	abs := filepath.Join(workspace, "cache.go")
+	if err := os.WriteFile(abs, []byte("alpha\nbeta\nhand-typed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := strings.Join(blameLineLines(store, workspace, abs, "cache.go", 2), "\n")
+	for _, want := range []string{
+		"written by " + string(target),
+		id + "#1",
+		`"wire the cache header"`,
+		"also touched: cache_test.go",
+		"signed off",
+		"pinning it",
+		"/resume " + id,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the story is missing %q:\n%s", want, out)
+		}
+	}
+
+	out = strings.Join(blameLineLines(store, workspace, abs, "cache.go", 3), "\n")
+	if !strings.Contains(out, "outside the record") {
+		t.Errorf("a hand-typed line must say nobody wrote it:\n%s", out)
+	}
+
+	out = strings.Join(blameLineLines(store, workspace, abs, "cache.go", 40), "\n")
+	if !strings.Contains(out, "no line 40") {
+		t.Errorf("a line past the end must be refused by count:\n%s", out)
+	}
+}
+
 func appendMessages(t *testing.T, sess *session.Session, messages ...provider.Message) {
 	t.Helper()
 	for _, m := range messages {

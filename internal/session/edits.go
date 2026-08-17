@@ -142,7 +142,7 @@ func ReadFileEdits(path string) ([]FileEdit, error) {
 			if err := json.Unmarshal(rec.Payload, &m); err != nil {
 				return nil, err
 			}
-			if opensTurn(m) {
+			if OpensTurn(m) {
 				turn++
 				turnDepth = messages
 				prompt = strings.TrimSpace(m.Text())
@@ -230,10 +230,10 @@ func (c *pendingCall) fileEdit(at time.Time, sessionID, workspace string) (FileE
 	return edit, true
 }
 
-// opensTurn reports whether a message is a user turn's opening: user-role,
+// OpensTurn reports whether a message is a user turn's opening: user-role,
 // not injected mid-turn, and not a tool-result carrier. An image-only
 // opening still opens a turn; its prompt is just empty.
-func opensTurn(m provider.Message) bool {
+func OpensTurn(m provider.Message) bool {
 	if m.Role != provider.RoleUser || m.Injected {
 		return false
 	}

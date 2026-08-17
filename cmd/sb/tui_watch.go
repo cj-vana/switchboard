@@ -264,6 +264,14 @@ func (m *tuiModel) onWatchReport(msg watchReportMsg) {
 			text += fmt.Sprintf(" (+%d more)", extra)
 		}
 		m.addNotice("warn", text)
+		// The moment a verifier turns red at a turn's end is the moment
+		// "which turn broke it" becomes askable, so /bisect is named here
+		// once — with turns to search, and never again this session,
+		// because a lesson repeated is noise.
+		if msg.turnEnd && !m.bisectHinted && m.app.undo != nil && len(m.app.undo.Turns()) > 1 {
+			m.bisectHinted = true
+			m.addNotice("", "/bisect can name the turn that broke it")
+		}
 	}
 	if msg.turnEnd && rep.Changed() {
 		if text := watchInjectText(msg.command, rep); text != "" {

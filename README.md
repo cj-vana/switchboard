@@ -247,7 +247,10 @@ Beyond the expected commands, a few are Switchboard's own:
   wrote them, each target beside its own money word in the catalog's
   three meterings — the receipt that says whether the rungs that cost
   nothing are writing the lines that last, and names the target that
-  was paid whose every line was later overwritten.
+  was paid whose every line was later overwritten. And
+  `/blame cache.go:42` is the drill-in — one line's whole story: who
+  wrote it, asked what, what else that turn touched, how the turn
+  signed off, and the `/resume` that reopens the session it came from.
 - `/copy` takes the last response to the clipboard, `/copy code` its
   newest fenced block — the thing a mouse selection across wrapped,
   styled terminal lines mangles — and `/copy code 2` the block before

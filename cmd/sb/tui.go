@@ -183,6 +183,10 @@ type tuiModel struct {
 	// probes, and a turn started mid-bisect would edit a reconstruction.
 	bisect *bisectRun
 
+	// bisectHinted marks that a red turn-end watch verdict has already
+	// named /bisect once; the lesson is not repeated.
+	bisectHinted bool
+
 	// Reverse history search (tui_history.go).
 	histSearch bool
 	histQuery  string

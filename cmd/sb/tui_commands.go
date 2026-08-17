@@ -70,7 +70,7 @@ func commands() []commandItem {
 		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
-		{name: "blame", usage: "[path]", desc: "which recorded turn wrote each line, on which rung and model; bare, the workspace's yield", busySafe: true, run: cmdBlame},
+		{name: "blame", usage: "[path[:line]]", desc: "which recorded turn wrote each line, on which rung and model; bare, the workspace's yield", busySafe: true, run: cmdBlame},
 		{name: "undo", usage: "[list|path]", desc: "take back the last turn's file changes, or one file's", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
 		{name: "bisect", usage: "[cmd]", desc: "binary-search this session's turns for the one that turned the verifier red", run: cmdBisect},

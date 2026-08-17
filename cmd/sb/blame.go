@@ -15,12 +15,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cj-vana/switchboard/internal/blame"
 	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/cj-vana/switchboard/internal/provider"
 	"github.com/cj-vana/switchboard/internal/session"
 )
 
@@ -274,6 +276,124 @@ func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace s
 		"  lines are what survives on disk today; money is what the target's calls cost, surviving or not")
 }
 
+// blameLineLines is the drill-in: one line's whole story. The map form
+// says who; this says who, asked what, beside what else that turn did and
+// how the turn signed off — the answer to "why is this line here" that a
+// transcript search cannot give, because the line number is not in the
+// transcript.
+func blameLineLines(store *session.Store, workspace, abs, shown string, line int) []string {
+	disk, err := os.ReadFile(abs)
+	if err != nil {
+		return []string{"  cannot read " + shown + ": " + err.Error()}
+	}
+
+	infos, err := store.List(workspace)
+	if err != nil {
+		return []string{"  " + err.Error()}
+	}
+	var edits []session.FileEdit
+	logByID := map[string]string{}
+	for _, info := range infos {
+		logByID[info.ID] = info.Path
+		fromLog, err := session.ReadFileEdits(info.Path)
+		if err != nil {
+			continue
+		}
+		for _, e := range fromLog {
+			if resolveEditPath(e) == abs {
+				edits = append(edits, e)
+			}
+		}
+	}
+	sort.SliceStable(edits, func(i, j int) bool { return edits[i].At.Before(edits[j].At) })
+
+	ann := blame.Annotate(disk, edits)
+	if line < 1 || line > len(ann.Lines) {
+		return []string{fmt.Sprintf("  %s has %d lines; there is no line %d", shown, len(ann.Lines), line)}
+	}
+	origin := ann.Lines[line-1]
+	if origin < 0 {
+		return []string{
+			fmt.Sprintf("  line %d is outside the record — typed, shell-made, or before the log", line),
+			"  blame sees what write and edit put in the log; no recorded turn wrote this line",
+		}
+	}
+
+	o := ann.Origins[origin]
+	who := o.Target
+	if o.Tier != "" {
+		who = o.Tier + " " + who
+	}
+	lines := []string{fmt.Sprintf("  written by %s in %s#%d", who, o.SessionID, o.Turn)}
+	if o.Prompt != "" {
+		lines = append(lines, fmt.Sprintf("  asked: %q", truncate(o.Prompt, 70)))
+	}
+
+	logPath, ok := logByID[o.SessionID]
+	if !ok {
+		return append(lines, "  that session's log is no longer in the store; the story ends here")
+	}
+	if others := turnTouched(logPath, o.Turn, abs); len(others) > 0 {
+		lines = append(lines, "  the turn also touched: "+strings.Join(others, ", "))
+	}
+	if closing := turnClosing(logPath, o.Turn); closing != "" {
+		lines = append(lines, fmt.Sprintf("  the turn signed off: %q", truncate(closing, 90)))
+	}
+	return append(lines, fmt.Sprintf("  /resume %s reopens that session", o.SessionID))
+}
+
+// turnTouched names the other files a turn's calls wrote, as the calls
+// named them, the queried file left out.
+func turnTouched(logPath string, turn int, abs string) []string {
+	edits, err := session.ReadFileEdits(logPath)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range edits {
+		if e.Turn != turn || resolveEditPath(e) == abs || seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+		out = append(out, e.Path)
+	}
+	sort.Strings(out)
+	if len(out) > 6 {
+		out = append(out[:6], fmt.Sprintf("and %d more", len(out)-6))
+	}
+	return out
+}
+
+// turnClosing is the turn's last assistant words — how the work was
+// explained when it was done, which is usually the why the line's reader
+// is after.
+func turnClosing(logPath string, turn int) string {
+	timeline, err := session.ReadTimeline(logPath)
+	if err != nil {
+		return ""
+	}
+	current, closing := 0, ""
+	for _, item := range timeline {
+		if item.Message == nil {
+			continue
+		}
+		if session.OpensTurn(*item.Message) {
+			current++
+			if current > turn {
+				break
+			}
+			continue
+		}
+		if current == turn && item.Message.Role == provider.RoleAssistant {
+			if text := strings.TrimSpace(item.Message.Text()); text != "" {
+				closing = text
+			}
+		}
+	}
+	return closing
+}
+
 // lineWord keeps a one-line row from saying "1 lines"; the trailing space
 // on the singular keeps the money column aligned.
 func lineWord(n int) string {
@@ -367,6 +487,21 @@ func lineRuns(lines []int, origin int) string {
 	return strings.Join(runs, ", ")
 }
 
+// parseLineRef reads a trailing :N off a path. The caller checks the
+// literal path first, so a file whose name really holds a colon is never
+// misread as a line number — the filesystem is the tiebreak.
+func parseLineRef(arg string) (string, int, bool) {
+	i := strings.LastIndex(arg, ":")
+	if i <= 0 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(arg[i+1:])
+	if err != nil || n < 1 {
+		return "", 0, false
+	}
+	return arg[:i], n, true
+}
+
 func cmdBlame(m *tuiModel, args string) tea.Cmd {
 	path := strings.TrimSpace(args)
 	if path == "" {
@@ -374,12 +509,21 @@ func cmdBlame(m *tuiModel, args string) tea.Cmd {
 			strings.Join(blameWorkspaceLines(m.app.store, m.app.catalog, m.app.workspace), "\n"))
 		return nil
 	}
-	abs := path
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(m.app.workspace, path)
+	resolve := func(p string) string {
+		if filepath.IsAbs(p) {
+			return filepath.Clean(p)
+		}
+		return filepath.Join(m.app.workspace, p)
+	}
+	if file, line, ok := parseLineRef(path); ok {
+		if _, err := os.Stat(resolve(path)); err != nil {
+			m.addInfo(fmt.Sprintf("why line %d of %s\n", line, file) +
+				strings.Join(blameLineLines(m.app.store, m.app.workspace, resolve(file), file, line), "\n"))
+			return nil
+		}
 	}
 	m.addInfo(fmt.Sprintf("who wrote %s\n", path) +
-		strings.Join(blameLines(m.app.store, m.app.workspace, filepath.Clean(abs), path), "\n"))
+		strings.Join(blameLines(m.app.store, m.app.workspace, resolve(path), path), "\n"))
 	return nil
 }
 
@@ -390,6 +534,19 @@ func runBlameCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, worksp
 			fmt.Fprintln(w, strings.TrimRight(line, " "))
 		}
 		return nil
+	}
+	if file, line, ok := parseLineRef(path); ok {
+		if _, statErr := os.Stat(path); statErr != nil {
+			abs, err := filepath.Abs(file)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "why line %d of %s\n", line, file)
+			for _, out := range blameLineLines(store, workspace, filepath.Clean(abs), file, line) {
+				fmt.Fprintln(w, strings.TrimRight(out, " "))
+			}
+			return nil
+		}
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
