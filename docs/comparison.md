@@ -211,7 +211,17 @@ never touches the renderer cache (`tui_test.go`), and the transcript
 renders the viewport rather than the session —
 `BenchmarkTranscriptView50Turns` and `BenchmarkTranscriptView500Turns`
 exist to be compared, and a 500-turn session views no slower than a
-50-turn one, microseconds against the 16ms input-latency target. The affordances around a
+50-turn one, microseconds against the 16ms input-latency target. The
+same discipline judged ctrl+f when it landed — 18.4ms a keystroke on a
+500-turn session, past the budget — and the searchable-mirror fix is
+measured at 0.38ms with the benchmarks kept in the suite
+(`tui_search_test.go`), because a property that stops being measured
+becomes a memory. Every parser fed bytes the product does not control —
+the session record decoder, whose replay is the crash-recovery path
+itself; the search backend's HTML; the fence extractor — carries a fuzz
+target beside its tests, hunted at millions of executions with no panic
+found, and AGENTS.md binds the standing rule: a finding there is a bug
+in a stated recovery path, never a wontfix. The affordances around a
 session hold the same standard: `/find` greps what past sessions
 actually said and hands back the ids `/resume` takes; ctrl+f searches
 the transcript itself, because the alternate screen hides the
