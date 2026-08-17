@@ -2,11 +2,13 @@ package lsp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cj-vana/switchboard/internal/execution"
 	"github.com/cj-vana/switchboard/internal/tools"
@@ -151,5 +153,64 @@ func TestLiveTypeScriptNativeAnswersAcrossFiles(t *testing.T) {
 	refs := runTool(t, NewReferences(server, registry), `{"path":"lib.ts","line":1,"symbol":"answer"}`)
 	if refs.IsError || !strings.Contains(refs.Content, "main.ts:3") {
 		t.Fatalf("references = %+v, want the use in main.ts", refs)
+	}
+}
+
+// rust-analyzer is deliberately not in the candidate table: on the
+// verification machine the binary on PATH is a rustup shim that loops
+// "unavailable for the active toolchain" and exits without ever speaking
+// LSP, so the handshake was never demonstrated — the TS5-wrapper rule
+// again. When a machine with a real rust-analyzer runs the verification,
+// the entry can earn its place.
+//
+// clangd answers a compile_commands.json workspace, which is also its
+// marker in the candidate table: without the database clangd guesses
+// flags, and a table entry that worked by guessing would not be the
+// verified claim the table promises. The retry loop covers background
+// indexing, which the narrow client does not smooth over.
+func TestLiveClangdAnswersAcrossFiles(t *testing.T) {
+	path, err := exec.LookPath("clangd")
+	if err != nil {
+		t.Skip("clangd is not installed on this machine")
+	}
+	root := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("lib.h", "#pragma once\nint answer(void);\n")
+	write("lib.c", "#include \"lib.h\"\nint answer(void) { return 42; }\n")
+	write("main.c", "#include \"lib.h\"\n#include <stdio.h>\n\nint main(void) {\n  printf(\"%d\", answer());\n  return 0;\n}\n")
+
+	registry, err := tools.NewRegistry(root, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := registry.Root()
+	db := fmt.Sprintf(`[
+  {"directory": %q, "file": "lib.c", "command": "cc -c lib.c"},
+  {"directory": %q, "file": "main.c", "command": "cc -c main.c"}
+]`, resolved, resolved)
+	write("compile_commands.json", db)
+
+	server := &Server{Argv: []string{path}, Root: resolved}
+	t.Cleanup(server.Close)
+
+	def := runTool(t, NewDefinition(server, registry), `{"path":"main.c","line":5,"symbol":"answer"}`)
+	deadline := time.Now().Add(60 * time.Second)
+	for (def.IsError || !strings.Contains(def.Content, "lib.")) && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		def = runTool(t, NewDefinition(server, registry), `{"path":"main.c","line":5,"symbol":"answer"}`)
+	}
+	// clangd may answer the declaration (lib.h) or the definition (lib.c);
+	// either is a real cross-file answer.
+	if def.IsError || !strings.Contains(def.Content, "lib.") {
+		t.Fatalf("definition = %+v, want a lib.h or lib.c location", def)
+	}
+	refs := runTool(t, NewReferences(server, registry), `{"path":"lib.c","line":2,"symbol":"answer"}`)
+	if refs.IsError || !strings.Contains(refs.Content, "main.c:5") {
+		t.Fatalf("references = %+v, want the use in main.c", refs)
 	}
 }

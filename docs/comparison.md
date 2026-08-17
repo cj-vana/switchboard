@@ -182,7 +182,8 @@ experience. Codex CLI has
 the most configurable profile-per-workload setup, several sandbox postures
 to choose between, and cloud execution. OpenCode has the broadest provider
 matrix, LSP coverage across more languages than Switchboard's verified
-three (Go, TypeScript, Python), a desktop app, and the largest
+four (Go, TypeScript, Python, and C/C++ where a compilation database
+exists), a desktop app, and the largest
 open-source community. A user
 whose work never leaves one frontier model, or who needs an IDE surface
 today, is well served there.

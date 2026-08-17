@@ -338,7 +338,8 @@ your code is a destination you configure, which is what MCP is for.
 Precise symbol lookup joins the same way. When the workspace names an
 ecosystem and its server is installed — `gopls` for a Go module, the
 TypeScript 7 compiler's own server for a `tsconfig.json` or
-`package.json` project, `pyright` for Python — and the workspace is
+`package.json` project, `pyright` for Python, `clangd` where a
+`compile_commands.json` names the flags — and the workspace is
 trusted, `definition` and `references` tools answer from a live language
 server: the model gives a file, a line, and the symbol as written there —
 straight off a grep hit — and gets exact `file:line` answers in

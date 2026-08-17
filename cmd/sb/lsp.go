@@ -37,6 +37,13 @@ var lspCandidates = []struct {
 	{"package.json", typescriptNative},
 	{"pyproject.toml", plainServer("pyright-langserver", "--stdio")},
 	{"setup.py", plainServer("pyright-langserver", "--stdio")},
+	// The marker is the compilation database, not a source extension:
+	// without it clangd guesses flags, and a session built on guessed
+	// flags would answer with guessed symbols. rust-analyzer is absent
+	// under the same rule that keeps the TS5 wrapper out — the
+	// verification machine's binary is a rustup shim that never speaks
+	// LSP, so the handshake has not been demonstrated (live_test.go).
+	{"compile_commands.json", plainServer("clangd")},
 }
 
 func plainServer(binary string, args ...string) func() ([]string, bool) {
