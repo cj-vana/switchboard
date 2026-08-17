@@ -161,8 +161,11 @@ Beyond the expected commands, a few are Switchboard's own:
   The setting persists, and the status bar shows spend against it.
 - `/think high` changes reasoning effort for the running model, this
   session, visible immediately in the status bar.
-- `/context` draws the window filling before it is fatal, and `/export`
-  writes the session record as markdown.
+- `/context` draws the window filling before it is fatal and names its
+  composition — system, tools, conversation, in the estimator's own
+  terms, stated separately from the provider's reported meter because
+  an estimate and a report are different facts. `/export` writes the
+  session record as markdown.
 - `/cost` totals the running session, and `sb cost` prints the same
   accounting for every session the workspace has recorded, from the
   command line, with the three meterings kept apart throughout: dollars

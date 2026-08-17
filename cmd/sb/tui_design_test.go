@@ -11,6 +11,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/cj-vana/switchboard/internal/checkpoint"
+	"github.com/cj-vana/switchboard/internal/provider"
 )
 
 // The redesign's invariants, asserted at the SGR level for the same reason
@@ -259,6 +260,22 @@ func TestChangesMapsFilesToTurns(t *testing.T) {
 	for _, want := range []string{"fix the flaky test", "main.go", "shell command's side effects are not captured", "/undo"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("/changes is missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+// /context names the window's composition in the estimator's own terms and
+// keeps the two measurements apart: the split is estimated, the meter is
+// what the provider reported.
+func TestContextSplitsTheZones(t *testing.T) {
+	m := testModel(t)
+	m.app.loop.System = []provider.Block{provider.Text{Text: strings.Repeat("s", 400)}}
+	m.app.loop.Session.AppendMessage(provider.UserText(strings.Repeat("c", 800)))
+	cmdContext(m, "")
+	joined := strings.Join(m.tr.flat, "\n")
+	for _, want := range []string{"system", "tools", "conversation", "estimated"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("/context is missing the %q zone:\n%s", want, joined)
 		}
 	}
 }

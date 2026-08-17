@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cj-vana/switchboard/internal/prefix"
 	"github.com/cj-vana/switchboard/internal/provider"
 )
 
@@ -97,6 +98,20 @@ func cmdContext(m *tuiModel, _ string) tea.Cmd {
 		fmt.Fprintf(&b, "context window %s; usage is measured on the first turn\n", compact(window))
 	} else {
 		b.WriteString("this target does not report a context window\n")
+	}
+
+	// The window's composition, in the estimator's own terms: what the next
+	// request would send, split by zone. System and tools are the frozen
+	// zone a provider cache holds; the conversation is what grows. The
+	// split is chars-over-four (the measured floor in docs/estimator.md),
+	// while the meter above is what the provider last reported, so the two
+	// are stated separately rather than pretending to reconcile.
+	sys := prefix.RequestTokens(provider.Request{System: m.app.loop.System})
+	tools := prefix.RequestTokens(provider.Request{Tools: m.app.loop.Tools.Definitions()})
+	conv := prefix.RequestTokens(provider.Request{Messages: state.Messages})
+	if sys+tools+conv > 0 {
+		fmt.Fprintf(&b, "the next request, estimated: system %s · tools %s · conversation %s · ~%s total\n",
+			compact(sys), compact(tools), compact(conv), compact(sys+tools+conv))
 	}
 	fmt.Fprintf(&b, "messages %d · tool calls %d · session ↓%s ↑%s tokens",
 		len(state.Messages), state.Calls, compact(state.Usage.InputTokens), compact(state.Usage.OutputTokens))
