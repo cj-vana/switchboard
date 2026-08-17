@@ -45,6 +45,7 @@ func commands() []commandItem {
 		{name: "tiers", desc: "show the configured ladder", busySafe: true, run: cmdTiers},
 		{name: "why", desc: "how this tier was chosen, and what the others would have cost", busySafe: true, run: cmdWhy},
 		{name: "race", usage: "[tier [tier]] <prompt>", desc: "one prompt on two rungs at once; bare form races the next rung up", run: cmdRace},
+		{name: "races", desc: "every paired verdict this workspace has collected, tallied by pair", busySafe: true, run: cmdRaces},
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
@@ -118,7 +119,7 @@ var helpGroups = []struct {
 	names []string
 }{
 	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
-	{"the ladder", []string{"tier", "tiers", "why", "race", "cost", "stats", "budget", "think", "cache", "advisor"}},
+	{"the ladder", []string{"tier", "tiers", "why", "race", "races", "cost", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"diff", "changes", "undo", "watch", "copy", "init", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
@@ -886,6 +887,20 @@ func (m *tuiModel) setTheme(dark bool) {
 	m.th = themeFor(dark)
 	m.md.setDark(dark)
 	m.tr.setTheme(m.th)
+}
+
+// cmdRaces is sb races reachable where races are actually run: the
+// paired-trial corpus, tallied by pair, read-only over the workspace's
+// logs the way /stats reads them. The wording is the CLI's own, because
+// two renderings of one tally would eventually disagree about what a tie
+// means.
+func cmdRaces(m *tuiModel, _ string) tea.Cmd {
+	var b strings.Builder
+	if err := runRacesCLI(&b, m.app.store, m.app.workspace); err != nil {
+		return noticeCmd("error", err.Error())
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
 }
 
 // cmdDoctor is sb doctor reachable from inside the session, because the
