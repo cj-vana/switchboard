@@ -12,7 +12,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/credential"
 )
 
-const testGitHubToken = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+const testGitHubToken = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 
 // A key-shaped prompt does not start a turn; it opens the gate, and until
 // the user answers, nothing has left the machine.

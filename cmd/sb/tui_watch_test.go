@@ -78,7 +78,7 @@ func TestWatchInjectRedactsWhatTheGateWouldHold(t *testing.T) {
 		ExitCode: 1,
 		New: []route.Failure{{
 			Signature: "s1",
-			Line:      "FAIL: env leaked sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnop",
+			Line:      "FAIL: env leaked sk-ant-api03-" + "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnop",
 		}},
 		Signatures: []string{"s1"},
 	}

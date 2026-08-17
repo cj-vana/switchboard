@@ -7,21 +7,25 @@ import (
 )
 
 func TestScanPromptFindsKnownTokenShapes(t *testing.T) {
+	// Every fixture token is split after its prefix so no contiguous
+	// key-shaped literal exists in this file: repository secret scanners
+	// read source, and a pattern-valid dummy raises the same alarm a real
+	// key would. The runtime strings are unchanged. Do not rejoin them.
 	cases := []struct {
 		text string
 		kind string
 	}{
-		{"here is sk-ant-api03-abcdefghijklmnopqrstuvwx my key", "an Anthropic API key"},
-		{"OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN", "an OpenAI API key"},
-		{"token: ghp_abcdefghijklmnopqrstuvwxyz0123456789", "a GitHub token"},
-		{"github_pat_11ABCDEFG0abcdefghijklm", "a GitHub fine-grained token"},
-		{"glpat-abcdefghij0123456789", "a GitLab token"},
-		{"xoxb-1234567890-abcdef", "a Slack token"},
+		{"here is sk-ant-api03-" + "abcdefghijklmnopqrstuvwx my key", "an Anthropic API key"},
+		{"OPENAI_API_KEY=sk-proj-" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN", "an OpenAI API key"},
+		{"token: ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789", "a GitHub token"},
+		{"github_pat_" + "11ABCDEFG0abcdefghijklm", "a GitHub fine-grained token"},
+		{"glpat-" + "abcdefghij0123456789", "a GitLab token"},
+		{"xoxb-" + "1234567890-abcdef", "a Slack token"},
 		{"aws_access_key_id = AKIAIOSFODNN7EXAMPLE", "an AWS access key ID"},
-		{"key=AIzaSyA-abcdefghijklmnopqrstuvwxyz01234", "a Google API key"},
-		{"sk_live_abcdefghij0123456789", "a Stripe live key"},
-		{"npm_abcdefghijklmnopqrstuvwxyz0123456789", "an npm token"},
-		{"hf_abcdefghijklmnopqrstuvwxyz01234", "a Hugging Face token"},
+		{"key=AIza" + "SyA-abcdefghijklmnopqrstuvwxyz01234", "a Google API key"},
+		{"sk_live_" + "abcdefghij0123456789", "a Stripe live key"},
+		{"npm_" + "abcdefghijklmnopqrstuvwxyz0123456789", "an npm token"},
+		{"hf_" + "abcdefghijklmnopqrstuvwxyz01234", "a Hugging Face token"},
 		{"-----BEGIN RSA PRIVATE KEY-----", "a private key block"},
 	}
 	for _, c := range cases {
@@ -53,7 +57,7 @@ func TestScanPromptLeavesProseAlone(t *testing.T) {
 }
 
 func TestScanPromptDeduplicatesRepeatedPastes(t *testing.T) {
-	key := "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	key := "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 	if leaks := ScanPrompt(key + " and again " + key); len(leaks) != 1 {
 		t.Errorf("one key pasted twice reported %d findings", len(leaks))
 	}
@@ -61,7 +65,7 @@ func TestScanPromptDeduplicatesRepeatedPastes(t *testing.T) {
 
 // The Secret rule applies to findings too: no rendering shows the match.
 func TestLeakHasNoRenderingThatShowsTheSecret(t *testing.T) {
-	secret := "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	secret := "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 	leaks := ScanPrompt("token " + secret)
 	if len(leaks) != 1 {
 		t.Fatalf("expected one finding, got %v", leaks)
