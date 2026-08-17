@@ -552,6 +552,13 @@ against what each server reported. Its companion,
 estimator moves the ratio, that test fails and the document is what has to be
 updated. Do not widen the band to make it pass.
 
+The parsers that eat untrusted bytes carry fuzz targets beside their
+tests: the session record decoder (a crash-recovered tail is arbitrary
+bytes by definition), the search backend's HTML, and the fence extractor
+behind /copy code. In an ordinary test run each executes only its seed
+corpus; `go test -fuzz` hunts. A finding is a crash in a stated recovery
+path, so it is a bug, never a wontfix.
+
 Tests must pass without network access or an API key. Provider behavior is
 tested against recorded fixtures served by `httptest`; tests that need a live
 model are guarded by `SB_LIVE=1` and skipped otherwise.
