@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -28,9 +27,10 @@ func cmdInit(m *tuiModel, _ string) tea.Cmd {
 	return m.enqueue(initPrompt, "")
 }
 
-// cmdExport writes the conversation as markdown. The session state is the
-// source, not the transcript: the transcript is a rendering, the session is
-// the record.
+// cmdExport writes the conversation as markdown, through the same
+// renderer sb export uses on any recorded session. The session state is
+// the source, not the transcript: the transcript is a rendering, the
+// session is the record.
 func cmdExport(m *tuiModel, args string) tea.Cmd {
 	state := m.app.loop.Session.State()
 	name := strings.TrimSpace(args)
@@ -42,70 +42,13 @@ func cmdExport(m *tuiModel, args string) tea.Cmd {
 		path = filepath.Join(m.app.workspace, name)
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "# Switchboard session %s\n\n", state.ID)
-	fmt.Fprintf(&b, "- workspace: %s\n- target: %s\n- started: %s\n- exported: %s\n\n",
-		state.Workspace, state.Target, state.CreatedAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
-
-	// The timeline, not just the messages: a route decision or a race
-	// verdict belongs where it happened, because the routing record is the
-	// half of the session no transcript of the words can reconstruct. A log
-	// that cannot be read as a timeline degrades to the messages alone
-	// rather than failing the export.
+	// A log that cannot be read as a timeline degrades to the messages
+	// alone rather than failing the export.
 	timeline, terr := session.ReadTimeline(m.app.loop.Session.Path())
 	if terr != nil {
 		timeline = nil
-		for i := range state.Messages {
-			timeline = append(timeline, session.Timeline{Message: &state.Messages[i]})
-		}
 	}
-	for _, ev := range timeline {
-		switch {
-		case ev.Message != nil:
-			msg := ev.Message
-			switch msg.Role {
-			case provider.RoleUser:
-				b.WriteString("## User\n\n")
-			case provider.RoleAssistant:
-				if msg.Incomplete {
-					b.WriteString("## Assistant (interrupted)\n\n")
-				} else {
-					b.WriteString("## Assistant\n\n")
-				}
-			default:
-				continue // tool results appear under the call that made them
-			}
-			for _, block := range msg.Content {
-				switch blk := block.(type) {
-				case provider.Text:
-					b.WriteString(blk.Text + "\n\n")
-				case provider.Thinking:
-					// Deliberately omitted: an export is for sharing, and
-					// thinking is a working draft, not the record.
-				case provider.ToolUse:
-					fmt.Fprintf(&b, "*[tool: %s]*\n\n", blk.Name)
-				}
-			}
-		case ev.Route != nil:
-			r := ev.Route
-			line := fmt.Sprintf("> route: %s via %s (%s)", r.Tier, r.Source, r.Rationale)
-			if r.Escalations > 0 && r.EndedOn != "" {
-				line += fmt.Sprintf("; %d escalation(s), ended on %s", r.Escalations, r.EndedOn)
-			}
-			b.WriteString(line + "\n\n")
-		case ev.Race != nil:
-			r := ev.Race
-			line := fmt.Sprintf("> race: %s vs %s — %s", r.A.Tier, r.B.Tier, r.Outcome)
-			if r.Kept != "" {
-				line += ", continued on " + r.Kept
-			}
-			b.WriteString(line + "\n\n")
-		case ev.Note != nil && ev.Note.Level != "":
-			fmt.Fprintf(&b, "> %s: %s\n\n", ev.Note.Level, ev.Note.Text)
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(exportMarkdown(state, timeline)), 0o644); err != nil {
 		return noticeCmd("error", "export failed: "+err.Error())
 	}
 	return noticeCmd("", "exported to "+path)

@@ -205,7 +205,11 @@ Beyond the expected commands, a few are Switchboard's own:
   session record as markdown — the timeline, not just the words: route
   decisions, race verdicts, and warnings land as annotations where they
   happened, because the routing record is the half of the session no
-  transcript of the words can reconstruct.
+  transcript of the words can reconstruct. `sb export [id]` prints any
+  recorded session the same way from the command line, because the
+  moment a session becomes a document — the PR description, the bug
+  report — usually comes after it closed, from a script, with a shell
+  redirect already in hand.
 - `/estimate refactor the parser to stream` prices that prompt on every
   rung before it is sent: the next request's zones — system, tools,
   conversation, your prompt — estimated the way the §6.4 machinery
@@ -696,18 +700,21 @@ base_url`, which changes the address and deliberately nothing else.
 
 ## Where this stands
 
-The build plan behind this tool runs in gated phases, and every phase up
-to and including orchestration is built, tested, and in this tree: the
-loop, the provider layer, the caching and routing core the thesis rides
-on, the TUI, the extensibility surface (MCP, hooks, trust, subagents,
-skills, custom commands), and delegation. What is absent is absent by the
-plan's own gates, not by omission: a learned router ships only if it
-beats the heuristic on the eval harness, summary handoff on escalation
-ships only once that harness shows quality holds, and the hosted platform
-program is out of scope for the CLI on purpose. Feature-complete here
-means every feature whose preconditions exist has been built — the
-remainder are conditional on evidence, and the instrument that gathers
-the evidence is in the tree.
+Version 1.0. The build plan behind this tool runs in gated phases, and
+every phase up to and including orchestration is built, tested, and in
+this tree: the loop, the provider layer, the caching and routing core the
+thesis rides on, the TUI, the extensibility surface (MCP, hooks, trust,
+subagents, skills, custom commands), delegation, and computer use. What
+is absent is absent by the plan's own gates, not by omission: a learned
+router ships only if it beats the heuristic on the eval harness, summary
+handoff on escalation ships only once that harness shows quality holds,
+and the hosted platform program is out of scope for the CLI on purpose.
+Feature-complete here means every feature whose preconditions exist has
+been built — the remainder are conditional on evidence, and the
+instrument that gathers the evidence is in the tree. Calling that 1.0 is
+a statement about the plan, not the end of the work: the eval corpus
+keeps growing, and the gated features ship the day their evidence
+arrives.
 
 ## Documentation
 

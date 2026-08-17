@@ -329,7 +329,7 @@ Switchboard now concedes nothing: the converged skeleton is fully present
 custom commands, skills that load the neighbors' own packs, availability
 fallbacks, per-turn undo, session fork with named pins, structural search,
 web search and fetch, and language-server symbol lookup), and
-on top of it sit fourteen axes — evidence-based routing with `/why`,
+on top of it sit fifteen axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
 verified-or-absent sandboxing, delegation priced on the ladder, the
@@ -339,9 +339,10 @@ binary-searches the session's own turns for the one that turned that
 verifier red, the byte-identical
 `/retry` whose verdicts join the same corpus, the outbound credential
 gate that covers the web tools' egress, the tracked cache belief
-with its `/cache` surface, and line-level provenance through `/blame`,
-which reads which rung wrote which lines out of the record itself —
-where the neighbors have no counterpart at all.
+with its `/cache` surface, line-level provenance through `/blame`,
+which reads which rung wrote which lines out of the record itself, and
+computer use built into the terminal agent under its own permission
+engine — where the neighbors have no counterpart at all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the

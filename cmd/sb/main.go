@@ -200,6 +200,24 @@ func run() error {
 		}
 		return runRecapCLI(os.Stdout, store, cwd, id)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "export" {
+		if len(os.Args) > 3 {
+			return fmt.Errorf("sb export takes one session id, or none for the most recent; %q is extra", os.Args[3])
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		id := ""
+		if len(os.Args) > 2 {
+			id = os.Args[2]
+		}
+		return runExportCLI(os.Stdout, store, cwd, id)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "ladder" {
 		if len(os.Args) > 2 {
 			return fmt.Errorf("sb ladder takes no argument; %q is not one", os.Args[2])
