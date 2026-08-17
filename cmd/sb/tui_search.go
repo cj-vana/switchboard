@@ -79,8 +79,8 @@ func (m *tuiModel) rescanTranscript() {
 		m.tr.marks = nil
 		return
 	}
-	for i := len(m.tr.flat) - 1; i >= 0; i-- {
-		if strings.Contains(strings.ToLower(plainLine(m.tr.flat[i])), query) {
+	for i := len(m.tr.searchable) - 1; i >= 0; i-- {
+		if strings.Contains(m.tr.searchable[i], query) {
 			m.trMatches = append(m.trMatches, i)
 		}
 	}

@@ -94,3 +94,32 @@ func TestTranscriptSearchWithNoMatchSaysSo(t *testing.T) {
 		t.Fatalf("the bar does not say no match: %q", view)
 	}
 }
+
+// The search rescans per keystroke, so its cost on a long session is a
+// latency the fingers feel; it gets the same benchmark discipline as the
+// view. Compared runs answer whether a rescan stays under the input
+// budget or the plain lines need caching.
+func benchModelForSearch(turns int) *tuiModel {
+	th := darkTheme()
+	m := &tuiModel{th: th}
+	m.tr = newTranscript(100, th, newMarkdown(100, true))
+	for i := 0; i < turns; i++ {
+		m.tr.add(&entry{kind: kindUser, text: "a question that fills a line or two of the terminal"})
+		m.tr.add(&entry{kind: kindAssistant,
+			text: "an answer with a needle in it and some **markdown**\n\n```go\ncode := true\n```\n"})
+	}
+	m.tr.view(40)
+	return m
+}
+
+func benchSearch(b *testing.B, turns int) {
+	m := benchModelForSearch(turns)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.trQuery = "needle"
+		m.rescanTranscript()
+	}
+}
+
+func BenchmarkTranscriptSearch50Turns(b *testing.B)  { benchSearch(b, 50) }
+func BenchmarkTranscriptSearch500Turns(b *testing.B) { benchSearch(b, 500) }

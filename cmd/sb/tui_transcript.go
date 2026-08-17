@@ -74,6 +74,14 @@ type transcript struct {
 	starts  []int // flat offset where each entry's lines begin
 	flat    []string
 
+	// searchable mirrors flat line for line, stripped of styling and
+	// lowercased: what ctrl+f matches against. It is maintained in the
+	// same splices that maintain flat, because a cache with its own
+	// update path is a cache that drifts - and it exists because
+	// stripping per keystroke put a 500-turn rescan past the §14 input
+	// budget.
+	searchable []string
+
 	width int
 	th    *theme
 	md    *markdown
@@ -157,14 +165,22 @@ func (t *transcript) invalidate(i int) {
 	if i+1 < len(t.entries) {
 		oldEnd = t.starts[i+1]
 	}
+	plain := make([]string, len(lines))
+	for j, l := range lines {
+		plain[j] = strings.ToLower(plainLine(l))
+	}
 	delta := len(lines) - (oldEnd - oldStart)
 	if delta == 0 {
 		copy(t.flat[oldStart:], lines)
+		copy(t.searchable[oldStart:], plain)
 		return
 	}
 	tail := append([]string(nil), t.flat[oldEnd:]...)
 	flat := append(t.flat[:oldStart], lines...)
 	t.flat = append(flat, tail...)
+	plainTail := append([]string(nil), t.searchable[oldEnd:]...)
+	searchable := append(t.searchable[:oldStart], plain...)
+	t.searchable = append(searchable, plainTail...)
 	for j := i + 1; j < len(t.starts); j++ {
 		t.starts[j] += delta
 	}
@@ -524,10 +540,15 @@ func (t *transcript) setWidth(width int) {
 	// Width-keyed caches make re-render a cache hit where this width was seen
 	// before; either way each entry re-renders once rather than per repaint.
 	t.flat = nil
+	t.searchable = nil
 	t.starts = t.starts[:0]
 	for _, e := range t.entries {
 		t.starts = append(t.starts, len(t.flat))
-		t.flat = append(t.flat, t.render(e)...)
+		lines := t.render(e)
+		t.flat = append(t.flat, lines...)
+		for _, l := range lines {
+			t.searchable = append(t.searchable, strings.ToLower(plainLine(l)))
+		}
 	}
 }
 
@@ -545,6 +566,7 @@ func (t *transcript) reset() {
 	t.entries = nil
 	t.starts = nil
 	t.flat = nil
+	t.searchable = nil
 	t.offset = 0
 	t.marks = nil
 }
