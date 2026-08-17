@@ -72,6 +72,11 @@ type Registry struct {
 	// checkpoints, when non-nil, captures a file's prior state before write
 	// and edit mutate it. Set at assembly; nil means no undo.
 	checkpoints Checkpointer
+
+	// questioner, when non-nil, is the surface the ask tool resolves
+	// questions against. Set at assembly, only by surfaces with a user
+	// attached; nil means the tool refuses with the reason.
+	questioner Questioner
 }
 
 // Checkpointer is what the registry needs from a checkpoint recorder. The
@@ -139,6 +144,7 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 	r.add(&globTool{r})
 	r.add(&grepTool{r})
 	r.add(&todoTool{r})
+	r.add(&askTool{r})
 	client := newWebClient()
 	r.add(&websearchTool{client: client, endpoint: ddgEndpoint})
 	r.add(&webfetchTool{client: client})
@@ -167,7 +173,7 @@ func (r *Registry) AddExternal(t Tool) error {
 // validate a configured tool grant — a named agent's — without building a
 // registry; the test tying it to NewRegistry is what keeps the two honest.
 func CoreNames() []string {
-	return []string{"edit", "exec", "glob", "grep", "read", "todo", "webfetch", "websearch", "write"}
+	return []string{"ask", "edit", "exec", "glob", "grep", "read", "todo", "webfetch", "websearch", "write"}
 }
 
 // Restrict narrows the registry to the named tools. Session assembly only,

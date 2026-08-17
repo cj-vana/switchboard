@@ -142,6 +142,20 @@ the turn finishes; /queue shows what waits and /queue clear drops it,
 because a prompt that silently queued is a prompt you may believe was
 lost.
 
+The model can also put a question to you. When the work genuinely forks —
+two designs, a scope call, which behavior you actually meant — the `ask`
+tool renders the question as a dialog: ↑↓ and enter answer it, a digit
+picks by number, space marks several when the question allows more than
+one, and the last row takes an answer in your own words, because no list
+of options is ever complete. esc declines, and a decline is an answer the
+model hears and works around, never an error. A waiting question rings
+the same bell an approval does. Where no one is listening — a scripted
+`sb -p` run, a delegated errand, a race branch — the tool says so and the
+model is told to decide and state its assumption, because a question with
+no listener fails closed rather than hanging. An answer with a pasted key
+in it is redacted before it reaches the record, the same posture every
+other injected text holds.
+
 Beyond the expected commands, a few are Switchboard's own:
 
 - `/advisor` sets a second model watching the session through the loop's

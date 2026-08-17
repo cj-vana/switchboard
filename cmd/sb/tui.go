@@ -212,7 +212,13 @@ type tuiModel struct {
 	dlg  dialog
 	full *diffView
 
-	pendingAsk  chan permission.Response
+	pendingAsk chan permission.Response
+
+	// pendingQuestion is the ask tool's open question, held so a quit can
+	// resolve it as declined: the loop is blocked on this channel, and an
+	// exit that left it hanging would leave the turn unable to end.
+	pendingQuestion chan tools.Answer
+
 	restoreTier *config.Tier
 	lastTitle   string
 	quitArmed   bool
@@ -305,6 +311,7 @@ func runTUI(
 	app.watcher = newWatcher(obs, sticky, len(cfg.Tiers)-1, app.moveTo)
 	loop.Observer = app.watcher
 	loop.Asker = &tuiAsker{p: p}
+	loop.Tools.SetQuestioner(&tuiQuestioner{p: p})
 	// The injection seam is composed once and never swapped: the advisor and
 	// the watch each contribute nothing while off.
 	loop.Inject = app.inject
@@ -509,6 +516,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ring()
 		return m, nil
 
+	case questionMsg:
+		m.pendingQuestion = msg.respond
+		m.dlg = newQuestionDialog(msg.q, msg.respond)
+		m.ring()
+		return m, nil
+
 	case pickerMsg:
 		m.dlg = &pickerDialog{title: msg.title, items: msg.items, onPick: msg.action}
 		return m, nil
@@ -647,6 +660,7 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		if done {
 			m.dlg = nil
 			m.pendingAsk = nil
+			m.pendingQuestion = nil
 		}
 		return cmd
 	}
@@ -838,6 +852,9 @@ func (m *tuiModel) interrupt() tea.Cmd {
 	if m.quitArmed {
 		if m.pendingAsk != nil {
 			m.pendingAsk <- permission.Response{}
+		}
+		if m.pendingQuestion != nil {
+			m.pendingQuestion <- tools.Answer{Declined: true}
 		}
 		m.quitting = true
 		return tea.Quit

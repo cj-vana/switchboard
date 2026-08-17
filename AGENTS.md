@@ -295,6 +295,27 @@ them and hands the warnings to the model on a miss, because "your pattern
 did not parse cleanly" is the difference between tightening a pattern and
 abandoning the tool.
 
+**A question is interaction, not an effect.** The `ask` tool
+(`internal/tools/ask.go`) lets the model put one question to the user:
+two to eight options, one pick or several, or an answer in the user's own
+words, or a decline. It carries the read effect for the reason todo does —
+the answer channel is the user, who can refuse in person — so it is
+allowed in every mode, plan included, because planning is exactly when a
+question earns its place. What keeps an unattended surface from asking is
+the absent `Questioner`, never the permission engine: headless runs,
+delegate subagents, and race branches leave it unset, and the tool
+refuses with an instruction to decide and state the assumption, because a
+question with no one listening fails closed rather than hanging or
+inventing an answer. A race arm keeps the schema (frozen zone) and
+refuses at Plan through the branch's refuse map; `Branch` never copies
+the questioner, which is the backstop if a call site forgets. A decline
+is an answer, not an error — the model must hear it and work around it,
+so it travels as a result. A typed answer redacts unconditionally through
+`credential.ScanPrompt` — the injected-report posture, because the
+question dialog is not the secret gate and must not grow into one — and
+the test that plants a key and greps the result is the guarantee. Picks
+return in offered order, the shape the question was asked in.
+
 **Egress from this process is external too.** `websearch` and `webfetch`
 (`internal/tools/web.go`) carry `permission.EffectExternal` even though no
 other process is involved, because a fetch is the classic exfiltration

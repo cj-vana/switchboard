@@ -103,6 +103,7 @@ func assembleRaceArm(app *tuiApp, tier config.Tier, client provider.Provider, ob
 		Target:   tier.Target,
 		Tools: app.loop.Tools.Branch(map[string]string{
 			"delegate": "delegate is unavailable in a race branch: an errand spawned here would outlive the pick; the branch that wins can delegate after it continues",
+			"ask":      "ask is unavailable in a race branch: both arms answer unattended so they can be compared, and the pick at the end is the user's answer",
 		}),
 		Perms:    permission.NewEngine(permission.ModePlan, app.capability),
 		Session:  sess,

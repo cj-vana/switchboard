@@ -59,6 +59,14 @@ func (r *Registry) Branch(refuse map[string]string) *Registry {
 			tool = &grepTool{nr}
 		case "todo":
 			tool = &todoTool{nr}
+		case "ask":
+			// The branch registry never gets a questioner: a branch runs
+			// unattended beside its rival, and a question one arm asked
+			// would make the user the difference between two runs that
+			// exist to be compared. The caller's refuse map names the
+			// better reason; the absent questioner is what holds if it
+			// does not.
+			tool = &askTool{nr}
 		}
 		if reason, ok := refuse[name]; ok {
 			tool = &refusedTool{Tool: tool, reason: reason}

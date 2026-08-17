@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -225,4 +226,84 @@ func (a *terminalAsker) Ask(_ context.Context, req permission.Request, out permi
 	default:
 		return permission.Response{}, nil
 	}
+}
+
+// terminalQuestioner resolves the ask tool against the same stdin the REPL
+// reads, the terminalAsker's arrangement. Anything that is not a number is
+// the user's own answer, because the natural response to a question whose
+// options do not fit is to just say so.
+type terminalQuestioner struct {
+	in  *bufio.Reader
+	out *renderer
+}
+
+func (a *terminalQuestioner) AskUser(_ context.Context, q tools.Question) (tools.Answer, error) {
+	r := a.out
+	r.section("question")
+	r.line(r.style(bold, q.Question))
+	for i, opt := range q.Options {
+		line := "  [" + strconv.Itoa(i+1) + "] " + opt.Label
+		if opt.Detail != "" {
+			line += "  " + r.style(dim, opt.Detail)
+		}
+		r.line(line)
+	}
+	hint := "  a number chooses; anything else is your own answer; enter alone declines"
+	if q.Multi {
+		hint = "  numbers choose, space-separated; anything else is your own answer; enter alone declines"
+	}
+	r.line(r.style(dim, hint))
+	r.w.WriteString("  > ")
+	r.atLineTop = false
+	r.flush()
+
+	answer, err := a.in.ReadString('\n')
+	if err != nil {
+		if err == io.EOF {
+			// No one is there to answer, which is a decline, not a crash:
+			// the model hears it and continues on its own judgment.
+			r.line("")
+			return tools.Answer{Declined: true}, nil
+		}
+		return tools.Answer{}, err
+	}
+	r.atLineTop = true
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return tools.Answer{Declined: true}, nil
+	}
+	if picked, ok := parseQuestionPicks(answer, q); ok {
+		return tools.Answer{Picked: picked}, nil
+	}
+	return tools.Answer{Text: answer}, nil
+}
+
+// parseQuestionPicks reads an answer as option numbers. Every token must be
+// a number in range — one on a single-select question — or the whole answer
+// is the user's own words instead; a half-numeric guess must not silently
+// become a pick. Picks come back in offered order, the shape the model asked
+// the question in.
+func parseQuestionPicks(answer string, q tools.Question) ([]string, bool) {
+	fields := strings.FieldsFunc(answer, func(r rune) bool { return r == ' ' || r == ',' })
+	if len(fields) == 0 || (!q.Multi && len(fields) > 1) {
+		return nil, false
+	}
+	marked := make([]bool, len(q.Options))
+	for _, f := range fields {
+		if len(f) != 1 || f[0] < '1' || f[0] > '9' {
+			return nil, false
+		}
+		i := int(f[0] - '1')
+		if i >= len(q.Options) {
+			return nil, false
+		}
+		marked[i] = true
+	}
+	var out []string
+	for i, opt := range q.Options {
+		if marked[i] {
+			out = append(out, opt.Label)
+		}
+	}
+	return out, true
 }

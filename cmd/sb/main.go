@@ -454,6 +454,11 @@ func run() error {
 		opts.prompt = attachPipedInput(opts.prompt, data)
 	} else {
 		loop.Asker = &terminalAsker{in: in, out: out}
+		// The ask tool follows the asker: a surface that can answer a
+		// permission prompt can answer a question, and the piped run that
+		// left the asker unset leaves this unset too, so the tool refuses
+		// with the reason rather than reading an answer out of the pipe.
+		registry.SetQuestioner(&terminalQuestioner{in: in, out: out})
 	}
 	loop.Observer = out
 	subagentForward.set(out)
