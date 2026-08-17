@@ -10,8 +10,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/checkpoint"
 	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/cj-vana/switchboard/internal/session"
 )
 
 // The redesign's invariants, asserted at the SGR level for the same reason
@@ -384,5 +386,49 @@ func TestHelpGroupsCoverEveryCommandOnce(t *testing.T) {
 	}
 	for name := range seen {
 		t.Errorf("help groups name %q, which is not a command", name)
+	}
+}
+
+// A governed session's spend readout warms as the ceiling nears, the same
+// thresholds the context gauge uses: the warning comes before the refusal.
+func TestBudgetReadoutWarmsBeforeTheCeiling(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	m := testModel(t)
+	cat, priced := pricedTarget(t)
+	m.app.catalog = cat
+	m.app.loop.Target = priced
+	m.app.budget = &budgetState{}
+	m.app.budget.set(catalog.Money(1_000_000)) // a $1.00 ceiling
+
+	state := m.app.loop.Session.State()
+	state.CostMicroUSD = 700_000 // 70% spent
+	m.refreshCost(state)
+	if m.costPct != 70 {
+		t.Fatalf("costPct = %d, want 70", m.costPct)
+	}
+	if line := m.statusLine(); !strings.Contains(line, "38;5;214") {
+		t.Fatalf("a 70%% spent ceiling did not warm the readout:\n%q", line)
+	}
+
+	state.CostMicroUSD = 900_000
+	m.refreshCost(state)
+	if line := m.statusLine(); !strings.Contains(line, "38;5;196") {
+		t.Fatalf("a 90%% spent ceiling did not turn the readout red:\n%q", line)
+	}
+
+	// A switch to a rung whose metering is not dollars must drop the ratio
+	// with the branch: "local" wearing the old ceiling's red would collapse
+	// the meterings the readout exists to keep apart.
+	m.app.loop.Target = provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "q"}
+	m.refreshCost(state)
+	if m.costPct != 0 {
+		t.Fatalf("a local rung kept the priced rung's ratio: %d", m.costPct)
+	}
+
+	m.app.budget = nil
+	m.app.loop.Target = priced
+	m.refreshCost(session.State{})
+	if m.costPct != 0 {
+		t.Fatalf("an ungoverned session kept a stale ratio: %d", m.costPct)
 	}
 }

@@ -70,7 +70,14 @@ func (m *tuiModel) statusLine() string {
 	if m.updateAvail != "" {
 		add(th.onBar(th.warn).Render("↑ "+m.updateAvail), 0)
 	}
-	add(th.onBar(th.ok).Render(m.costLine), 0)
+	costStyle := th.ok
+	switch {
+	case m.costPct >= 85:
+		costStyle = th.err
+	case m.costPct >= 60:
+		costStyle = th.warn
+	}
+	add(th.onBar(costStyle).Render(m.costLine), 0)
 	add(m.ctxPct(), 0)
 	add(m.clock(), 3)
 	if m.tr.offset > 0 {

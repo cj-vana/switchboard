@@ -169,7 +169,9 @@ Beyond the expected commands, a few are Switchboard's own:
   the ceiling mid-turn reins in a turn already running. It governs
   dollars only: a local rung consumes nothing scarce, a plan rung
   consumes quota, and neither is collapsed into the ceiling's units.
-  The setting persists, and the status bar shows spend against it.
+  The setting persists, and the status bar shows spend against it,
+  warming through the same thresholds the context gauge uses as the
+  ceiling nears — the warning comes before the refusal, not as it.
 - `/think high` changes reasoning effort for the running model, this
   session, visible immediately in the status bar.
 - `/context` draws the window filling before it is fatal and names its

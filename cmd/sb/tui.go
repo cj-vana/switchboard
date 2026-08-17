@@ -130,6 +130,7 @@ type tuiModel struct {
 	tierLine        string
 	mode            permission.Mode
 	costLine        string
+	costPct         int // spend as a percentage of the /budget ceiling; 0 when ungoverned
 	turnIn, turnOut int
 	callTokens      int
 	ctxWindow       int
@@ -1251,6 +1252,10 @@ func routeSummary(d route.Decision) string {
 // --- status state ----------------------------------------------------------
 
 func (m *tuiModel) refreshCost(state session.State) {
+	// The ratio resets before the branch, not inside one: a switch from a
+	// priced rung to a local one must not leave "local" wearing the old
+	// ceiling's warning color.
+	m.costPct = 0
 	// The three zero-dollar meterings stay distinct (§4), here as everywhere:
 	// a plan target consumed quota, not nothing.
 	info, _, ok := m.app.catalog.Lookup(m.app.loop.Target)
@@ -1266,10 +1271,14 @@ func (m *tuiModel) refreshCost(state session.State) {
 	default:
 		m.costLine = catalog.Money(state.CostMicroUSD).String()
 		// The ceiling rides the readout so a governed session shows it at
-		// rest, the same principle as the tier: visible, not on demand.
+		// rest, the same principle as the tier: visible, not on demand. The
+		// percentage feeds the readout's color, so a ceiling being neared
+		// warms the same way the context gauge does: the warning comes
+		// before the refusal, not as it.
 		if m.app.budget != nil {
 			if c := m.app.budget.get(); c > 0 {
 				m.costLine += " of " + c.String()
+				m.costPct = int(int64(state.CostMicroUSD) * 100 / int64(c))
 			}
 		}
 	}
