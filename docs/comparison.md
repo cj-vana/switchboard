@@ -256,7 +256,8 @@ measured at 0.38ms with the benchmarks kept in the suite
 (`tui_search_test.go`), because a property that stops being measured
 becomes a memory. Every parser fed bytes the product does not control —
 the session record decoder, whose replay is the crash-recovery path
-itself; the search backend's HTML; the fence extractor — carries a fuzz
+itself; the search backend's HTML; the fence extractor; the edit reader
+`/blame` replays — carries a fuzz
 target beside its tests, hunted at millions of executions with no panic
 found, and AGENTS.md binds the standing rule: a finding there is a bug
 in a stated recovery path, never a wontfix. The affordances around a

@@ -101,7 +101,14 @@ func ReadFileEdits(path string) ([]FileEdit, error) {
 	if err := checkHeader(r, path); err != nil {
 		return nil, err
 	}
+	return readFileEditRecords(r)
+}
 
+// readFileEditRecords is the replay after the header: separate so the
+// fuzz target can feed it arbitrary bytes, because a tampered or
+// crash-truncated log must come back as an error or a short read, never
+// a panic — the same bar the record decoder holds.
+func readFileEditRecords(r *bufio.Reader) ([]FileEdit, error) {
 	var (
 		out       []FileEdit
 		sessionID string

@@ -81,6 +81,9 @@ func cmdBisect(m *tuiModel, args string) tea.Cmd {
 	m.bisect = run
 	m.busy = true
 	m.started = time.Now()
+	// The spinner shares the turn's status line; a stale token rate from
+	// the last turn must not tick along under a bisect that streams none.
+	m.samples, m.tokChars, m.tokAt = nil, 0, time.Time{}
 
 	workspace := m.app.workspace
 	send := m.app.p.Send
