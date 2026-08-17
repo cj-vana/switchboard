@@ -10,10 +10,11 @@ axis.
 ## The converged baseline
 
 Claude Code, Codex CLI, OpenCode, and Switchboard have all converged on the
-same skeleton: an agent loop over read/write/edit/exec plus file search, MCP
-for the long tail of tools, hooks at tool-call boundaries, custom slash
-commands, repo instructions read from `AGENTS.md` or equivalent, subagents,
-permission modes, model fallbacks for availability, and session resume. On
+same skeleton: an agent loop over read/write/edit/exec plus file search, web
+fetch (and in most, search), MCP for the long tail of tools, hooks at
+tool-call boundaries, custom slash commands, repo instructions read from
+`AGENTS.md` or equivalent, subagents, permission modes, model fallbacks for
+availability, and session resume. On
 this skeleton none of the four is interesting; the differences are in what
 each tool believes about models, money, and safety.
 
@@ -42,6 +43,23 @@ router refuses rungs whose upper bound could cross it, the escalation
 policy cannot move onto one, and the loop stops before the call that
 would (`cmd/sb/budget.go`, §15). The neighbors report spend after the
 fact; none enforces a ceiling the model-selection machinery itself obeys.
+And the receipt scales: `/cost rungs` reprices one session cold on every
+rung, and `/stats` prices the workspace's whole recorded history the same
+way — as routed, then pinned to each rung of today's ladder
+(`cmd/sb/stats.go`) — an answer no neighbor can produce, because none has
+a ladder to price a history against.
+
+**Cache state as a belief with a surface.** Provider cache is tracked
+from what providers report, never from what was sent, as a probability
+that decays rather than an expiry the tracker cannot observe
+(`internal/cachestate`); `/cache` is that belief's surface — the modeled
+hit chance for the next send with its reason, the session's eligible-hit
+count, the alarm when a written prefix keeps coming back cold — and
+every number keeps the tracker's honesty: modeled says modeled, and a
+surface that reports no cache accounting stays unknown, because silence
+is not a miss (`cmd/sb/cache.go`). The neighbors' pricing pages mention
+cache discounts; none models whether the cache is actually holding, and
+none can be asked.
 
 **A falsification instrument, with its runs in the tree.** `internal/eval`
 is a harness the routing thesis has to survive, not a benchmark to pass;
@@ -93,7 +111,13 @@ the send holds behind redact, send-as-typed, or drop; a `-p` run with no
 one to ask is refused, `-allow-secrets` being the stated widening. The
 neighbors' guidance for this is hooks the user writes themselves; none
 ships the gate, and none promises that the warning itself cannot quote
-the key.
+the key. The same gate faces the web tools' egress: `websearch` and
+`webfetch` carry a permission effect no mode auto-allows, an approval
+covers a host for the session, a redirect off that host is refused
+before anything is dialed, and a key-shaped string in an outbound URL or
+query is refused with the refusal itself masked
+(`internal/tools/web.go`) — a fetch is the classic exfiltration channel,
+and here the gate that faces outward for prompts faces outward for URLs.
 
 **A declared verifier wired into routing.** `/watch go test ./...` makes
 the user's own check ambient: it runs after the model's edits — the
@@ -176,7 +200,16 @@ never touches the renderer cache (`tui_test.go`), and the transcript
 renders the viewport rather than the session —
 `BenchmarkTranscriptView50Turns` and `BenchmarkTranscriptView500Turns`
 exist to be compared, and a 500-turn session views no slower than a
-50-turn one, microseconds against the 16ms input-latency target. What this
+50-turn one, microseconds against the 16ms input-latency target. The affordances around a
+session hold the same standard: `/find` greps what past sessions
+actually said and hands back the ids `/resume` takes; ctrl+f searches
+the transcript itself, because the alternate screen hides the
+conversation from the terminal's own search — a gap every terminal
+agent shares and none of the others closes (`cmd/sb/tui_search.go`);
+`/changes` maps files to the turns that touched them from the same
+captures `/undo` restores (`cmd/sb/tui_commands.go`); `/queue` names
+what waits behind a running turn; and a bell with a marked terminal
+title says when a parked session needs its person. What this
 document deliberately does not claim is user-adoption evidence: the
 neighbors have communities and this tool is new, and no benchmark
 substitutes for that.
@@ -191,15 +224,17 @@ Switchboard now concedes nothing: the converged skeleton is fully present
 (tools, MCP on both transports, hooks, subagents with named definitions,
 custom commands, skills that load the neighbors' own packs, availability
 fallbacks, per-turn undo, session fork with named pins, structural search,
-and language-server symbol lookup), and
-on top of it sit eleven axes — evidence-based routing with `/why`,
+web search and fetch, and language-server symbol lookup), and
+on top of it sit twelve axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
 verified-or-absent sandboxing, delegation priced on the ladder, the
 `/race` paired trial whose verdicts feed that harness, the `/watch`
 verifier that speaks in deltas and moves the ladder, the byte-identical
-`/retry` whose verdicts join the same corpus, and the outbound credential
-gate — where the neighbors have no counterpart at all.
+`/retry` whose verdicts join the same corpus, the outbound credential
+gate that covers the web tools' egress, and the tracked cache belief
+with its `/cache` surface — where the neighbors have no counterpart at
+all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
