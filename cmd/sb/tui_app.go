@@ -183,10 +183,7 @@ func (a *tuiApp) moveTo(rank int, why string) {
 	a.loop.Target = probed.Target
 	a.loop.Provider = client
 	a.loop.Cache = cacheFor(probed.Target, a.catalog)
-	a.p.Send(tierNowMsg{line: "now on " + a.tierLine(), rank: a.rankOf(probed)})
-	if abandoned != "" {
-		a.p.Send(noticeMsg{level: "", text: abandoned})
-	}
+	a.p.Send(tierNowMsg{line: "now on " + a.tierLine(), rank: a.rankOf(probed), abandoned: abandoned})
 }
 
 // bind moves the loop onto a session, tier, and client, and rebuilds the

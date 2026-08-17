@@ -62,6 +62,11 @@ type turnDoneMsg struct {
 type tierNowMsg struct {
 	line string
 	rank int // destination rung, for the junction marker's heat color
+
+	// abandoned is the priced warmth the move left behind, "" when there
+	// was nothing honest to price. It rides the same message as the move
+	// so the two facts cannot arrive apart, and /why keeps them together.
+	abandoned string
 }
 type tierSwitchMsg struct {
 	tier   config.Tier
@@ -502,10 +507,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tierNowMsg:
 		// The policy moved the primary mid-turn: the junction marker wears
 		// the destination rung's heat, the same color every routing surface
-		// speaks.
+		// speaks. The warmth the move priced rides beside it, in the
+		// transcript and in /why's record both.
 		m.tr.finalize(m.tr.last())
 		m.tr.add(&entry{kind: kindNotice, level: "route", text: msg.line, rank: msg.rank})
 		m.routeLog = append(m.routeLog, msg.line)
+		if msg.abandoned != "" {
+			m.addInfo(msg.abandoned)
+			m.routeLog = append(m.routeLog, msg.abandoned)
+		}
 		m.recordMove(msg.rank)
 		m.tierLine = m.app.tierLine()
 		m.refreshCtxWindow()
@@ -928,6 +938,7 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 	m.app.loop.Cache = cacheFor(msg.tier.Target, m.app.catalog)
 	if abandoned != "" {
 		m.addInfo(abandoned)
+		m.routeLog = append(m.routeLog, abandoned)
 	}
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
@@ -1085,6 +1096,9 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 		m.tr.add(&entry{kind: kindNotice, level: "route", text: "now on " + m.tierLine,
 			rank: m.app.rankOf(msg.tier)})
 		m.routeLog = append(m.routeLog, "you switched to "+msg.tier.ID)
+		if abandoned != "" {
+			m.routeLog = append(m.routeLog, abandoned)
+		}
 		m.cacheSwitchNote(msg.tier, abandoned)
 		return nil
 	}
