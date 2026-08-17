@@ -48,6 +48,7 @@ func commands() []commandItem {
 		{name: "find", usage: "<text>", desc: "search this workspace's recorded sessions for what was said", busySafe: true, run: cmdFind},
 		{name: "cache", desc: "what the provider is believed to hold warm, and the evidence", run: cmdCache},
 		{name: "notify", usage: "[on|off]", desc: "ring the bell when a turn finishes or an approval waits", busySafe: true, run: cmdNotify},
+		{name: "queue", usage: "[clear]", desc: "what is waiting to run after this turn", busySafe: true, run: cmdQueue},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|auto|at]", desc: "summarize into a fresh context; auto-compacts near the window", run: cmdCompact},
 		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
@@ -130,7 +131,7 @@ keys
   ctrl+f           search the transcript
   shift+tab        cycle permission mode ctrl+t             tier picker
   ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
-  ctrl+o           expand the last route or tool entry
+  ctrl+o           expand the last route or tool entry; clicking one expands it too
   esc              interrupt the turn    ctrl+c ctrl+c      exit
   pgup/pgdn        scroll                mouse wheel        scroll`)
 	m.addInfo(b.String())
@@ -693,6 +694,35 @@ func (m *tuiModel) setTheme(dark bool) {
 	m.th = themeFor(dark)
 	m.md.setDark(dark)
 	m.tr.setTheme(m.th)
+}
+
+// cmdQueue shows what waits behind the running turn, because a prompt that
+// silently queued is a prompt the user may believe was lost. clear empties
+// it; a queued prompt was never sent, so dropping it erases nothing.
+func cmdQueue(m *tuiModel, args string) tea.Cmd {
+	switch strings.TrimSpace(args) {
+	case "":
+		if len(m.queue) == 0 {
+			return noticeCmd("", "nothing is queued")
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d queued, in order:\n", len(m.queue))
+		for i, q := range m.queue {
+			fmt.Fprintf(&b, "  %d. %s\n", i+1, truncate(firstLine(q), 70))
+		}
+		b.WriteString("  /queue clear drops them")
+		m.addInfo(strings.TrimRight(b.String(), "\n"))
+		return nil
+	case "clear":
+		n := len(m.queue)
+		m.queue = nil
+		if n == 0 {
+			return noticeCmd("", "nothing was queued")
+		}
+		return noticeCmd("", fmt.Sprintf("dropped %d queued prompt(s); none had been sent", n))
+	default:
+		return noticeCmd("error", "/queue shows what waits; /queue clear drops it")
+	}
 }
 
 // cmdNotify flips the bell. The setting persists the way /theme does: the

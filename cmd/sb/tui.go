@@ -414,6 +414,18 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tr.scrollBy(3)
 		case tea.MouseButtonWheelDown:
 			m.tr.scrollBy(-3)
+		case tea.MouseButtonLeft:
+			// A click on a tool rail or a route line toggles it, the same
+			// toggle ctrl+o applies to the most recent one: the transcript
+			// is directly manipulable where it has something to show.
+			if msg.Action == tea.MouseActionPress && m.dlg == nil {
+				if i := m.tr.entryAt(msg.Y); i >= 0 {
+					if e := m.tr.entries[i]; e.kind == kindTool || e.kind == kindRoute {
+						e.expanded = !e.expanded
+						m.tr.invalidate(i)
+					}
+				}
+			}
 		}
 		return m, nil
 

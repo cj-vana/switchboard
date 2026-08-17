@@ -130,8 +130,11 @@ next turn. A trailing `\` continues the line, ctrl+g opens the prompt in
 ctrl+f searches the transcript itself — the alternate screen hides the
 conversation from the terminal's own search, so the TUI carries one:
 newest match first, the page margin marking every hit, esc leaving you at
-the match it found. Messages sent mid-turn queue and run when the turn
-finishes.
+the match it found. Tool rails and route lines expand with ctrl+o or a
+mouse click on the line itself. Messages sent mid-turn queue and run when
+the turn finishes; /queue shows what waits and /queue clear drops it,
+because a prompt that silently queued is a prompt you may believe was
+lost.
 
 Beyond the expected commands, a few are Switchboard's own:
 

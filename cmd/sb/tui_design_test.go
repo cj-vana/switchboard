@@ -199,3 +199,42 @@ func TestTitleNamesWorkspaceAndTierAndMarksWork(t *testing.T) {
 		t.Fatal("an unchanged title was rewritten; the memo should keep quiet")
 	}
 }
+
+// A click lands where the view says it does: entryAt mirrors the viewport
+// math, so clicking a tool rail toggles that rail and a click below the
+// content toggles nothing.
+func TestClickMapsToTheEntryOnThatRow(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	m := testModel(t)
+	m.tr.reset()
+	m.tr.add(&entry{kind: kindInfo, text: "one line"})
+	tool := m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: "exec", desc: "go test", done: true, took: time.Second, detail: "ok\nmore"}})
+	m.tr.view(10)
+
+	toolStart := m.tr.starts[m.tr.indexOf(tool)]
+	if got := m.tr.entryAt(toolStart); got != m.tr.indexOf(tool) {
+		t.Fatalf("the tool's first row maps to entry %d, want %d", got, m.tr.indexOf(tool))
+	}
+	if got := m.tr.entryAt(9); got != -1 {
+		t.Fatalf("a click on bottom padding mapped to entry %d, want none", got)
+	}
+	if got := m.tr.entryAt(-1); got != -1 {
+		t.Fatal("a row outside the viewport mapped to an entry")
+	}
+}
+
+// Queued prompts are visible and droppable: a prompt that silently queued
+// is a prompt the user may believe was lost.
+func TestQueueShowsAndClears(t *testing.T) {
+	m := testModel(t)
+	m.queue = []string{"first waiting prompt", "second waiting prompt"}
+	cmdQueue(m, "")
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "2 queued") || !strings.Contains(joined, "second waiting") {
+		t.Fatalf("/queue did not list the queue:\n%s", joined)
+	}
+	cmdQueue(m, "clear")
+	if len(m.queue) != 0 {
+		t.Fatal("/queue clear left prompts queued")
+	}
+}

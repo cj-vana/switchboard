@@ -560,6 +560,32 @@ func (t *transcript) lastExpandable() int {
 	return -1
 }
 
+// entryAt maps a viewport row from the last view to its entry index, -1
+// outside the content: what a mouse click lands on. The math mirrors view's
+// own window, so the two cannot disagree about what a row shows.
+func (t *transcript) entryAt(row int) int {
+	if t.height <= 0 || row < 0 || row >= t.height {
+		return -1
+	}
+	end := len(t.flat) - t.offset
+	start := end - t.height
+	if start < 0 {
+		start = 0
+	}
+	line := start + row
+	if line >= end || line >= len(t.flat) {
+		return -1
+	}
+	// starts is ascending; the entry owning the line is the last one that
+	// begins at or before it.
+	for i := len(t.starts) - 1; i >= 0; i-- {
+		if t.starts[i] <= line {
+			return i
+		}
+	}
+	return -1
+}
+
 func indentLines(style lipgloss.Style, lines []string, indent int) []string {
 	pad := strings.Repeat(" ", indent)
 	out := make([]string, len(lines))
