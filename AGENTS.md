@@ -446,6 +446,23 @@ once per completed block through glamour, completed entries cache per width so
 repaints never re-render markdown, and diffs highlight once at load. Keep it
 that way.
 
+The TUI's look has its own invariants, pinned by the design tests. The
+transcript anchors at the top and scrolling clamps to the content, so a
+short session never floats above empty rows and never scrolls past itself.
+The composer never paints the bubbles textarea's default cursor-line
+background — that slab reads as a broken artifact on any tinted terminal —
+and its frame takes the permission mode's color when the mode is anything
+but default. The status bar sheds luxuries before facts on a narrow
+terminal, in order: sparkline, clock, effort, routing dots; the mode, the
+spend, and the context number never leave. The routing-history dots are
+fed by every rebind, whoever asked for it, because they must agree with
+/why about how much the session moved. The streaming rate is chars over
+four and its readout says ~ because it is an estimate, not a count a
+provider reported. The turn verdict closes a tool rail with └ only when a
+rail is directly above it; after prose the corner would hang from nothing.
+docs/tui.svg is generated, not drawn: `SB_FRAMES=<dir> go test ./cmd/sb/
+-run TestCaptureFrames` renders the frames from the real view code.
+
 Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
 hooks, the workspace-trust flow, named subagent definitions, skills —
 along with the `glob`/`grep`/`todo` tools and phase 6's `delegate`, each

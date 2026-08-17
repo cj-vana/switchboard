@@ -59,7 +59,10 @@ type turnDoneMsg struct {
 	err   error
 	after session.State
 }
-type tierNowMsg struct{ line string }
+type tierNowMsg struct {
+	line string
+	rank int // destination rung, for the junction marker's heat color
+}
 type tierSwitchMsg struct {
 	tier   config.Tier
 	client provider.Provider
@@ -129,6 +132,22 @@ type tuiModel struct {
 	callTokens      int
 	ctxWindow       int
 	updateAvail     string
+
+	// moves is every rung the session landed on after a switch, in order:
+	// the status bar's routing-history dots. /why keeps the reasons; this
+	// keeps the shape of the day.
+	moves []int
+
+	// sessionAt anchors the status clock: how long this session has been
+	// open, not how long a turn has run.
+	sessionAt time.Time
+
+	// The streaming-rate sparkline: samples holds recent tokens-per-second
+	// estimates (chars/4, which is why the readout says ~), tokChars counts
+	// stream bytes since tokAt.
+	samples  []float64
+	tokChars int
+	tokAt    time.Time
 
 	history   []string
 	histIdx   int
@@ -320,15 +339,20 @@ func themeFor(dark bool) *theme {
 }
 
 // newTextarea builds the prompt box: enter submits, newline is a modifier
-// chord, and the box grows with its content.
+// chord, and the box grows with its content. The bubbles defaults paint the
+// cursor line with their own background; that slab is cleared here and the
+// composer's frame does the marking instead.
 func newTextarea() textarea.Model {
 	ta := textarea.New()
-	ta.Prompt = "▌ "
+	ta.Prompt = "› "
+	ta.Placeholder = "describe a task · / commands · @ files · ! shell"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	ta.SetHeight(1)
-	ta.SetWidth(98)
+	ta.SetWidth(94)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.Focus()
 	return ta
 }
@@ -340,15 +364,16 @@ func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiMo
 		app.watchSt = &watchState{}
 	}
 	m := &tuiModel{
-		app:      app,
-		th:       th,
-		md:       md,
-		ta:       ta,
-		spin:     spinner.New(spinner.WithSpinner(spinner.Dot)),
-		tierLine: app.tierLine(),
-		mode:     app.loop.Perms.Mode(),
-		history:  loadHistory(app.workspace),
-		custom:   loadCustomCommands(app.workspace),
+		app:       app,
+		th:        th,
+		md:        md,
+		ta:        ta,
+		spin:      spinner.New(spinner.WithSpinner(spinner.Dot)),
+		tierLine:  app.tierLine(),
+		mode:      app.loop.Perms.Mode(),
+		history:   loadHistory(app.workspace),
+		custom:    loadCustomCommands(app.workspace),
+		sessionAt: time.Now(),
 	}
 	m.histIdx = len(m.history)
 	m.tr = newTranscript(100, th, md)
@@ -365,7 +390,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.tr.setWidth(msg.Width)
-		m.ta.SetWidth(msg.Width - 4) // margin and the prompt gutter
+		m.ta.SetWidth(msg.Width - 6) // margin, frame, and padding
 		return m, nil
 
 	case tea.MouseMsg:
@@ -388,6 +413,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.busy {
 			var cmd tea.Cmd
 			m.spin, cmd = m.spin.Update(msg)
+			m.sampleRate()
 			return m, cmd
 		}
 		return m, nil
@@ -444,8 +470,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onTurnDone(msg)
 
 	case tierNowMsg:
-		m.addInfo(msg.line)
+		// The policy moved the primary mid-turn: the junction marker wears
+		// the destination rung's heat, the same color every routing surface
+		// speaks.
+		m.tr.finalize(m.tr.last())
+		m.tr.add(&entry{kind: kindNotice, level: "route", text: msg.line, rank: msg.rank})
 		m.routeLog = append(m.routeLog, msg.line)
+		m.recordMove(msg.rank)
 		m.tierLine = m.app.tierLine()
 		m.refreshCtxWindow()
 		return m, nil
@@ -829,6 +860,7 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 	m.app.loop.Cache = cacheFor(msg.tier.Target, m.app.catalog)
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
+	m.recordMove(m.app.rankOf(msg.tier))
 
 	m.addUser(msg.prompt)
 	m.beginTurn(msg.prompt)
@@ -883,14 +915,19 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 	m.app.route = nil // the opening decision describes the opening choice only
 
 	// The working line's past tense: what ran, for how long, on how many
-	// tokens, said once and left in the record.
+	// tokens, said once and left in the record. It speaks the rail's own
+	// verdict language, closing the rail when one is open directly above.
 	if msg.err == nil {
-		done := fmt.Sprintf("%s worked %s", m.turnStarted.ID, time.Since(m.started).Round(time.Second))
+		done := fmt.Sprintf("%s · %s", m.turnStarted.ID, time.Since(m.started).Round(time.Second))
 		if m.turnIn+m.turnOut > 0 {
 			done += fmt.Sprintf(" · ↓%s ↑%s tokens", compact(m.turnIn), compact(m.turnOut))
 		}
-		m.addInfo(done)
+		last := m.tr.last()
+		m.tr.add(&entry{kind: kindNotice, level: "done", text: done,
+			rank: m.activeRank(), rail: last != nil && last.kind == kindTool})
 	}
+	m.samples = nil
+	m.tokChars, m.tokAt = 0, time.Time{}
 
 	switch {
 	case errors.Is(msg.err, context.Canceled):
@@ -968,8 +1005,10 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 	m.app.bind(msg.tier, msg.client, true)
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
+	m.recordMove(m.app.rankOf(msg.tier))
 	if !msg.silent {
-		m.addInfo("now on " + m.tierLine)
+		m.tr.add(&entry{kind: kindNotice, level: "route", text: "now on " + m.tierLine,
+			rank: m.app.rankOf(msg.tier)})
 		m.routeLog = append(m.routeLog, "you switched to "+msg.tier.ID)
 		m.cacheSwitchNote(msg.tier)
 		return nil
@@ -1008,6 +1047,10 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	// the same contract resume enforces by starting a fresh process.
 	m.app.loop.Tools.ForgetAllVersions()
 	m.tr.reset()
+	// A new log is a new day for the routing dots and the clock; a resumed
+	// session's earlier moves live in its record, not the bar.
+	m.moves = nil
+	m.sessionAt = time.Now()
 	m.addBanner(msg.sess, !msg.fresh)
 	if !msg.fresh {
 		m.replayHistory(msg.sess.State())
@@ -1071,6 +1114,7 @@ func (m *tuiModel) replayHistory(state session.State) {
 // --- transcript events -----------------------------------------------------
 
 func (m *tuiModel) onDelta(msg deltaMsg) {
+	m.tokChars += len(msg.text)
 	last := m.tr.last()
 	want := kindAssistant
 	if msg.thinking {
@@ -1202,6 +1246,10 @@ func (m *tuiModel) View() string {
 	if m.busy {
 		chrome++
 	}
+	rail := m.height >= 15 // a short pane spends its rows on content
+	if rail {
+		chrome++
+	}
 	transH := m.height - lipgloss.Height(inputZone) - chrome
 	if transH < 1 {
 		transH = 1
@@ -1211,26 +1259,47 @@ func (m *tuiModel) View() string {
 	if m.busy {
 		parts = append(parts, m.workingLine())
 	}
+	if rail {
+		parts = append(parts, m.ctxRail())
+	}
 	parts = append(parts, m.statusLine())
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// inputZoneView is the composer, framed the way the shipping consensus
-// converged after every team abandoned the input box: no border to pollute
-// copy-paste, a prompt bar in the active rung's color — what you type is
-// marked the way it will appear in the transcript — and a single rule
-// underneath as the surface's bottom edge. Popups dock above the prompt.
+// inputZoneView is the composer: a rounded frame one shade off the page,
+// the cursor in the active rung's heat — what you type is marked with the
+// color it will run on — and the frame itself takes the permission mode's
+// color the moment the mode is anything but default, so a widened posture
+// is visible at the exact place the next instruction is typed. Popups dock
+// above the frame.
 func (m *tuiModel) inputZoneView() string {
 	if m.dlg != nil {
 		return m.dlg.view(m.width, m.th)
 	}
 
-	promptStyle := m.th.user
-	if rank := m.activeRank(); rank >= 0 && !m.busy {
-		promptStyle = m.th.rung(rank)
-	}
-	m.ta.FocusedStyle.Prompt = promptStyle
+	m.ta.FocusedStyle.Prompt = m.th.faint
 	m.ta.BlurredStyle.Prompt = m.th.faint
+	m.ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	m.ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	m.ta.FocusedStyle.Placeholder = m.th.faint
+	m.ta.BlurredStyle.Placeholder = m.th.faint
+	if rank := m.activeRank(); rank >= 0 && !m.busy {
+		m.ta.Cursor.Style = lipgloss.NewStyle().Foreground(m.th.rung(rank).GetForeground())
+	} else {
+		m.ta.Cursor.Style = lipgloss.NewStyle()
+	}
+
+	frame := m.th.border.GetForeground()
+	if m.mode != permission.ModeDefault {
+		if chip, ok := m.th.modeChip[string(m.mode)]; ok {
+			frame = chip.GetBackground()
+		}
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(frame).
+		Padding(0, 1).
+		Width(max(m.width-4, 20))
 
 	var parts []string
 	switch {
@@ -1241,7 +1310,7 @@ func (m *tuiModel) inputZoneView() string {
 	case m.mentionsVisible():
 		parts = append(parts, m.mentionsView())
 	}
-	parts = append(parts, m.ta.View(), m.th.faint.Render(strings.Repeat("─", max(m.width-2, 10))))
+	parts = append(parts, box.Render(m.ta.View()))
 
 	lines := strings.Split(lipgloss.JoinVertical(lipgloss.Left, parts...), "\n")
 	for i, l := range lines {
@@ -1253,29 +1322,58 @@ func (m *tuiModel) inputZoneView() string {
 // workVerbs are the operator's verbs: what the person behind a switchboard
 // did all day. One is chosen every few seconds of a running turn, so the
 // working line has a pulse beyond the spinner without inventing progress.
-var workVerbs = []string{"patching", "routing", "switching", "relaying", "bridging", "ringing", "connecting", "listening"}
+var workVerbs = []string{"patching through", "on the line", "connecting", "holding the line", "splicing"}
 
 // workingLine is the row that appears under the input while a turn runs:
-// spinner, who, what, elapsed, the way out. The spinner and the rung name
-// wear the active rung's heat, so "who is working" is answered by color
-// before it is answered by text. Token counts live in the completion line
-// and /cost; six segments animating against a timer was five too many.
+// spinner and verb in the active rung's heat, then the rung and the clock,
+// then the way out. Color answers "who is working" before text does. Token
+// counts live in the completion line and /cost.
 func (m *tuiModel) workingLine() string {
-	verb := workVerbs[int(time.Since(m.started).Seconds()/3)%len(workVerbs)]
-	who := verb + "…"
-	spin := m.spin.View()
+	verb := workVerbs[int(time.Since(m.started).Seconds()/4)%len(workVerbs)]
+	who := m.spin.View() + " " + verb
+	mid := ""
 	if rank := m.activeRank(); rank >= 0 {
-		who = m.app.tier.ID + " " + verb + "…"
-		spin = m.th.rung(rank).Render(spin)
 		who = m.th.rung(rank).Render(who)
+		mid = m.th.dim.Render(" · " + m.app.tier.ID)
 	}
 	elapsed := time.Since(m.started).Round(time.Second)
-	line := fmt.Sprintf(" %s %s %s", spin, who, m.th.dim.Render(elapsed.String()))
+	line := " " + who + mid + m.th.dim.Render(" · "+elapsed.String())
 	line += m.th.faint.Render("  esc interrupts")
 	if len(m.queue) > 0 {
 		line += m.th.faint.Render(fmt.Sprintf("  %d queued", len(m.queue)))
 	}
 	return line
+}
+
+// recordMove appends a landed switch to the session's routing history, the
+// status bar's dots. Every rebind counts, however it was asked for: the dots
+// have to agree with /why about how much the session moved.
+func (m *tuiModel) recordMove(rank int) {
+	if rank < 0 {
+		return
+	}
+	m.moves = append(m.moves, rank)
+}
+
+// sampleRate folds the stream bytes seen since the last sample into a
+// tokens-per-second estimate for the sparkline. Chars over four is an
+// estimate and the readout marks it as one.
+func (m *tuiModel) sampleRate() {
+	if m.tokAt.IsZero() {
+		m.tokAt = time.Now()
+		return
+	}
+	since := time.Since(m.tokAt)
+	if since < 400*time.Millisecond {
+		return
+	}
+	rate := float64(m.tokChars) / 4 / since.Seconds()
+	m.samples = append(m.samples, rate)
+	if len(m.samples) > 10 {
+		m.samples = m.samples[len(m.samples)-10:]
+	}
+	m.tokChars = 0
+	m.tokAt = time.Now()
 }
 
 func itoa(n int) string { return fmt.Sprint(n) }

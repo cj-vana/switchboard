@@ -60,17 +60,23 @@ func (m *tuiModel) suggestionsView() string {
 		}
 	}
 
+	// The selected row is one object: the highlight runs the row's full
+	// width, name and description together, the way every picker in the
+	// terminal-tool generation the user's hands know behaves.
 	var rows []string
 	for i, it := range shown {
 		name := "/" + it.name
 		if it.usage != "" {
 			name += " " + it.usage
 		}
-		row := " " + padRight(name, width+2) + m.th.dim.Render(it.desc)
 		if start+i == m.sugSel {
-			row = m.th.selected.Render(padRight(" "+name, width+2)) + m.th.dim.Render(it.desc)
+			on := func(s lipgloss.Style) lipgloss.Style { return s.Background(m.th.selected.GetBackground()) }
+			rows = append(rows, m.th.accent.Render("▌")+
+				on(m.th.bold).Render(padRight(name, width+2))+
+				on(m.th.dim).Render(padRight(it.desc, max(m.width-width-5, 0))))
+			continue
 		}
-		rows = append(rows, row)
+		rows = append(rows, " "+padRight(name, width+2)+m.th.dim.Render(it.desc))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

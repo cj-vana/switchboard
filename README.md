@@ -107,6 +107,16 @@ they are the same thing teaches it the wrong lesson about two of them.
 
 ## In a session
 
+The frame around the prompt wears the permission mode's color the moment
+the mode is anything but default, and the cursor wears the active rung's,
+so what you are about to type shows where and under what rules it will
+run. The status bar is the routing readout at rest: the session's moves as
+one heat-colored dot each, the whole ladder as a strip with the active
+rung raised, a streaming sparkline with a tokens-per-second estimate while
+a turn runs, spend in the metering's own words, context occupancy as a
+number and as the thin rail above the bar, and how long the session has
+been open. When the terminal narrows, luxuries leave before facts.
+
 The input grammar is the one the neighboring tools converged on. `@path`
 completes file names and attaches contents; mention a screenshot and it
 attaches as an image, provided the active rung has evidence of taking

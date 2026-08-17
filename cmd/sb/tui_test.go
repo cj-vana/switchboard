@@ -57,7 +57,7 @@ func testModel(t *testing.T) *tuiModel {
 func TestStatusLineShowsRouteAtRest(t *testing.T) {
 	m := testModel(t)
 	view := m.View()
-	for _, want := range []string{"t1 light", "ollama/local/test:7b", "default", "unpriced"} {
+	for _, want := range []string{"t1 · light", "ollama/local/test:7b", "default", "unpriced"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("status line missing %q:\n%s", want, view)
 		}

@@ -1,79 +1,86 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="812" height="610" viewBox="0 0 812 610" font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
-<rect width="812" height="610" rx="8" fill="#101114"/>
-<rect x="23.8" y="271.0" width="15.6" height="17" fill="#262626"/>
-<rect x="39.4" y="271.0" width="756.6" height="17" fill="#262626"/>
-<rect x="343.6" y="492.0" width="117.0" height="17" fill="#303030"/>
-<rect x="16.0" y="577.0" width="70.2" height="17" fill="#af5fd7"/>
-<rect x="86.2" y="577.0" width="163.8" height="17" fill="#1c1c1c"/>
-<rect x="250.0" y="577.0" width="140.4" height="17" fill="#1c1c1c"/>
-<rect x="390.4" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
-<rect x="398.2" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
-<rect x="406.0" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
-<rect x="413.8" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
-<rect x="421.6" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
-<rect x="437.2" y="577.0" width="54.6" height="17" fill="#1c1c1c"/>
-<rect x="491.8" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
-<rect x="507.4" y="577.0" width="78.0" height="17" fill="#1c1c1c"/>
-<rect x="585.4" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
-<rect x="601.0" y="577.0" width="62.4" height="17" fill="#1c1c1c"/>
-<rect x="663.4" y="577.0" width="15.6" height="17" fill="#1c1c1c"/>
-<rect x="679.0" y="577.0" width="78.0" height="17" fill="#1c1c1c"/>
-<rect x="757.0" y="577.0" width="31.2" height="17" fill="#1c1c1c"/>
-<rect x="788.2" y="577.0" width="7.8" height="17" fill="#1c1c1c"/>
-<text x="23.8" y="147.5" fill="#5fafaf" xml:space="preserve">▌ </text>
-<text x="39.4" y="147.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">switchboard</text>
-<text x="23.8" y="164.5" fill="#5fafaf" xml:space="preserve">▌ t1</text>
-<text x="70.6" y="164.5" fill="#d0d0d0" xml:space="preserve">qwen3.5:9b-mlx           </text>
-<text x="281.2" y="164.5" fill="#4e4e4e" xml:space="preserve">unpriced</text>
-<text x="39.4" y="181.5" fill="#5f87d7" xml:space="preserve">t2</text>
-<text x="70.6" y="181.5" fill="#d0d0d0" xml:space="preserve">qwen3.8:27b-mlx          </text>
-<text x="281.2" y="181.5" fill="#4e4e4e" xml:space="preserve">unpriced</text>
-<text x="39.4" y="198.5" fill="#af5fd7" xml:space="preserve">t3</text>
-<text x="70.6" y="198.5" fill="#d0d0d0" xml:space="preserve">kimi-for-coding-highspeed</text>
-<text x="281.2" y="198.5" fill="#4e4e4e" xml:space="preserve">unpriced</text>
-<text x="39.4" y="215.5" fill="#d7875f" xml:space="preserve">t4</text>
-<text x="70.6" y="215.5" fill="#d0d0d0" xml:space="preserve">gpt-5.6-sol              </text>
-<text x="281.2" y="215.5" fill="#4e4e4e" xml:space="preserve">unpriced</text>
-<text x="23.8" y="232.5" fill="#4e4e4e" xml:space="preserve">  /tmp/ws · default · no verified sandbox: every command needs approval ()</text>
-<text x="23.8" y="249.5" fill="#4e4e4e" xml:space="preserve">  session 20260816T030943.447002-637b0b39 · /help for commands</text>
-<text x="23.8" y="283.5" fill="#ffffaf" font-weight="600" xml:space="preserve">▌ </text>
-<text x="39.4" y="283.5" fill="#d0d0d0" xml:space="preserve">fix the failing test in internal/config and explain what broke                                   </text>
-<text x="23.8" y="317.5" fill="#5fafaf" xml:space="preserve">◆ </text>
-<text x="39.4" y="317.5" fill="#8a8a8a" xml:space="preserve">t1 via heuristic (short prompt, tools needed)</text>
-<text x="23.8" y="334.5" fill="#5fafaf" xml:space="preserve">│ </text>
-<text x="39.4" y="334.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">exec</text>
-<text x="70.6" y="334.5" fill="#8a8a8a" xml:space="preserve"> go test ./internal/config/</text>
-<text x="23.8" y="351.5" fill="#5fafaf" xml:space="preserve">└ </text>
-<text x="39.4" y="351.5" fill="#ff0000" xml:space="preserve">✗ 3s</text>
-<text x="23.8" y="368.5" fill="#ff0000" xml:space="preserve">    FAIL: TestSaveRoundTrips (0.01s)</text>
-<text x="23.8" y="385.5" fill="#00afff" xml:space="preserve">◆ </text>
-<text x="39.4" y="385.5" fill="#8a8a8a" xml:space="preserve">escalated: two tool errors in a row</text>
-<text x="23.8" y="402.5" fill="#af5fd7" xml:space="preserve">◆ </text>
-<text x="39.4" y="402.5" fill="#8a8a8a" xml:space="preserve">moved to t3 (error spike)</text>
-<text x="23.8" y="419.5" fill="#af5fd7" xml:space="preserve">│ </text>
-<text x="39.4" y="419.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">edit</text>
-<text x="70.6" y="419.5" fill="#8a8a8a" xml:space="preserve"> internal/config/save.go</text>
-<text x="23.8" y="436.5" fill="#af5fd7" xml:space="preserve">└ </text>
-<text x="39.4" y="436.5" fill="#00d787" xml:space="preserve">✓</text>
-<text x="47.2" y="436.5" fill="#8a8a8a" xml:space="preserve"> 1s · 1 replacement</text>
-<text x="23.8" y="453.5" fill="#00afff" xml:space="preserve">◇ </text>
-<text x="39.4" y="453.5" fill="#8a8a8a" xml:space="preserve">The failure is the omitempty tag, not the encoder; check the struct tags before rerunning the</text>
-<text x="39.4" y="470.5" fill="#8a8a8a" xml:space="preserve">suite.</text>
-<text x="23.8" y="504.5" fill="#d0d0d0" xml:space="preserve">Fixed. The round-trip test broke because </text>
-<text x="343.6" y="504.5" fill="#ff5f5f" xml:space="preserve"> updates.check </text>
-<text x="460.6" y="504.5" fill="#d0d0d0" xml:space="preserve"> serialized explicitly;</text>
-<text x="23.8" y="521.5" fill="#d0d0d0" xml:space="preserve">the tag now omits it.                                                         </text>
-<text x="16.0" y="555.5" fill="#d0d0d0" xml:space="preserve"> ▌                                                                                                  </text>
-<text x="23.8" y="572.5" fill="#4e4e4e" xml:space="preserve">──────────────────────────────────────────────────────────────────────────────────────────────────</text>
-<text x="16.0" y="589.5" fill="#262626" font-weight="600" xml:space="preserve"> t3 kimi </text>
-<text x="86.2" y="589.5" fill="#8a8a8a" xml:space="preserve"> ollama/local/test:7b</text>
-<text x="390.4" y="589.5" fill="#5fafaf" xml:space="preserve">▂</text>
-<text x="398.2" y="589.5" fill="#5f87d7" xml:space="preserve">▂</text>
-<text x="406.0" y="589.5" fill="#af5fd7" xml:space="preserve">█</text>
-<text x="413.8" y="589.5" fill="#d7875f" xml:space="preserve">▂</text>
-<text x="437.2" y="589.5" fill="#444444" xml:space="preserve">default</text>
-<text x="507.4" y="589.5" fill="#8a8a8a" xml:space="preserve">think high</text>
-<text x="601.0" y="589.5" fill="#00d787" xml:space="preserve">unpriced</text>
-<text x="679.0" y="589.5" fill="#00afff" xml:space="preserve">▓▓▓░░░░░░░</text>
-<text x="757.0" y="589.5" fill="#8a8a8a" xml:space="preserve"> 34%</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="812" height="606" viewBox="0 0 812 606" font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
+<rect width="812" height="606" rx="8" fill="#101114"/>
+<rect x="23.8" y="14.0" width="772.2" height="17" fill="#262626"/>
+<rect x="101.8" y="337.0" width="46.8" height="17" fill="#303030"/>
+<rect x="39.4" y="388.0" width="85.8" height="17" fill="#303030"/>
+<rect x="343.6" y="388.0" width="46.8" height="17" fill="#303030"/>
+<rect x="55.0" y="507.0" width="7.8" height="17" fill="#d0d0d0"/>
+<rect x="16.0" y="575.0" width="85.8" height="17" fill="#af5fd7"/>
+<rect x="101.8" y="575.0" width="694.2" height="17" fill="#1c1c1c"/>
+<text x="23.8" y="26.5" fill="#ffffaf" font-weight="600" xml:space="preserve">▌ </text>
+<text x="39.4" y="26.5" fill="#d0d0d0" xml:space="preserve">the runner test is flaky under -count=20; make it deterministic and explain the race             </text>
+<text x="23.8" y="60.5" fill="#6c6c6c" font-style="italic" xml:space="preserve">The failure is a wait on the process group racing the reaper; reading the runner first.</text>
+<text x="23.8" y="77.5" fill="#5fafaf" xml:space="preserve">│ </text>
+<text x="39.4" y="77.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">read</text>
+<text x="70.6" y="77.5" fill="#8a8a8a" xml:space="preserve"> internal/execution/runner_test.go</text>
+<text x="23.8" y="94.5" fill="#5fafaf" xml:space="preserve">└ </text>
+<text x="39.4" y="94.5" fill="#00d787" xml:space="preserve">✓</text>
+<text x="47.2" y="94.5" fill="#8a8a8a" xml:space="preserve"> 12ms</text>
+<text x="23.8" y="111.5" fill="#5fafaf" xml:space="preserve">│ </text>
+<text x="39.4" y="111.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">exec</text>
+<text x="70.6" y="111.5" fill="#8a8a8a" xml:space="preserve"> go test ./internal/execution/ -run TestRunner -count=20</text>
+<text x="23.8" y="128.5" fill="#5fafaf" xml:space="preserve">└ </text>
+<text x="39.4" y="128.5" fill="#ff0000" xml:space="preserve">✗ 9.2s</text>
+<text x="23.8" y="145.5" fill="#ff0000" xml:space="preserve">    --- FAIL: TestRunnerKillsDescendants (0.41s)</text>
+<text x="23.8" y="162.5" fill="#ff0000" xml:space="preserve">        runner_test.go:88: descendant survived the kill</text>
+<text x="23.8" y="179.5" fill="#ff0000" xml:space="preserve">    FAIL</text>
+<text x="23.8" y="196.5" fill="#af5fd7" xml:space="preserve">◆ </text>
+<text x="39.4" y="196.5" fill="#8a8a8a" xml:space="preserve">t1 → t3 via detector (same failure signature twice)</text>
+<text x="23.8" y="213.5" fill="#af5fd7" xml:space="preserve">│ </text>
+<text x="39.4" y="213.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">tasks</text>
+<text x="78.4" y="213.5" fill="#8a8a8a" xml:space="preserve"> 1/3</text>
+<text x="23.8" y="230.5" fill="#af5fd7" xml:space="preserve">│ </text>
+<text x="39.4" y="230.5" fill="#00d787" xml:space="preserve">✓ </text>
+<text x="55.0" y="230.5" fill="#8a8a8a" xml:space="preserve">reproduce the flake under -count=20</text>
+<text x="23.8" y="247.5" fill="#af5fd7" xml:space="preserve">│ </text>
+<text x="39.4" y="247.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">▸ close the wait/reap race in the runner</text>
+<text x="23.8" y="264.5" fill="#af5fd7" xml:space="preserve">└ </text>
+<text x="39.4" y="264.5" fill="#8a8a8a" xml:space="preserve">· rerun the suite and the race detector</text>
+<text x="23.8" y="298.5" fill="#af5fd7" xml:space="preserve">│ </text>
+<text x="39.4" y="298.5" fill="#d0d0d0" font-weight="600" xml:space="preserve">edit</text>
+<text x="70.6" y="298.5" fill="#8a8a8a" xml:space="preserve"> internal/execution/runner.go</text>
+<text x="23.8" y="315.5" fill="#af5fd7" xml:space="preserve">└ </text>
+<text x="39.4" y="315.5" fill="#00d787" xml:space="preserve">✓</text>
+<text x="47.2" y="315.5" fill="#8a8a8a" xml:space="preserve"> 40ms · 1 replacement</text>
+<text x="23.8" y="349.5" fill="#d0d0d0" xml:space="preserve">The race: </text>
+<text x="101.8" y="349.5" fill="#ff5f5f" xml:space="preserve"> Wait </text>
+<text x="148.6" y="349.5" fill="#d0d0d0" xml:space="preserve"> returns when the direct child exits, but the kill walks the process group        </text>
+<text x="23.8" y="366.5" fill="#d0d0d0" xml:space="preserve">afterwards, so a grandchild can outlive the assertion.                                            </text>
+<text x="23.8" y="400.5" fill="#d0d0d0" xml:space="preserve">• </text>
+<text x="39.4" y="400.5" fill="#ff5f5f" xml:space="preserve"> runner.go </text>
+<text x="125.2" y="400.5" fill="#d0d0d0" xml:space="preserve"> now reaps the group before </text>
+<text x="343.6" y="400.5" fill="#ff5f5f" xml:space="preserve"> Wait </text>
+<text x="390.4" y="400.5" fill="#d0d0d0" xml:space="preserve"> returns                                           </text>
+<text x="23.8" y="417.5" fill="#d0d0d0" xml:space="preserve">• the test polls process </text>
+<text x="218.8" y="417.5" fill="#d0d0d0" font-style="italic" xml:space="preserve">state</text>
+<text x="257.8" y="417.5" fill="#d0d0d0" xml:space="preserve">, not the pid table                                                 </text>
+<text x="23.8" y="451.5" fill="#d0d0d0" xml:space="preserve">Running the suite again to confirm.                                                               </text>
+<text x="23.8" y="485.5" fill="#00d787" xml:space="preserve">✓ </text>
+<text x="39.4" y="485.5" fill="#8a8a8a" xml:space="preserve">watch: go test ./internal/execution/ went green</text>
+<text x="23.8" y="502.5" fill="#00d787" xml:space="preserve">╭────────────────────────────────────────────────────────────────────────────────────────────────╮</text>
+<text x="23.8" y="519.5" fill="#00d787" xml:space="preserve">│</text>
+<text x="39.4" y="519.5" fill="#e5e5e5" xml:space="preserve">› </text>
+<text x="55.0" y="519.5" fill="#262626" xml:space="preserve">d</text>
+<text x="62.8" y="519.5" fill="#585858" xml:space="preserve">escribe a task · / commands · @ files · ! shell</text>
+<text x="780.4" y="519.5" fill="#00d787" xml:space="preserve">│</text>
+<text x="23.8" y="536.5" fill="#00d787" xml:space="preserve">╰────────────────────────────────────────────────────────────────────────────────────────────────╯</text>
+<text x="23.8" y="553.5" fill="#af5fd7" xml:space="preserve">⣾  holding the line</text>
+<text x="172.0" y="553.5" fill="#8a8a8a" xml:space="preserve"> · t3 · 14s</text>
+<text x="257.8" y="553.5" fill="#4e4e4e" xml:space="preserve">  esc interrupts</text>
+<text x="16.0" y="570.5" fill="#af5fd7" xml:space="preserve">▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁</text>
+<text x="273.4" y="570.5" fill="#303030" xml:space="preserve">▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁</text>
+<text x="16.0" y="587.5" fill="#262626" font-weight="600" xml:space="preserve"> t3 · kimi </text>
+<text x="101.8" y="587.5" fill="#8a8a8a" xml:space="preserve"> kimi/coding/kimi-f…</text>
+<text x="289.0" y="587.5" fill="#af5fd7" xml:space="preserve">•</text>
+<text x="312.4" y="587.5" fill="#5fafaf" xml:space="preserve">▂</text>
+<text x="320.2" y="587.5" fill="#5f87d7" xml:space="preserve">▂</text>
+<text x="328.0" y="587.5" fill="#af5fd7" xml:space="preserve">█</text>
+<text x="335.8" y="587.5" fill="#d7875f" xml:space="preserve">▂</text>
+<text x="359.2" y="587.5" fill="#af5fd7" xml:space="preserve">▂▃▄▆▅▆█▆▇▅</text>
+<text x="437.2" y="587.5" fill="#8a8a8a" xml:space="preserve"> ~42 tok/s</text>
+<text x="530.8" y="587.5" fill="#00d787" xml:space="preserve">acceptEdits</text>
+<text x="632.2" y="587.5" fill="#00d787" xml:space="preserve">plan</text>
+<text x="679.0" y="587.5" fill="#4e4e4e" xml:space="preserve">ctx </text>
+<text x="710.2" y="587.5" fill="#00afff" xml:space="preserve">33%</text>
+<text x="749.2" y="587.5" fill="#4e4e4e" xml:space="preserve">12:00</text>
 </svg>

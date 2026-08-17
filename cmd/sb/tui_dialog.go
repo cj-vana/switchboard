@@ -86,6 +86,13 @@ func (d *permissionDialog) view(width int, th *theme) string {
 		// byte-exact invocation; the label has to say what it grants.
 		always = "yes, and allow this tool for the rest of the session"
 	}
+	// The border states the stakes: accent for a routine ask, amber the moment
+	// the command leaves the sandbox. Color is information here, not chrome,
+	// and the selection bar speaks the same color as the frame.
+	frame := th.accent
+	if d.out.SandboxAbsent {
+		frame = th.warn
+	}
 	options := []string{
 		"yes",
 		always,
@@ -93,19 +100,12 @@ func (d *permissionDialog) view(width int, th *theme) string {
 	}
 	for i, opt := range options {
 		if i == d.sel {
-			b.WriteString(th.accent.Render(" ▌ ") + th.bold.Render(opt) + "\n")
+			b.WriteString(frame.Render(" ▌ ") + th.bold.Render(opt) + "\n")
 		} else {
 			b.WriteString(th.dim.Render("   "+opt) + "\n")
 		}
 	}
 	b.WriteString(th.faint.Render(" y yes · a always · n no · ↑↓ choose"))
-
-	// The border states the stakes: accent for a routine ask, amber the moment
-	// the command leaves the sandbox. Color is information here, not chrome.
-	frame := th.accent
-	if d.out.SandboxAbsent {
-		frame = th.warn
-	}
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(frame.GetForeground()).

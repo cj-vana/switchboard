@@ -23,11 +23,14 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 	if v := currentVersion(); v != "" {
 		brand += " " + th.dim.Render(v)
 	}
-	mark := th.accent
-	if activeRank >= 0 {
-		mark = th.rung(activeRank)
+	// The mark is the ladder itself: four ascending bars in the heat ramp,
+	// cool to warm. The product's thesis as its wordmark, and a mark no
+	// neighboring tool can wear, because nothing else routes.
+	mark := ""
+	for i, g := range []string{"▁", "▃", "▅", "▇"} {
+		mark += th.rung(i).Render(g)
 	}
-	lines := []string{mark.Render("▌ ") + brand}
+	lines := []string{mark + " " + brand, ""}
 
 	if len(app.config.Tiers) > 0 {
 		widest := 0

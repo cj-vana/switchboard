@@ -50,10 +50,16 @@ type entry struct {
 	tool toolEntry
 
 	level        string   // notice level
+	rail         bool     // a "done" notice closing a tool rail draws └
 	routeSummary string   // collapsed route line
 	routeLines   []string // the full decision record
 	todos        []tools.TodoItem
 	expanded     bool
+
+	// padTop marks an entry that opens with a blank line: a turn boundary
+	// (user card, first prose after rails) breathes. Decided once, at add
+	// time, when everything before it is final.
+	padTop bool
 
 	// rank is the ladder position this entry happened on, captured at
 	// creation so a t1-era line keeps t1's color after an escalation; -1
@@ -73,6 +79,7 @@ type transcript struct {
 	md    *markdown
 
 	offset int // lines scrolled up from the bottom
+	height int // the viewport view last drew, for the scroll clamp
 }
 
 func newTranscript(width int, th *theme, md *markdown) *transcript {
@@ -80,6 +87,12 @@ func newTranscript(width int, th *theme, md *markdown) *transcript {
 }
 
 func (t *transcript) add(e *entry) *entry {
+	// A user card or the turn's first prose opens with air. The decision is
+	// safe to bake into the cache because everything before this entry is
+	// already final when it arrives.
+	if (e.kind == kindUser || e.kind == kindAssistant) && len(t.flat) > 0 && t.flat[len(t.flat)-1] != "" {
+		e.padTop = true
+	}
 	t.entries = append(t.entries, e)
 	t.starts = append(t.starts, len(t.flat))
 	t.invalidate(len(t.entries) - 1)
@@ -179,6 +192,9 @@ func (t *transcript) composed(e *entry) []string {
 			lines[i] = " " + l
 		}
 	}
+	if e.padTop {
+		lines = append([]string{""}, lines...)
+	}
 	switch e.kind {
 	case kindTool, kindThinking, kindInfo:
 		return lines
@@ -216,7 +232,7 @@ func (t *transcript) renderUncached(e *entry) []string {
 	case kindTodo:
 		return t.renderTodo(e.todos, e.rank, w)
 	case kindNotice:
-		return t.renderNotice(e.level, e.text, w)
+		return t.renderNotice(e, w)
 	case kindRoute:
 		return t.renderRoute(e, w)
 	case kindRaw:
@@ -347,22 +363,40 @@ func (t *transcript) renderTodo(items []tools.TodoItem, rank int, w int) []strin
 // renderNotice speaks the transcript's glyph vocabulary: the glyph carries
 // the color and the severity, the text stays quiet. Word prefixes read as
 // debug output; a mark reads as the page's own voice.
-func (t *transcript) renderNotice(level, text string, w int) []string {
+func (t *transcript) renderNotice(e *entry, w int) []string {
 	style, glyph, body := t.th.dim, "·", t.th.dim
-	switch level {
+	switch e.level {
 	case "warn":
 		style, glyph, body = t.th.warn, "△", t.th.warn
 	case "error":
 		style, glyph, body = t.th.err, "✗", t.th.err
 	case "route":
+		// The junction marker wears the rung the move landed on; a route
+		// event with no destination rank stays on the accent.
 		style, glyph = t.th.accent, "◆"
+		if e.rank >= 0 {
+			style = t.th.rung(e.rank)
+		}
 	case "advisor":
 		style, glyph = t.th.accent, "◇"
 	case "watch":
 		style, glyph = t.th.ok, "✓"
+	case "done":
+		// The turn's closing verdict. It closes a tool rail with the rail's
+		// own └ when one is directly above; after prose it stands alone,
+		// because a corner with nothing over it reads as a broken rail.
+		rail := t.th.dim
+		if e.rank >= 0 {
+			rail = t.th.rung(e.rank)
+		}
+		lead := t.th.ok.Render("✓ ")
+		if e.rail {
+			lead = rail.Render("└ ") + t.th.ok.Render("✓ ")
+		}
+		return []string{lead + t.th.dim.Render(e.text)}
 	}
 	var lines []string
-	for i, l := range wrapPlain(text, max(w-2, 20)) {
+	for i, l := range wrapPlain(e.text, max(w-2, 20)) {
 		if i == 0 {
 			lines = append(lines, style.Render(glyph+" ")+body.Render(l))
 		} else {
@@ -395,10 +429,14 @@ func (t *transcript) renderRoute(e *entry, w int) []string {
 }
 
 // view returns the visible window. offset counts lines up from the bottom.
+// A transcript shorter than the viewport anchors at the top — the session
+// starts where the eye starts, and the empty rows fall below the content.
 func (t *transcript) view(height int) string {
 	if height <= 0 {
 		return ""
 	}
+	t.height = height
+	t.clampOffset()
 	total := len(t.flat)
 	end := total - t.offset
 	if end < 0 {
@@ -410,18 +448,31 @@ func (t *transcript) view(height int) string {
 	}
 	visible := t.flat[start:end]
 	if pad := height - len(visible); pad > 0 {
-		visible = append(make([]string, pad), visible...)
+		visible = append(append([]string(nil), visible...), make([]string, pad)...)
 	}
 	return strings.Join(visible, "\n")
 }
 
 func (t *transcript) scrollBy(n int) {
 	t.offset += n
+	t.clampOffset()
+}
+
+// clampOffset keeps the offset inside what can actually scroll: when the
+// whole transcript fits the viewport there is nothing to scroll past.
+func (t *transcript) clampOffset() {
+	limit := len(t.flat) - t.height
+	if t.height <= 0 {
+		limit = len(t.flat)
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	if t.offset > limit {
+		t.offset = limit
+	}
 	if t.offset < 0 {
 		t.offset = 0
-	}
-	if t.offset > len(t.flat) {
-		t.offset = len(t.flat)
 	}
 }
 
