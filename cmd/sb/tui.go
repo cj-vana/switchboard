@@ -229,6 +229,7 @@ func runTUI(
 	agentNotes []string,
 	budget *budgetState,
 	skillList []skills.Skill,
+	onboarded bool,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -266,6 +267,7 @@ func runTUI(
 		agentNotes: agentNotes,
 		skills:     skillList,
 		budget:     budget,
+		onboarded:  onboarded,
 	}
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()

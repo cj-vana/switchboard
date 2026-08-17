@@ -79,6 +79,12 @@ type tuiApp struct {
 	// contributes nothing at the injection seam.
 	watchSt *watchState
 
+	// onboarded marks a session opened straight out of the first-run
+	// wizard: the banner gets one extra line for the things a new user
+	// will not find alone, once, because the second session is not a
+	// first impression.
+	onboarded bool
+
 	obs *tuiObserver
 	p   *tea.Program
 }

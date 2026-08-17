@@ -62,6 +62,10 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 		th.faint.Render("  "+strings.Join(facts, " · ")),
 		th.faint.Render("  session "+state.ID+sessionNote(state, resumed)+" · /help for commands"),
 	)
+	if app.onboarded {
+		lines = append(lines, th.dim.Render(
+			"  first time here: shift+tab changes what runs without asking, /race compares two rungs, and sb completion zsh adds tab completion to your shell"))
+	}
 	if lost := sess.TruncatedBytes(); lost > 0 {
 		lines = append(lines, th.warn.Render(fmt.Sprintf(
 			"  recovered from an interrupted write; %d bytes at the end of the log were unreadable and were dropped", lost)))

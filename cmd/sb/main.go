@@ -243,11 +243,13 @@ func run() error {
 	// error: walk through binding t1 before anything needs a target. Every
 	// non-interactive path still gets the explanatory error from resolveTier,
 	// because a wizard on a pipe would hang whatever is driving it.
+	onboarded := false
 	if len(cfg.Tiers) == 0 && opts.model == "" && opts.resume == "" && !opts.cont &&
 		!opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		if err := runOnboarding(reg, cat, cfg); err != nil {
 			return err
 		}
+		onboarded = true
 	}
 
 	var chosen route.Decision
@@ -371,7 +373,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget, skillList)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget, skillList, onboarded)
 	}
 
 	// With -output json, stdout carries exactly one JSON line and nothing
