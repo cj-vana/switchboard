@@ -80,6 +80,12 @@ type transcript struct {
 
 	offset int // lines scrolled up from the bottom
 	height int // the viewport view last drew, for the scroll clamp
+
+	// marks overlays the one-cell page margin: flat line index to a
+	// pre-rendered single-cell marker. The search owns the map; the
+	// transcript only paints it, on a copy, so the flat buffer never
+	// carries search state.
+	marks map[int]string
 }
 
 func newTranscript(width int, th *theme, md *markdown) *transcript {
@@ -447,10 +453,33 @@ func (t *transcript) view(height int) string {
 		start = 0
 	}
 	visible := t.flat[start:end]
+	if len(t.marks) > 0 {
+		visible = append([]string(nil), visible...)
+		for j := range visible {
+			if mark, ok := t.marks[start+j]; ok {
+				if visible[j] == "" {
+					visible[j] = mark
+				} else {
+					// Every non-blank line begins with the one-cell page
+					// margin; the marker takes that cell.
+					visible[j] = mark + visible[j][1:]
+				}
+			}
+		}
+	}
 	if pad := height - len(visible); pad > 0 {
 		visible = append(append([]string(nil), visible...), make([]string, pad)...)
 	}
 	return strings.Join(visible, "\n")
+}
+
+// scrollTo centers a flat line in the viewport, clamped to the content.
+func (t *transcript) scrollTo(line int) {
+	if t.height <= 0 {
+		return
+	}
+	t.offset = len(t.flat) - line - t.height/2
+	t.clampOffset()
 }
 
 func (t *transcript) scrollBy(n int) {
@@ -517,6 +546,7 @@ func (t *transcript) reset() {
 	t.starts = nil
 	t.flat = nil
 	t.offset = 0
+	t.marks = nil
 }
 
 // lastExpandable returns the most recent route or tool entry, which is what

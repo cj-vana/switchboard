@@ -127,7 +127,11 @@ image to a model that silently ignores it is worse than saying no.
 you, immediately, no model in the loop, with the output carried into the
 next turn. A trailing `\` continues the line, ctrl+g opens the prompt in
 `$EDITOR`, prompt history persists per workspace, and ctrl+r searches it.
-Messages sent mid-turn queue and run when the turn finishes.
+ctrl+f searches the transcript itself — the alternate screen hides the
+conversation from the terminal's own search, so the TUI carries one:
+newest match first, the page margin marking every hit, esc leaving you at
+the match it found. Messages sent mid-turn queue and run when the turn
+finishes.
 
 Beyond the expected commands, a few are Switchboard's own:
 

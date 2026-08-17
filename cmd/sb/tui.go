@@ -175,6 +175,12 @@ type tuiModel struct {
 	histQuery  string
 	histMatch  int
 
+	// Transcript search, ctrl+f (tui_search.go).
+	trSearch  bool
+	trQuery   string
+	trMatches []int
+	trMatch   int
+
 	// custom holds the markdown-file commands loaded at startup
 	// (tui_custom.go).
 	custom []customCommand
@@ -590,12 +596,19 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		m.historySearchKey(msg)
 		return nil
 	}
+	if m.trSearch {
+		m.transcriptSearchKey(msg)
+		return nil
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
 		return m.interrupt()
 	case "ctrl+r":
 		m.startHistorySearch()
+		return nil
+	case "ctrl+f":
+		m.startTranscriptSearch()
 		return nil
 	case "esc":
 		if m.busy {
@@ -1311,6 +1324,8 @@ func (m *tuiModel) inputZoneView() string {
 
 	var parts []string
 	switch {
+	case m.trSearch:
+		parts = append(parts, m.transcriptSearchView())
 	case m.histSearch:
 		parts = append(parts, m.historySearchView())
 	case m.suggestionsView() != "":

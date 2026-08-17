@@ -487,8 +487,12 @@ fed by every rebind, whoever asked for it, because they must agree with
 four and its readout says ~ because it is an estimate, not a count a
 provider reported. The turn verdict closes a tool rail with └ only when a
 rail is directly above it; after prose the corner would hang from nothing.
-docs/tui.svg is generated, not drawn: `SB_FRAMES=<dir> go test ./cmd/sb/
--run TestCaptureFrames` renders the frames from the real view code.
+Transcript search (ctrl+f) paints its match markers into the page margin
+on a copy at view time — the flat line buffer never carries search state,
+because that buffer is the render cache and search is a lens, not an
+edit. docs/tui.svg is generated, not drawn: `SB_FRAMES=<dir> go test
+./cmd/sb/ -run TestCaptureFrames` renders the frames from the real view
+code.
 
 Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
 hooks, the workspace-trust flow, named subagent definitions, skills —

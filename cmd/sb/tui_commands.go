@@ -127,6 +127,7 @@ input
 keys
   enter            send                  tab                complete
   ↑↓               history / choose      ctrl+r             search prompt history
+  ctrl+f           search the transcript
   shift+tab        cycle permission mode ctrl+t             tier picker
   ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
   ctrl+o           expand the last route or tool entry
