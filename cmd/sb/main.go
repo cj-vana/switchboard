@@ -111,6 +111,25 @@ func run() error {
 		}
 		return runCostCLI(os.Stdout, store, cat, cwd)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "stats" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		cat, err := catalog.Load()
+		if err != nil {
+			return err
+		}
+		return runStatsCLI(os.Stdout, store, cat, cfg, cwd)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "races" {
 		cwd, err := os.Getwd()
 		if err != nil {

@@ -168,6 +168,13 @@ Beyond the expected commands, a few are Switchboard's own:
   billed, what always-use-the-cheapest could not have held. A rung whose
   context window could not fit a call reports that instead of a price,
   because feasibility is not economics.
+- `/stats` and `sb stats` are the same receipt at lifetime scale: every
+  session this workspace has recorded, summed as routed and repriced on
+  each rung of today's ladder, with the scope stated — race losers and
+  forks count because their calls were real, subagent sessions keep
+  their own store and do not. No other tool can answer "what has this
+  workspace's history cost, and what would it have cost pinned to one
+  model," because no other tool has a ladder to price it against.
 - `/undo` takes back the last turn's file changes, turn by turn: write
   and edit capture what a file looked like before the turn first touched
   it, and a restored file forces the model to re-read before it may write
