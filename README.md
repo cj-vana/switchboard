@@ -242,7 +242,9 @@ Beyond the expected commands, a few are Switchboard's own:
   replacement already live, and aligned against the file as it is now.
   Lines the record cannot explain say so: typed, shell-made, or before
   the log, never guessed. It is `git blame` for the half git cannot
-  see, and it reads across every session the workspace has recorded.
+  see, and it reads across every session the workspace has recorded —
+  delegate errands included, whose subagents write with the same tools
+  from logs of their own.
   Bare `/blame` is the ladder's yield: surviving lines summed by who
   wrote them, each target beside its own money word in the catalog's
   three meterings — the receipt that says whether the rungs that cost

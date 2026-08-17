@@ -7,8 +7,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/cj-vana/switchboard/internal/agent"
@@ -71,13 +69,9 @@ func registerDelegate(
 		return nil, nil, nil // no ladder, nothing to delegate on
 	}
 
-	home, err := os.UserHomeDir()
+	subStore, err := delegateStore()
 	if err != nil {
-		return nil, nil, fmt.Errorf("delegate needs a home directory for its session store: %w", err)
-	}
-	subStore, err := session.NewStore(filepath.Join(home, ".switchboard", "delegates"))
-	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("delegate needs its session store: %w", err)
 	}
 
 	// A definition naming a rung this ladder does not have still loads — it

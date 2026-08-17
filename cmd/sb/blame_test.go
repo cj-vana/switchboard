@@ -65,7 +65,7 @@ func TestBlameAttributesLinesAndNamesWhatItCannot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := strings.Join(blameLines(store, workspace, abs, "parser.go"), "\n")
+	out := strings.Join(blameLines(store, nil, workspace, abs, "parser.go"), "\n")
 
 	if !strings.Contains(out, "3 lines: 2 from recorded turns, 1 outside the record") {
 		t.Errorf("the header does not add up:\n%s", out)
@@ -98,7 +98,7 @@ func TestBlameWithNoRecordSaysWhatItCovers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := strings.Join(blameLines(store, workspace, abs, "untouched.go"), "\n")
+	out := strings.Join(blameLines(store, nil, workspace, abs, "untouched.go"), "\n")
 	if !strings.Contains(out, "no recorded turn has written untouched.go") {
 		t.Errorf("an empty record should say so:\n%s", out)
 	}
@@ -178,7 +178,7 @@ func TestBlameWorkspaceSumsSurvivorsAndKeepsMeteringsApart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := strings.Join(blameWorkspaceLines(store, cat, workspace), "\n")
+	out := strings.Join(blameWorkspaceLines(store, nil, cat, workspace), "\n")
 
 	if !strings.Contains(out, "2 files the record touched") {
 		t.Errorf("the file count is off:\n%s", out)
@@ -197,6 +197,65 @@ func TestBlameWorkspaceSumsSurvivorsAndKeepsMeteringsApart(t *testing.T) {
 	}
 	if !strings.Contains(out, "surviving or not") {
 		t.Errorf("the money scope is unstated:\n%s", out)
+	}
+}
+
+// A delegate errand writes with the same tools into the same tree, from a
+// log deliberately kept out of the primary store. Its lines are
+// model-written and must say so — and the drill-in must not offer the
+// /resume the store would refuse.
+func TestBlameReadsDelegateErrands(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegates, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	target := provider.RouteTargetID("ollama/local/qwen3:4b")
+
+	errand, err := delegates.Create(workspace, target, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, errand,
+		provider.UserText("errand: write the helper"),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.ToolUse{ID: "w1", Name: "write", Input: json.RawMessage(`{"path":"helper.go","content":"from the errand\n"}`)},
+		}},
+	)
+	if err := errand.AppendUsage(session.Usage{Target: string(target)}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessages(t, errand, provider.Message{Role: provider.RoleTool, Content: []provider.Block{
+		provider.ToolResult{ToolUseID: "w1", Name: "write", Content: "wrote helper.go"},
+	}})
+	errandID := errand.State().ID
+	if err := errand.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	abs := filepath.Join(workspace, "helper.go")
+	if err := os.WriteFile(abs, []byte("from the errand\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := strings.Join(blameLines(store, delegates, workspace, abs, "helper.go"), "\n")
+	if !strings.Contains(out, "1 from recorded turns, 0 outside") {
+		t.Errorf("an errand's write read as outside the record:\n%s", out)
+	}
+	if !strings.Contains(out, string(target)) {
+		t.Errorf("the errand's target is missing:\n%s", out)
+	}
+
+	story := strings.Join(blameLineLines(store, delegates, workspace, abs, "helper.go", 1), "\n")
+	if !strings.Contains(story, "subagent errand") {
+		t.Errorf("the story does not say an errand wrote it:\n%s", story)
+	}
+	if strings.Contains(story, "/resume "+errandID) {
+		t.Errorf("an errand's log is not a session /resume offers:\n%s", story)
 	}
 }
 
@@ -248,7 +307,7 @@ func TestBlameDoesNotReplayAForksCopiedPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := strings.Join(blameLines(store, workspace, abs, "f.go"), "\n")
+	out := strings.Join(blameLines(store, nil, workspace, abs, "f.go"), "\n")
 	if strings.Contains(out, "could not be replayed") {
 		t.Errorf("the fork's copied prefix replayed as drift:\n%s", out)
 	}
@@ -308,7 +367,7 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := strings.Join(blameLineLines(store, workspace, abs, "cache.go", 2), "\n")
+	out := strings.Join(blameLineLines(store, nil, workspace, abs, "cache.go", 2), "\n")
 	for _, want := range []string{
 		"written by " + string(target),
 		id + "#1",
@@ -323,12 +382,12 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 		}
 	}
 
-	out = strings.Join(blameLineLines(store, workspace, abs, "cache.go", 3), "\n")
+	out = strings.Join(blameLineLines(store, nil, workspace, abs, "cache.go", 3), "\n")
 	if !strings.Contains(out, "outside the record") {
 		t.Errorf("a hand-typed line must say nobody wrote it:\n%s", out)
 	}
 
-	out = strings.Join(blameLineLines(store, workspace, abs, "cache.go", 40), "\n")
+	out = strings.Join(blameLineLines(store, nil, workspace, abs, "cache.go", 40), "\n")
 	if !strings.Contains(out, "no line 40") {
 		t.Errorf("a line past the end must be refused by count:\n%s", out)
 	}

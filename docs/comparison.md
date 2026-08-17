@@ -105,7 +105,8 @@ fork containing it.
 model, asked what", and the session log already holds it — every write's
 bytes and every edit's exact replacement, beside the usage record that
 names the target and the route record that names the rung. `/blame
-<path>` and `sb blame` replay those calls oldest-first and align the
+<path>` and `sb blame` replay those calls oldest-first — the delegate
+errands' own logs included — and align the
 result against the file on disk (`internal/blame`), so every current
 line reads as: this rung, this model, this session and turn, the turn's
 own words — or as outside the record, the label for what hands, shell

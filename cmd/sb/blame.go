@@ -31,13 +31,13 @@ const blameMaxRuns = 12
 // blameLines annotates one file from every session the workspace has
 // recorded. abs is the file already resolved; shown is how the user named
 // it, for the report's own words.
-func blameLines(store *session.Store, workspace, abs, shown string) []string {
+func blameLines(store, delegates *session.Store, workspace, abs, shown string) []string {
 	disk, err := os.ReadFile(abs)
 	if err != nil {
 		return []string{"  cannot read " + shown + ": " + err.Error()}
 	}
 
-	byPath, _, err := gatherEdits(store, workspace)
+	byPath, _, err := gatherEdits(workspace, store, delegates)
 	if err != nil {
 		return []string{"  " + err.Error()}
 	}
@@ -131,13 +131,22 @@ func blameLines(store *session.Store, workspace, abs, shown string) []string {
 // nothing are writing the lines that last. Lines and money keep separate
 // scopes and the closing line says so — money covers all of a target's
 // calls, lines only what survives on disk today.
-func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace string) []string {
-	byPath, _, err := gatherEdits(store, workspace)
+func blameWorkspaceLines(store, delegates *session.Store, cat *catalog.Catalog, workspace string) []string {
+	byPath, _, err := gatherEdits(workspace, store, delegates)
 	if err != nil {
 		return []string{"  " + err.Error()}
 	}
+	// Money spans the same record the lines do: the workspace's sessions
+	// and their subagent errands, whose calls were as real as any.
 	byTarget := map[string][]session.Usage{}
-	if infos, err := store.List(workspace); err == nil {
+	for _, s := range []*session.Store{store, delegates} {
+		if s == nil {
+			continue
+		}
+		infos, err := s.List(workspace)
+		if err != nil {
+			continue
+		}
 		for _, info := range infos {
 			usages, err := session.ReadUsages(info.Path)
 			if err != nil {
@@ -255,7 +264,8 @@ func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace s
 		lines = append(lines, fmt.Sprintf("  %d files could not be read and are not counted", unreadable))
 	}
 	return append(lines,
-		"  lines are what survives on disk today; money is what the target's calls cost, surviving or not")
+		"  lines are what survives on disk today; money is what the target's calls cost, surviving or not",
+		"  subagent errands count on both sides — their writes were as real as their calls")
 }
 
 // blameLineLines is the drill-in: one line's whole story. The map form
@@ -263,13 +273,13 @@ func blameWorkspaceLines(store *session.Store, cat *catalog.Catalog, workspace s
 // how the turn signed off — the answer to "why is this line here" that a
 // transcript search cannot give, because the line number is not in the
 // transcript.
-func blameLineLines(store *session.Store, workspace, abs, shown string, line int) []string {
+func blameLineLines(store, delegates *session.Store, workspace, abs, shown string, line int) []string {
 	disk, err := os.ReadFile(abs)
 	if err != nil {
 		return []string{"  cannot read " + shown + ": " + err.Error()}
 	}
 
-	byPath, logByID, err := gatherEdits(store, workspace)
+	byPath, logByID, err := gatherEdits(workspace, store, delegates)
 	if err != nil {
 		return []string{"  " + err.Error()}
 	}
@@ -297,15 +307,20 @@ func blameLineLines(store *session.Store, workspace, abs, shown string, line int
 		lines = append(lines, fmt.Sprintf("  asked: %q", truncate(o.Prompt, 70)))
 	}
 
-	logPath, ok := logByID[o.SessionID]
+	ref, ok := logByID[o.SessionID]
 	if !ok {
 		return append(lines, "  that session's log is no longer in the store; the story ends here")
 	}
-	if others := turnTouched(logPath, o.Turn, abs); len(others) > 0 {
+	if others := turnTouched(ref.path, o.Turn, abs); len(others) > 0 {
 		lines = append(lines, "  the turn also touched: "+strings.Join(others, ", "))
 	}
-	if closing := turnClosing(logPath, o.Turn); closing != "" {
+	if closing := turnClosing(ref.path, o.Turn); closing != "" {
 		lines = append(lines, fmt.Sprintf("  the turn signed off: %q", truncate(closing, 90)))
+	}
+	if ref.errand {
+		// An errand's log is real and auditable, but /resume deliberately
+		// never offers a context that was never the user's.
+		return append(lines, "  a subagent errand wrote this; its log is on record, though not a session /resume offers")
 	}
 	return append(lines, fmt.Sprintf("  /resume %s reopens that session", o.SessionID))
 }
@@ -413,6 +428,18 @@ func targetPay(cat *catalog.Catalog, targetStr string, usages []session.Usage) s
 	return fmt.Sprintf("%s as routed", dollars)
 }
 
+// delegateStore opens the store delegate errands record into: real logs,
+// kept out of the primary store so /resume never offers a context that
+// was never the user's. This helper is the one place the path is named,
+// so the tool assembly and the readers cannot drift apart.
+func delegateStore() (*session.Store, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return session.NewStore(filepath.Join(home, ".switchboard", "delegates"))
+}
+
 // resolveEditPath maps a recorded call's path to the file it named:
 // workspace-relative paths resolve against the workspace the log's own
 // header recorded, not against whoever is asking today.
@@ -423,26 +450,53 @@ func resolveEditPath(e session.FileEdit) string {
 	return filepath.Join(e.Workspace, e.Path)
 }
 
-// gatherEdits reads every log the workspace recorded once, returning its
-// mutations keyed by resolved path and oldest-first, plus each session's
-// log path for the surfaces that go back for the turn's story. A fork
-// copies its source's records byte for byte — /races dedupes its verdicts
-// for the same reason — so a call already seen under its id and timestamp
-// is a copy, not a second mutation, and replaying it would raise a false
-// drift alarm. Logs are read in id order, which is creation order, so the
-// copy that survives is the source's.
-func gatherEdits(store *session.Store, workspace string) (map[string][]session.FileEdit, map[string]string, error) {
-	infos, err := store.List(workspace)
+// logRef is where an origin's log lives and what kind of session it was:
+// an errand's log is auditable but deliberately not resumable, and the
+// drill-in must not offer what /resume would refuse.
+type logRef struct {
+	path   string
+	errand bool
+}
+
+// gatherEdits reads every log the workspace recorded once — the primary
+// store and the delegate errands' store, whose subagents write with the
+// same tools into the same tree — returning mutations keyed by resolved
+// path and oldest-first, plus each session's log for the surfaces that go
+// back for the turn's story. A fork copies its source's records byte for
+// byte — /races dedupes its verdicts for the same reason — so a call
+// already seen under its id and timestamp is a copy, not a second
+// mutation, and replaying it would raise a false drift alarm. Logs are
+// read in id order, which is creation order, so the copy that survives is
+// the source's.
+func gatherEdits(workspace string, primary, delegates *session.Store) (map[string][]session.FileEdit, map[string]logRef, error) {
+	type sourced struct {
+		session.Info
+		errand bool
+	}
+	infos, err := primary.List(workspace)
 	if err != nil {
 		return nil, nil, err
 	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+	all := make([]sourced, 0, len(infos))
+	for _, info := range infos {
+		all = append(all, sourced{Info: info})
+	}
+	if delegates != nil {
+		// An unreadable errand store narrows the record rather than
+		// failing the question; what it held reads as outside it.
+		if errands, err := delegates.List(workspace); err == nil {
+			for _, info := range errands {
+				all = append(all, sourced{Info: info, errand: true})
+			}
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
 
 	byPath := map[string][]session.FileEdit{}
-	logByID := map[string]string{}
+	logByID := map[string]logRef{}
 	seen := map[string]bool{}
-	for _, info := range infos {
-		logByID[info.ID] = info.Path
+	for _, info := range all {
+		logByID[info.ID] = logRef{path: info.Path, errand: info.errand}
 		edits, err := session.ReadFileEdits(info.Path)
 		if err != nil {
 			continue
@@ -511,10 +565,13 @@ func parseLineRef(arg string) (string, int, bool) {
 }
 
 func cmdBlame(m *tuiModel, args string) tea.Cmd {
+	// A missing errand store narrows the record rather than failing the
+	// question; the gatherer treats nil the same way.
+	delegates, _ := delegateStore()
 	path := strings.TrimSpace(args)
 	if path == "" {
 		m.addInfo("who wrote this workspace\n" +
-			strings.Join(blameWorkspaceLines(m.app.store, m.app.catalog, m.app.workspace), "\n"))
+			strings.Join(blameWorkspaceLines(m.app.store, delegates, m.app.catalog, m.app.workspace), "\n"))
 		return nil
 	}
 	resolve := func(p string) string {
@@ -526,19 +583,20 @@ func cmdBlame(m *tuiModel, args string) tea.Cmd {
 	if file, line, ok := parseLineRef(path); ok {
 		if _, err := os.Stat(resolve(path)); err != nil {
 			m.addInfo(fmt.Sprintf("why line %d of %s\n", line, file) +
-				strings.Join(blameLineLines(m.app.store, m.app.workspace, resolve(file), file, line), "\n"))
+				strings.Join(blameLineLines(m.app.store, delegates, m.app.workspace, resolve(file), file, line), "\n"))
 			return nil
 		}
 	}
 	m.addInfo(fmt.Sprintf("who wrote %s\n", path) +
-		strings.Join(blameLines(m.app.store, m.app.workspace, resolve(path), path), "\n"))
+		strings.Join(blameLines(m.app.store, delegates, m.app.workspace, resolve(path), path), "\n"))
 	return nil
 }
 
 func runBlameCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, workspace, path string) error {
+	delegates, _ := delegateStore()
 	if path == "" {
 		fmt.Fprintln(w, "who wrote this workspace")
-		for _, line := range blameWorkspaceLines(store, cat, workspace) {
+		for _, line := range blameWorkspaceLines(store, delegates, cat, workspace) {
 			fmt.Fprintln(w, strings.TrimRight(line, " "))
 		}
 		return nil
@@ -550,7 +608,7 @@ func runBlameCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, worksp
 				return err
 			}
 			fmt.Fprintf(w, "why line %d of %s\n", line, file)
-			for _, out := range blameLineLines(store, workspace, filepath.Clean(abs), file, line) {
+			for _, out := range blameLineLines(store, delegates, workspace, filepath.Clean(abs), file, line) {
 				fmt.Fprintln(w, strings.TrimRight(out, " "))
 			}
 			return nil
@@ -561,7 +619,7 @@ func runBlameCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, worksp
 		return err
 	}
 	fmt.Fprintf(w, "who wrote %s\n", path)
-	for _, line := range blameLines(store, workspace, filepath.Clean(abs), path) {
+	for _, line := range blameLines(store, delegates, workspace, filepath.Clean(abs), path) {
 		fmt.Fprintln(w, strings.TrimRight(line, " "))
 	}
 	return nil
