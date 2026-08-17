@@ -68,6 +68,9 @@ func run() error {
 	// takes a credential rather than flags and must not be reachable in a form
 	// that puts one on the command line.
 	if len(os.Args) > 1 && os.Args[1] == "completion" {
+		if len(os.Args) > 3 {
+			return fmt.Errorf("sb completion takes one shell; %q is extra", os.Args[3])
+		}
 		shell := ""
 		if len(os.Args) > 2 {
 			shell = os.Args[2]
@@ -82,6 +85,9 @@ func run() error {
 		return runAuth(context.Background(), os.Args[2:], cfg)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "update" {
+		if len(os.Args) > 2 {
+			return fmt.Errorf("sb update takes no argument; %q was ignored by nothing", os.Args[2])
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			return err
@@ -89,6 +95,9 @@ func run() error {
 		return runUpdateCLI(context.Background(), cfg)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		if len(os.Args) > 2 {
+			return fmt.Errorf("sb doctor takes no argument; %q is not one", os.Args[2])
+		}
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
@@ -104,6 +113,9 @@ func run() error {
 		return runDoctorCLI(context.Background(), os.Stdout, cfg, cat, newProviders("", cfg), cwd)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "cost" {
+		if len(os.Args) > 2 {
+			return fmt.Errorf("sb cost takes no argument; %q is not one", os.Args[2])
+		}
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
