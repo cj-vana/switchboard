@@ -78,7 +78,7 @@ func commands() []commandItem {
 		{name: "think", aliases: []string{"effort"}, usage: "[level]", desc: "reasoning effort for the active model, this session", run: cmdThink},
 		{name: "login", usage: "[provider[/surface]]", desc: "store an API key in the OS keychain", busySafe: true, run: cmdLogin},
 		{name: "logout", usage: "[provider[/surface]]", desc: "remove a stored API key", busySafe: true, run: cmdLogout},
-		{name: "theme", usage: "[dark|light]", desc: "switch the color theme", run: cmdTheme},
+		{name: "theme", usage: "[dark|light|auto]", desc: "switch the color theme, or follow the terminal", run: cmdTheme},
 		{name: "update", usage: "[channel|auto …]", desc: "install a newer switchboard, or set the update posture", busySafe: true, run: cmdUpdate},
 	}
 }
@@ -848,8 +848,18 @@ func cmdTheme(m *tuiModel, args string) tea.Cmd {
 			m.setTheme(true)
 		case "light":
 			m.setTheme(false)
+		case "auto":
+			// A persisted choice beats detection forever, so un-choosing has
+			// to be sayable: auto clears the setting and asks the terminal
+			// again, which is where a fresh install starts.
+			m.setTheme(detectDark())
+			m.app.config.Theme = ""
+			if err := m.app.config.Save(); err != nil {
+				return noticeCmd("error", "theme now follows the terminal, but saving that failed: "+err.Error())
+			}
+			return noticeCmd("", "theme now follows the terminal's own background")
 		default:
-			return noticeCmd("error", "theme is dark or light")
+			return noticeCmd("error", "theme is dark, light, or auto (follow the terminal)")
 		}
 		m.app.config.Theme = name
 		if err := m.app.config.Save(); err != nil {
@@ -863,8 +873,9 @@ func cmdTheme(m *tuiModel, args string) tea.Cmd {
 	m.dlg = &pickerDialog{
 		title: "theme",
 		items: []pickerItem{
-			{id: "dark", label: "dark", current: m.th.dark},
-			{id: "light", label: "light", current: !m.th.dark},
+			{id: "dark", label: "dark", current: m.app.config.Theme == "dark"},
+			{id: "light", label: "light", current: m.app.config.Theme == "light"},
+			{id: "auto", label: "auto", desc: "follow the terminal", current: m.app.config.Theme == ""},
 		},
 		onPick: apply,
 	}

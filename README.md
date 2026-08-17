@@ -59,7 +59,7 @@ diagnose costs the most — checks every gate between this machine and a
 working session — each
 rung probed the way session start probes it, credentials, the sandbox
 self-test, the conditional tools, every declared MCP server — and a row
-that fails names the next action, not just the diagnosis. `/theme`, `/think`, `/update`,
+that fails names the next action, not just the diagnosis. `/theme` (dark, light, or auto to follow the terminal), `/think`, `/update`,
 `/compact`, and `/budget` settings persist themselves. The config is ordinary TOML at
 `~/.switchboard/config.toml` and hand-editing still works, but the tool
 writes it, and the file's own header says so.
