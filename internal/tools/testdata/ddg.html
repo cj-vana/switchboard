@@ -1,0 +1,632 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<!--[if IE 6]><html class="ie6" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 7]><html class="lt-ie8 lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 8]><html class="lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if gt IE 8]><!--><html xmlns="http://www.w3.org/1999/xhtml"><!--<![endif]-->
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=1" />
+  <meta name="referrer" content="origin" />
+  <meta name="HandheldFriendly" content="true" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>go process group reaping at DuckDuckGo</title>
+  <link title="DuckDuckGo (HTML)" type="application/opensearchdescription+xml" rel="search" href="//duckduckgo.com/opensearch_html_v2.xml" />
+  <link href="//duckduckgo.com/favicon.ico" rel="shortcut icon" />
+  <link rel="icon" href="//duckduckgo.com/favicon.ico" type="image/x-icon" />
+  <link id="icon60" rel="apple-touch-icon" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_60x60.png?v=2"/>
+  <link id="icon76" rel="apple-touch-icon" sizes="76x76" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_76x76.png?v=2"/>
+  <link id="icon120" rel="apple-touch-icon" sizes="120x120" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_120x120.png?v=2"/>
+  <link id="icon152" rel="apple-touch-icon" sizes="152x152" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_152x152.png?v=2"/>
+  <link rel="image_src" href="//duckduckgo.com/assets/icons/meta/DDG-icon_256x256.png">
+  <link rel="stylesheet" media="handheld, all" href="//duckduckgo.com/dist/h.b7791eaa1c6d921ef675.css" type="text/css"/>
+</head>
+
+<body class="body--html">
+  <a name="top" id="top"></a>
+
+  <form action="/html/" method="post">
+    <input type="text" name="state_hidden" id="state_hidden" />
+  </form>
+
+  <div>
+    <div class="site-wrapper-border"></div>
+
+    <div id="header" class="header cw header--html">
+      <a title="DuckDuckGo" href="/html/" class="header__logo-wrap"></a>
+
+      <form name="x" class="header__form" action="/html/" method="post">
+        <div class="search search--header">
+          <input name="q" autocomplete="off" class="search__input" id="search_form_input_homepage" type="text" value="go process group reaping" />
+          <input name="b" id="search_button_homepage" class="search__button search__button--html" value="" title="Search" alt="Search" type="submit" />
+        </div>
+
+        
+        
+        
+        
+
+        <div class="frm__select">
+          <select name="kl">
+            
+              <option value="" >All Regions</option>
+            
+              <option value="ar-es" >Argentina</option>
+            
+              <option value="au-en" >Australia</option>
+            
+              <option value="at-de" >Austria</option>
+            
+              <option value="be-fr" >Belgium (fr)</option>
+            
+              <option value="be-nl" >Belgium (nl)</option>
+            
+              <option value="br-pt" >Brazil</option>
+            
+              <option value="bg-bg" >Bulgaria</option>
+            
+              <option value="ca-en" >Canada (en)</option>
+            
+              <option value="ca-fr" >Canada (fr)</option>
+            
+              <option value="ct-ca" >Catalonia</option>
+            
+              <option value="cl-es" >Chile</option>
+            
+              <option value="cn-zh" >China</option>
+            
+              <option value="co-es" >Colombia</option>
+            
+              <option value="hr-hr" >Croatia</option>
+            
+              <option value="cz-cs" >Czech Republic</option>
+            
+              <option value="dk-da" >Denmark</option>
+            
+              <option value="ee-et" >Estonia</option>
+            
+              <option value="fi-fi" >Finland</option>
+            
+              <option value="fr-fr" >France</option>
+            
+              <option value="de-de" >Germany</option>
+            
+              <option value="gr-el" >Greece</option>
+            
+              <option value="hk-tzh" >Hong Kong</option>
+            
+              <option value="hu-hu" >Hungary</option>
+            
+              <option value="is-is" >Iceland</option>
+            
+              <option value="in-en" >India (en)</option>
+            
+              <option value="id-en" >Indonesia (en)</option>
+            
+              <option value="ie-en" >Ireland</option>
+            
+              <option value="il-en" >Israel (en)</option>
+            
+              <option value="it-it" >Italy</option>
+            
+              <option value="jp-jp" >Japan</option>
+            
+              <option value="kr-kr" >Korea</option>
+            
+              <option value="lv-lv" >Latvia</option>
+            
+              <option value="lt-lt" >Lithuania</option>
+            
+              <option value="my-en" >Malaysia (en)</option>
+            
+              <option value="mx-es" >Mexico</option>
+            
+              <option value="nl-nl" >Netherlands</option>
+            
+              <option value="nz-en" >New Zealand</option>
+            
+              <option value="no-no" >Norway</option>
+            
+              <option value="pk-en" >Pakistan (en)</option>
+            
+              <option value="pe-es" >Peru</option>
+            
+              <option value="ph-en" >Philippines (en)</option>
+            
+              <option value="pl-pl" >Poland</option>
+            
+              <option value="pt-pt" >Portugal</option>
+            
+              <option value="ro-ro" >Romania</option>
+            
+              <option value="ru-ru" >Russia</option>
+            
+              <option value="xa-ar" >Saudi Arabia</option>
+            
+              <option value="sg-en" >Singapore</option>
+            
+              <option value="sk-sk" >Slovakia</option>
+            
+              <option value="sl-sl" >Slovenia</option>
+            
+              <option value="za-en" >South Africa</option>
+            
+              <option value="es-ca" >Spain (ca)</option>
+            
+              <option value="es-es" >Spain (es)</option>
+            
+              <option value="se-sv" >Sweden</option>
+            
+              <option value="ch-de" >Switzerland (de)</option>
+            
+              <option value="ch-fr" >Switzerland (fr)</option>
+            
+              <option value="tw-tzh" >Taiwan</option>
+            
+              <option value="th-en" >Thailand (en)</option>
+            
+              <option value="tr-tr" >Turkey</option>
+            
+              <option value="us-en" >US (English)</option>
+            
+              <option value="us-es" >US (Spanish)</option>
+            
+              <option value="ua-uk" >Ukraine</option>
+            
+              <option value="uk-en" >United Kingdom</option>
+            
+              <option value="vn-en" >Vietnam (en)</option>
+            
+          </select>
+        </div>
+
+        <div class="frm__select frm__select--last">
+          <select class="" name="df">
+            
+              <option value="" selected>Any Time</option>
+            
+              <option value="d" >Past Day</option>
+            
+              <option value="w" >Past Week</option>
+            
+              <option value="m" >Past Month</option>
+            
+              <option value="y" >Past Year</option>
+            
+          </select>
+        </div>
+      </form>
+    </div>
+
+    
+
+    
+      <!-- Web results are present -->
+      <div>
+        <div class="serp__results">
+          <div id="links" class="results">
+            
+
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=92c26479caeed8b51590263fa09dbb3c338585095a08d32abf98f7305f1a5ced">GitHub - hashicorp/go-reap: Child process reaping utilities for Go</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=92c26479caeed8b51590263fa09dbb3c338585095a08d32abf98f7305f1a5ced">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=92c26479caeed8b51590263fa09dbb3c338585095a08d32abf98f7305f1a5ced">
+                            github.com/hashicorp/go-reap
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=92c26479caeed8b51590263fa09dbb3c338585095a08d32abf98f7305f1a5ced">Child <b>process</b> <b>reaping</b> utilities for <b>Go</b>. Contribute to hashicorp/<b>go</b>-reap development by creating an account on GitHub.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Flinedarcheol%2Fgo%2Dreap&amp;rut=740e82c418916eaaacb0f740e1fb25dd64e503ba971c49c456ba398bb91a3526">GitHub - linedarcheol/go-reap: Child process reaping utilities for Go</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Flinedarcheol%2Fgo%2Dreap&amp;rut=740e82c418916eaaacb0f740e1fb25dd64e503ba971c49c456ba398bb91a3526">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Flinedarcheol%2Fgo%2Dreap&amp;rut=740e82c418916eaaacb0f740e1fb25dd64e503ba971c49c456ba398bb91a3526">
+                            github.com/linedarcheol/go-reap
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Flinedarcheol%2Fgo%2Dreap&amp;rut=740e82c418916eaaacb0f740e1fb25dd64e503ba971c49c456ba398bb91a3526">Child <b>process</b> <b>reaping</b> utilities for <b>Go</b>. Contribute to linedarcheol/<b>go</b>-reap development by creating an account on GitHub.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=e34486ffd04ccc7625ac6140deeed0349a940261bbebcab8e89b421b8fbbb97a">reap package - github.com/hashicorp/go-reap - Go Packages</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=e34486ffd04ccc7625ac6140deeed0349a940261bbebcab8e89b421b8fbbb97a">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/pkg.go.dev.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=e34486ffd04ccc7625ac6140deeed0349a940261bbebcab8e89b421b8fbbb97a">
+                            pkg.go.dev/github.com/hashicorp/go-reap
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fhashicorp%2Fgo%2Dreap&amp;rut=e34486ffd04ccc7625ac6140deeed0349a940261bbebcab8e89b421b8fbbb97a"><b>go</b>-reap Provides a super simple set of functions for <b>reaping</b> child processes. This is useful for running applications as PID 1 in a Docker container. Note that a mutex is supplied to allow your application to prevent <b>reaping</b> of child processes during certain periods. You need to use care in order to prevent the reaper from stealing your return values from uses of packages like <b>Go&#x27;s</b> exec. We ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fcontainerd%2Fcontainerd%2Fsys%2Freaper&amp;rut=7ccdd4b69d2338f92200b10e87d33eb3849becbcc4029c4cb1d2a66d5459e5ab">github.com/containerd/containerd/sys/reaper - Go Packages</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fcontainerd%2Fcontainerd%2Fsys%2Freaper&amp;rut=7ccdd4b69d2338f92200b10e87d33eb3849becbcc4029c4cb1d2a66d5459e5ab">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/pkg.go.dev.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fcontainerd%2Fcontainerd%2Fsys%2Freaper&amp;rut=7ccdd4b69d2338f92200b10e87d33eb3849becbcc4029c4cb1d2a66d5459e5ab">
+                            pkg.go.dev/github.com/containerd/containerd/sys/reaper
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2026-05-20T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Fcontainerd%2Fcontainerd%2Fsys%2Freaper&amp;rut=7ccdd4b69d2338f92200b10e87d33eb3849becbcc4029c4cb1d2a66d5459e5ab">func Reap ¶ ... Reap should be called when the <b>process</b> receives an SIGCHLD. Reap will reap all exited processes and close their wait channels</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F58885831%2Fwhat%2Ddoes%2Dreaping%2Dchildren%2Dimply&amp;rut=1db2885a12edbf4507899c12b88b86eae7cf4d3b24f59191f838fab94a5a210e">c - What does reaping children imply? - Stack Overflow</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F58885831%2Fwhat%2Ddoes%2Dreaping%2Dchildren%2Dimply&amp;rut=1db2885a12edbf4507899c12b88b86eae7cf4d3b24f59191f838fab94a5a210e">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/stackoverflow.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F58885831%2Fwhat%2Ddoes%2Dreaping%2Dchildren%2Dimply&amp;rut=1db2885a12edbf4507899c12b88b86eae7cf4d3b24f59191f838fab94a5a210e">
+                            stackoverflow.com/questions/58885831/what-does-reaping-children-imply
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F58885831%2Fwhat%2Ddoes%2Dreaping%2Dchildren%2Dimply&amp;rut=1db2885a12edbf4507899c12b88b86eae7cf4d3b24f59191f838fab94a5a210e">The purpose of the wait* () call is to allow the child <b>process</b> to report a status back to the parent <b>process</b>. When the child <b>process</b> exits, the operating system holds that status data in a little data structure until the parent reads it. <b>Reaping</b> in that sense is cleaning out that little data structure. If the parent does not care about waiting for status from the child, the code could be ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.stormkit.io%2Fblog%2Fhunting%2Dzombie%2Dprocesses%2Din%2Dgo%2Dand%2Ddocker&amp;rut=28392887f6417b5611f735cd4f223058cd7c413402bd6cbbe9746a66dd62a52a">Hunting Zombie Processes in Go and Docker - Stormkit</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.stormkit.io%2Fblog%2Fhunting%2Dzombie%2Dprocesses%2Din%2Dgo%2Dand%2Ddocker&amp;rut=28392887f6417b5611f735cd4f223058cd7c413402bd6cbbe9746a66dd62a52a">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/www.stormkit.io.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.stormkit.io%2Fblog%2Fhunting%2Dzombie%2Dprocesses%2Din%2Dgo%2Dand%2Ddocker&amp;rut=28392887f6417b5611f735cd4f223058cd7c413402bd6cbbe9746a66dd62a52a">
+                            www.stormkit.io/blog/hunting-zombie-processes-in-go-and-docker
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-04-16T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.stormkit.io%2Fblog%2Fhunting%2Dzombie%2Dprocesses%2Din%2Dgo%2Dand%2Ddocker&amp;rut=28392887f6417b5611f735cd4f223058cd7c413402bd6cbbe9746a66dd62a52a">A technical deep dive into debugging zombie processes in a Go and Docker setup, detailing how I fixed a server crash caused by Node.js <b>process</b> leaks in Stormkit. Learn about <b>process</b> <b>groups</b>, SIGCHLD handling, and using Tini for zombie <b>reaping</b>.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79772462%2Fcorrect%2Dcleanup%2Dof%2Dspawned%2Dchild%2Dprocesses%2Din%2Dgolang&amp;rut=57b58cbd87b8fee3033423601c4db9693e8757927452ac21921fe1421283c930">go - correct cleanup of spawned child processes in golang - Stack Overflow</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79772462%2Fcorrect%2Dcleanup%2Dof%2Dspawned%2Dchild%2Dprocesses%2Din%2Dgolang&amp;rut=57b58cbd87b8fee3033423601c4db9693e8757927452ac21921fe1421283c930">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/stackoverflow.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79772462%2Fcorrect%2Dcleanup%2Dof%2Dspawned%2Dchild%2Dprocesses%2Din%2Dgolang&amp;rut=57b58cbd87b8fee3033423601c4db9693e8757927452ac21921fe1421283c930">
+                            stackoverflow.com/questions/79772462/correct-cleanup-of-spawned-child-processes-in-golang
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-09-23T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79772462%2Fcorrect%2Dcleanup%2Dof%2Dspawned%2Dchild%2Dprocesses%2Din%2Dgolang&amp;rut=57b58cbd87b8fee3033423601c4db9693e8757927452ac21921fe1421283c930">(In the default mode, you don&#x27;t need to explicitly reap everything since those leftover processes will get reparented to pid1 after your main <b>process</b> exits - though you should reap those processes which you normally expect to exit before you, e.g. short-lived commands that you spawn must be eventually collected, although I assume .<b>Process</b> ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkeploy.io%2Fblog%2Ftechnology%2Fmanaging%2Dgo%2Dprocesses&amp;rut=e239e80f13003fcc78d3790d48f53abbe11e39bd55f62ddf95daad6601c65806">Managing Go Processes | Keploy Blog</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkeploy.io%2Fblog%2Ftechnology%2Fmanaging%2Dgo%2Dprocesses&amp;rut=e239e80f13003fcc78d3790d48f53abbe11e39bd55f62ddf95daad6601c65806">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/keploy.io.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkeploy.io%2Fblog%2Ftechnology%2Fmanaging%2Dgo%2Dprocesses&amp;rut=e239e80f13003fcc78d3790d48f53abbe11e39bd55f62ddf95daad6601c65806">
+                            keploy.io/blog/technology/managing-go-processes
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkeploy.io%2Fblog%2Ftechnology%2Fmanaging%2Dgo%2Dprocesses&amp;rut=e239e80f13003fcc78d3790d48f53abbe11e39bd55f62ddf95daad6601c65806">Managing <b>process</b> <b>groups</b> ensures that when you terminate a <b>process</b>, all its child processes are also terminated. This is crucial for cleaning up resources effectively and avoiding orphaned processes that could consume system resources unnecessarily.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhackernoon.com%2Feverything%2Dyou%2Dneed%2Dto%2Dknow%2Dabout%2Dmanaging%2Dgo%2Dprocesses&amp;rut=9260394b3e45e372a239434b7609ff1e471a3bc277792faa8e939c67c28f0c17">Everything You Need To Know About Managing Go Processes</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhackernoon.com%2Feverything%2Dyou%2Dneed%2Dto%2Dknow%2Dabout%2Dmanaging%2Dgo%2Dprocesses&amp;rut=9260394b3e45e372a239434b7609ff1e471a3bc277792faa8e939c67c28f0c17">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/hackernoon.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhackernoon.com%2Feverything%2Dyou%2Dneed%2Dto%2Dknow%2Dabout%2Dmanaging%2Dgo%2Dprocesses&amp;rut=9260394b3e45e372a239434b7609ff1e471a3bc277792faa8e939c67c28f0c17">
+                            hackernoon.com/everything-you-need-to-know-about-managing-go-processes
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhackernoon.com%2Feverything%2Dyou%2Dneed%2Dto%2Dknow%2Dabout%2Dmanaging%2Dgo%2Dprocesses&amp;rut=9260394b3e45e372a239434b7609ff1e471a3bc277792faa8e939c67c28f0c17">Explore techniques for managing blocking processes in <b>Go</b>, focusing on signal handling, <b>process</b> <b>groups</b>, &amp; platform-specific considerations in linux environments.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fforesthoffman%2Fdetaching%2Dunix%2Dchild%2Dprocesses%2Dwith%2Dgo%2D80n&amp;rut=dce62f151997d4bbd53f272d7375e4588eadb46bb97e6de880962d442b4b2bd4">Detaching Unix Child Processes with Go - DEV Community</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fforesthoffman%2Fdetaching%2Dunix%2Dchild%2Dprocesses%2Dwith%2Dgo%2D80n&amp;rut=dce62f151997d4bbd53f272d7375e4588eadb46bb97e6de880962d442b4b2bd4">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/dev.to.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fforesthoffman%2Fdetaching%2Dunix%2Dchild%2Dprocesses%2Dwith%2Dgo%2D80n&amp;rut=dce62f151997d4bbd53f272d7375e4588eadb46bb97e6de880962d442b4b2bd4">
+                            dev.to/foresthoffman/detaching-unix-child-processes-with-go-80n
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fforesthoffman%2Fdetaching%2Dunix%2Dchild%2Dprocesses%2Dwith%2Dgo%2D80n&amp;rut=dce62f151997d4bbd53f272d7375e4588eadb46bb97e6de880962d442b4b2bd4">After which I released the reap and reaper Go packages. The reap package can be used to create intermediate <b>process</b> runners. Or, in the context of the previous example, a temporary nested-parent <b>process</b>. The reaper package is an intermediate <b>process</b> runner that implements the reap package.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+
+            
+              
+              
+                <div class="nav-link">
+                  <form action="/html/" method="post">
+                    <input type="submit" class='btn btn--alt' value="Next" />
+                    <input type="hidden" name="q" value="go process group reaping" />
+                    <input type="hidden" name="s" value="10" />
+                    <input type="hidden" name="nextParams" value="" />
+                    <input type="hidden" name="v" value="l" />
+                    <input type="hidden" name="o" value="json" />
+                    <input type="hidden" name="dc" value="11" />
+                    <input type="hidden" name="api" value="d.js" />
+                    <input type="hidden" name="vqd" value="4-156030884753066056405380308260110701731" />
+
+                    
+                    
+                    
+                      <input name="kl" value="wt-wt" type="hidden" />
+                    
+                    
+                    
+                    
+                  </form>
+                </div>
+              
+            
+
+            <div class="feedback-btn">
+              <a rel="nofollow" href="//duckduckgo.com/feedback.html" target="_new">Feedback</a>
+            </div>
+            <div class="clear"></div>
+          </div>
+        </div>
+      </div> <!-- links wrapper //-->
+    
+  </div>
+
+  <div id="bottom_spacing2"></div>
+
+  
+    <img src="//duckduckgo.com/t/sl_h"/>
+  
+</body>
+</html>

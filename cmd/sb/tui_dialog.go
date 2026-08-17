@@ -83,8 +83,13 @@ func (d *permissionDialog) view(width int, th *theme) string {
 	always := "yes, and don't ask again for this exact command"
 	if d.req.Effect == permission.EffectExternal {
 		// The remembered answer for an external tool covers the tool, not one
-		// byte-exact invocation; the label has to say what it grants.
+		// byte-exact invocation; the label has to say what it grants. A web
+		// tool carries the host in its path, so its remembered answer is
+		// per-host and the label says the host.
 		always = "yes, and allow this tool for the rest of the session"
+		if d.req.Path != "" {
+			always = "yes, and allow " + d.req.Path + " for the rest of the session"
+		}
 	}
 	// The border states the stakes: accent for a routine ask, amber the moment
 	// the command leaves the sandbox. Color is information here, not chrome,

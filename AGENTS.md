@@ -254,6 +254,22 @@ them and hands the warnings to the model on a miss, because "your pattern
 did not parse cleanly" is the difference between tightening a pattern and
 abandoning the tool.
 
+**Egress from this process is external too.** `websearch` and `webfetch`
+(`internal/tools/web.go`) carry `permission.EffectExternal` even though no
+other process is involved, because a fetch is the classic exfiltration
+channel: a URL the model composed can carry the workspace anywhere. Their
+requests put the host in `Path`, so the remembered answer covers a host
+for the session rather than one byte-exact URL, and the outbound URL and
+query pass `credential.ScanPrompt` before anything leaves — the test that
+greps the refusal for the token is the guarantee, the same pattern as
+every other rendering of a secret. The search backend's HTML is parsed
+against the captured response in `internal/tools/testdata/ddg.html` (wire
+formats get captured before they get mapped); result links arrive as
+redirect URLs and the parser unwraps `uddg`, taking a direct href as it
+stands so a format change degrades to worse links rather than no results.
+Fetches cap what they read and what they hand the context, because a page
+has no contract about its size and the context is the scarce thing.
+
 **An external tool is never inside the sandbox.** An MCP server is a process
 this program started un-confined, acting wherever it acts, so a bridged call
 carries `permission.EffectExternal`: no mode auto-allows it, bypass included,

@@ -1,0 +1,250 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/cj-vana/switchboard/internal/permission"
+)
+
+// The search parser is written against a captured response, not the
+// endpoint's documentation, because none exists. testdata/ddg.html is that
+// capture: ten results, each link a redirect carrying the destination in
+// its uddg parameter.
+func TestWebsearchParsesTheCapturedResponse(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/ddg.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("q"); got != "go process group reaping" {
+			t.Errorf("query arrived as %q", got)
+		}
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	tool := &websearchTool{client: srv.Client(), endpoint: srv.URL + "/html/"}
+	plan, err := tool.Plan(json.RawMessage(`{"query": "go process group reaping", "count": 3}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError {
+		t.Fatalf("search failed: %v %s", err, res.Content)
+	}
+	if !strings.Contains(res.Content, "1. ") || !strings.Contains(res.Content, "3. ") {
+		t.Fatalf("expected three numbered results:\n%s", res.Content)
+	}
+	if strings.Contains(res.Content, "4. ") {
+		t.Fatalf("count=3 returned a fourth result:\n%s", res.Content)
+	}
+	// The redirect link is unwrapped to its destination.
+	if !strings.Contains(res.Content, "https://github.com/hashicorp/go-reap") {
+		t.Fatalf("the uddg redirect was not unwrapped:\n%s", res.Content)
+	}
+	if strings.Contains(res.Content, "duckduckgo.com/l/") {
+		t.Fatalf("a raw redirect link leaked into the results:\n%s", res.Content)
+	}
+}
+
+// Egress is the external effect: no mode auto-allows it, and the remember
+// key carries the host so one approval covers a host, not one URL.
+func TestWebToolsCarryTheExternalEffectAndTheHost(t *testing.T) {
+	search := &websearchTool{client: newWebClient(), endpoint: ddgEndpoint}
+	plan, err := search.Plan(json.RawMessage(`{"query": "anything"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Request.Effect != permission.EffectExternal {
+		t.Errorf("websearch effect = %s, want external", plan.Request.Effect)
+	}
+	if plan.Request.Path != "duckduckgo.com" {
+		t.Errorf("websearch path = %q, want the backend host", plan.Request.Path)
+	}
+
+	fetch := &webfetchTool{client: newWebClient()}
+	plan, err = fetch.Plan(json.RawMessage(`{"url": "https://pkg.go.dev/net/http#Client"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Request.Effect != permission.EffectExternal {
+		t.Errorf("webfetch effect = %s, want external", plan.Request.Effect)
+	}
+	if plan.Request.Path != "pkg.go.dev" {
+		t.Errorf("webfetch path = %q, want the host", plan.Request.Path)
+	}
+	if plan.Request.Detail == "" {
+		t.Error("webfetch shows no URL at the prompt")
+	}
+}
+
+func TestWebfetchRefusesNonHTTPSchemes(t *testing.T) {
+	fetch := &webfetchTool{client: newWebClient()}
+	for _, bad := range []string{
+		`{"url": "file:///etc/passwd"}`,
+		`{"url": "ftp://example.com/x"}`,
+		`{"url": "not a url at all://"}`,
+		`{"url": "/relative/path"}`,
+	} {
+		if _, err := fetch.Plan(json.RawMessage(bad)); err == nil {
+			t.Errorf("Plan(%s) validated", bad)
+		}
+	}
+}
+
+// A key-shaped string in an outbound URL or query is refused before
+// anything leaves, and the refusal itself is masked: the test that greps
+// the error for the token is the guarantee.
+func TestWebToolsRefuseToSendAKeyShapedString(t *testing.T) {
+	token := "sk-ant-api03-" + strings.Repeat("a", 80)
+	fetch := &webfetchTool{client: newWebClient()}
+	_, err := fetch.Plan(json.RawMessage(fmt.Sprintf(`{"url": "https://example.com/?k=%s"}`, token)))
+	if err == nil {
+		t.Fatal("a key-shaped URL validated")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("the refusal carries the token it refused: %v", err)
+	}
+
+	search := &websearchTool{client: newWebClient(), endpoint: ddgEndpoint}
+	_, err = search.Plan(json.RawMessage(fmt.Sprintf(`{"query": "what is %s"}`, token)))
+	if err == nil {
+		t.Fatal("a key-shaped query validated")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("the refusal carries the token it refused: %v", err)
+	}
+}
+
+func TestWebfetchReducesHTMLToItsText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><head><title>The Page</title><style>body{color:red}</style></head>
+<body><script>alert("nope")</script><h1>A Heading</h1>
+<p>First paragraph   with    spread    spacing.</p>
+<ul><li>one</li><li>two</li></ul></body></html>`)
+	}))
+	defer srv.Close()
+
+	tool := &webfetchTool{client: srv.Client()}
+	plan, err := tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": %q}`, srv.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError {
+		t.Fatalf("fetch failed: %v %s", err, res.Content)
+	}
+	for _, want := range []string{"A Heading", "First paragraph with spread spacing.", "one", "two"} {
+		if !strings.Contains(res.Content, want) {
+			t.Errorf("text lost %q:\n%s", want, res.Content)
+		}
+	}
+	for _, gone := range []string{"alert", "color:red", "<h1>"} {
+		if strings.Contains(res.Content, gone) {
+			t.Errorf("markup or code leaked into the text (%q):\n%s", gone, res.Content)
+		}
+	}
+}
+
+func TestWebfetchHandsBackPlainTypesAndRefusesTheRest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/data.json":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ok": true}`)
+		case "/image.png":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write([]byte{0x89, 'P', 'N', 'G'})
+		}
+	}))
+	defer srv.Close()
+
+	tool := &webfetchTool{client: srv.Client()}
+	plan, _ := tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": "%s/data.json"}`, srv.URL)))
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError || res.Content != `{"ok": true}` {
+		t.Fatalf("json fetch: %v %q", err, res.Content)
+	}
+
+	plan, _ = tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": "%s/image.png"}`, srv.URL)))
+	res, err = plan.Run(context.Background())
+	if err != nil || !res.IsError {
+		t.Fatalf("a png should refuse as a tool error: %v %q", err, res.Content)
+	}
+	if !strings.Contains(res.Content, "image/png") {
+		t.Fatalf("the refusal does not name the type: %q", res.Content)
+	}
+}
+
+func TestWebfetchTruncatesAndSaysSo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(strings.Repeat("x", webTextLimit+1000)))
+	}))
+	defer srv.Close()
+
+	tool := &webfetchTool{client: srv.Client()}
+	plan, _ := tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": %q}`, srv.URL)))
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError {
+		t.Fatalf("fetch failed: %v", err)
+	}
+	if len(res.Content) > webTextLimit+200 {
+		t.Fatalf("content is %d chars, cap is %d", len(res.Content), webTextLimit)
+	}
+	if !strings.Contains(res.Content, "[truncated") {
+		t.Fatal("a truncated fetch did not say so")
+	}
+}
+
+func TestWebfetchNotesACrossHostRedirect(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "landed")
+	}))
+	defer final.Close()
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL, http.StatusFound)
+	}))
+	defer first.Close()
+
+	tool := &webfetchTool{client: &http.Client{}}
+	plan, _ := tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": %q}`, first.URL)))
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError {
+		t.Fatalf("fetch failed: %v %s", err, res.Content)
+	}
+	if !strings.Contains(res.Content, "landed") {
+		t.Fatalf("the redirect was not followed: %q", res.Content)
+	}
+	// httptest servers share 127.0.0.1, so the hosts differ only by port;
+	// the note keys on hostname and stays silent here. What must hold is
+	// that a redirect never fails the fetch.
+}
+
+// The live path, guarded the way every network test is.
+func TestWebsearchLive(t *testing.T) {
+	if os.Getenv("SB_LIVE") == "" {
+		t.Skip("SB_LIVE not set")
+	}
+	tool := &websearchTool{client: newWebClient(), endpoint: ddgEndpoint}
+	plan, err := tool.Plan(json.RawMessage(`{"query": "golang bubbletea textarea", "count": 3}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError {
+		t.Fatalf("live search failed: %v %s", err, res.Content)
+	}
+	if !strings.Contains(res.Content, "1. ") {
+		t.Fatalf("no results:\n%s", res.Content)
+	}
+}

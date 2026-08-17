@@ -137,6 +137,9 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 	r.add(&globTool{r})
 	r.add(&grepTool{r})
 	r.add(&todoTool{r})
+	client := newWebClient()
+	r.add(&websearchTool{client: client, endpoint: ddgEndpoint})
+	r.add(&webfetchTool{client: client})
 	return r, nil
 }
 
@@ -162,7 +165,7 @@ func (r *Registry) AddExternal(t Tool) error {
 // validate a configured tool grant — a named agent's — without building a
 // registry; the test tying it to NewRegistry is what keeps the two honest.
 func CoreNames() []string {
-	return []string{"edit", "exec", "glob", "grep", "read", "todo", "write"}
+	return []string{"edit", "exec", "glob", "grep", "read", "todo", "webfetch", "websearch", "write"}
 }
 
 // Restrict narrows the registry to the named tools. Session assembly only,
