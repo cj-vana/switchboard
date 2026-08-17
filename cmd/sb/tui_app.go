@@ -175,11 +175,18 @@ func (a *tuiApp) moveTo(rank int, why string) {
 		a.p.Send(noticeMsg{level: "warn", text: note})
 		a.loop.Session.AppendNote("warn", note)
 	}
+	// An escalation abandons the old rung's warmth the same way a user
+	// switch does, and the same honesty applies: priced before the rebind
+	// discards the tracker, spoken only when there is a number to speak.
+	abandoned := abandonedCacheNote(a.loop.Cache, a.catalog, time.Now())
 	a.tier = probed
 	a.loop.Target = probed.Target
 	a.loop.Provider = client
 	a.loop.Cache = cacheFor(probed.Target, a.catalog)
 	a.p.Send(tierNowMsg{line: "now on " + a.tierLine(), rank: a.rankOf(probed)})
+	if abandoned != "" {
+		a.p.Send(noticeMsg{level: "", text: abandoned})
+	}
 }
 
 // bind moves the loop onto a session, tier, and client, and rebuilds the

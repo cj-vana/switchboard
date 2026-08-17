@@ -921,10 +921,14 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 	}
 	prev := m.app.tier
 	m.restoreTier = &prev
+	abandoned := abandonedCacheNote(m.app.loop.Cache, m.app.catalog, time.Now())
 	m.app.tier = msg.tier
 	m.app.loop.Target = msg.tier.Target
 	m.app.loop.Provider = msg.client
 	m.app.loop.Cache = cacheFor(msg.tier.Target, m.app.catalog)
+	if abandoned != "" {
+		m.addInfo(abandoned)
+	}
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
 	m.recordMove(m.app.rankOf(msg.tier))
