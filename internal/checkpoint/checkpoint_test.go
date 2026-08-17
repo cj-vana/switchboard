@@ -226,3 +226,49 @@ func TestDetailsNamesThePathsPerTurn(t *testing.T) {
 		t.Fatalf("paths are not sorted: %v", details[1].Paths)
 	}
 }
+
+// UndoFile takes back one file, not the turn: the newest capture of that
+// file restores, the capture is consumed only on success, the turn's other
+// files stay, and a turn left with nothing disappears from the stack.
+func TestUndoFileRestoresOneAndConsumesTheCapture(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.go")
+	b := filepath.Join(dir, "b.go")
+	os.WriteFile(a, []byte("a before"), 0o644)
+
+	r := NewRecorder()
+	r.Begin("the turn")
+	r.Record(a) // existed: restore rewrites it
+	r.Record(b) // absent: restore removes it
+	os.WriteFile(a, []byte("a after"), 0o644)
+	os.WriteFile(b, []byte("b created"), 0o644)
+
+	removed, label, err := r.UndoFile(a)
+	if err != nil || removed || label != "the turn" {
+		t.Fatalf("UndoFile(a) = %v %q %v", removed, label, err)
+	}
+	if got, _ := os.ReadFile(a); string(got) != "a before" {
+		t.Fatalf("a holds %q, want its pre-turn content", got)
+	}
+	if _, err := os.Stat(b); err != nil {
+		t.Fatal("taking back a took b with it")
+	}
+	if details := r.Details(); len(details) != 1 || len(details[0].Paths) != 1 {
+		t.Fatalf("the turn should still hold b alone: %+v", details)
+	}
+
+	if _, _, err := r.UndoFile(a); err == nil {
+		t.Fatal("a consumed capture restored twice")
+	}
+
+	removed, _, err = r.UndoFile(b)
+	if err != nil || !removed {
+		t.Fatalf("UndoFile(b) = %v %v, want removed", removed, err)
+	}
+	if _, err := os.Stat(b); !os.IsNotExist(err) {
+		t.Fatal("the created file survived its undo")
+	}
+	if details := r.Details(); len(details) != 0 {
+		t.Fatalf("an emptied turn stayed on the stack: %+v", details)
+	}
+}

@@ -279,3 +279,36 @@ func TestContextSplitsTheZones(t *testing.T) {
 		}
 	}
 }
+
+// /undo <path> is the surgical form: one file back to before the newest
+// turn that captured it, matched the way /changes displays it, the turn's
+// other files standing.
+func TestUndoPathRestoresOneFile(t *testing.T) {
+	m := testModel(t)
+	m.app.undo = checkpoint.NewRecorder()
+	m.app.workspace = t.TempDir()
+	path := m.app.workspace + "/main.go"
+	os.WriteFile(path, []byte("before"), 0o644)
+	m.app.undo.Begin("the turn")
+	m.app.undo.Record(path)
+	os.WriteFile(path, []byte("after"), 0o644)
+
+	cmdUndo(m, "main.go")
+	if got, _ := os.ReadFile(path); string(got) != "before" {
+		t.Fatalf("the file holds %q, want its pre-turn content", got)
+	}
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "restored main.go") {
+		t.Fatalf("the restore was not reported:\n%s", joined)
+	}
+
+	m.tr.reset()
+	if cmd := cmdUndo(m, "absent.go"); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if joined := strings.Join(m.tr.flat, "\n"); !strings.Contains(joined, "no turn captured") {
+		t.Fatalf("an uncaptured path did not say so:\n%s", joined)
+	}
+}

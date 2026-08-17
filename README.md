@@ -205,6 +205,11 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace's own view) and `/undo` (taking a turn back). Its scope is
   stated in its output: what write and edit touched; a shell command's
   side effects are not captured, because the recorder cannot see them.
+- `/undo <path>` is the surgical form: one file back to what it was
+  before the newest turn that captured it, typed the way `/changes`
+  displays it, the turn's other files standing — and the capture is
+  consumed only when the restore succeeds, so a failed write never
+  costs the one copy of the old content.
 - `/undo` takes back the last turn's file changes, turn by turn: write
   and edit capture what a file looked like before the turn first touched
   it, and a restored file forces the model to re-read before it may write

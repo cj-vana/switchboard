@@ -64,7 +64,7 @@ func commands() []commandItem {
 		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
-		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
+		{name: "undo", usage: "[list|path]", desc: "take back the last turn's file changes, or one file's", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
 		{name: "retry", usage: "[tier]", desc: "take back the last turn and run it again, optionally on another rung", run: cmdRetry},
 		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
@@ -477,6 +477,35 @@ func cmdUndo(m *tuiModel, args string) tea.Cmd {
 		return nil
 	}
 
+	// Any other argument is a file: restore it to what it was before the
+	// newest turn that captured it, matched against the recorder's own
+	// paths so the argument can be typed the way /changes displays it.
+	if arg := strings.TrimSpace(args); arg != "" {
+		var abs string
+		for _, d := range rec.Details() {
+			for _, p := range d.Paths {
+				if p == arg || m.app.displayPath(p) == arg {
+					abs = p
+				}
+			}
+		}
+		if abs == "" {
+			return noticeCmd("error", "no turn captured "+arg+"; /changes lists what write and edit touched")
+		}
+		fileRemoved, label, err := rec.UndoFile(abs)
+		if err != nil {
+			return noticeCmd("error", err.Error())
+		}
+		m.app.loop.Tools.ForgetVersions([]string{abs})
+		verb := "restored"
+		if fileRemoved {
+			verb = "removed"
+		}
+		m.app.loop.Session.AppendNote("info", fmt.Sprintf("undo: %s %s from %q", verb, m.app.displayPath(abs), label))
+		m.addInfo(fmt.Sprintf("  %s %s, from before %q; the turn's other files stand", verb, m.app.displayPath(abs), truncate(firstLine(label), 50)))
+		return nil
+	}
+
 	restored, removed, skipped, failed, label, err := rec.Undo()
 	if err != nil {
 		return noticeCmd("", err.Error())
@@ -728,7 +757,8 @@ func cmdChanges(m *tuiModel, _ string) tea.Cmd {
 		}
 	}
 	b.WriteString("  via write and edit; a shell command's side effects are not captured\n")
-	b.WriteString("  /diff shows the workspace's own view; /undo takes back the newest turn")
+	b.WriteString("  /diff shows the workspace's own view; /undo takes back the newest\n")
+	b.WriteString("  turn, /undo <path> just that file")
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	return nil
 }

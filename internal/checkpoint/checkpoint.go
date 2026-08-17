@@ -198,6 +198,56 @@ func (r *Recorder) Details() []TurnDetail {
 	return out
 }
 
+// UndoFile restores one file to what it was before the newest turn that
+// captured it, and consumes that capture, so a later whole-turn /undo does
+// not restore it twice. The turn's other files stay on the stack: taking
+// back one file is not taking back the turn. A turn left with nothing is
+// dropped, the same rule Begin applies to a scope that captured nothing.
+// removed reports the inverse restore: the turn created the file, so
+// taking it back deletes it.
+func (r *Recorder) UndoFile(abs string) (removed bool, label string, err error) {
+	r.mu.Lock()
+	r.commitLocked()
+	var turn *Turn
+	for i := len(r.turns) - 1; i >= 0; i-- {
+		if _, ok := r.turns[i].files[abs]; ok {
+			turn = r.turns[i]
+			break
+		}
+	}
+	if turn == nil {
+		r.mu.Unlock()
+		return false, "", fmt.Errorf("no turn captured %s, as far as write and edit saw", abs)
+	}
+	st := turn.files[abs]
+	label = turn.label
+	r.mu.Unlock()
+
+	// Restore first, consume after: a failed write must leave the capture
+	// in place, or the one copy of the old content dies with the error.
+	if !st.existed {
+		if rmErr := os.Remove(abs); rmErr != nil && !os.IsNotExist(rmErr) {
+			return false, label, rmErr
+		}
+		removed = true
+	} else if wrErr := os.WriteFile(abs, st.content, st.mode); wrErr != nil {
+		return false, label, wrErr
+	}
+
+	r.mu.Lock()
+	delete(turn.files, abs)
+	if len(turn.files) == 0 && len(turn.skipped) == 0 {
+		for i, t := range r.turns {
+			if t == turn {
+				r.turns = append(r.turns[:i], r.turns[i+1:]...)
+				break
+			}
+		}
+	}
+	r.mu.Unlock()
+	return removed, label, nil
+}
+
 // Undo restores the most recent turn that changed files and reports the
 // restored and removed paths, sorted, plus anything the cap kept it from
 // covering. Restore-or-report is per file: one unwritable path does not
