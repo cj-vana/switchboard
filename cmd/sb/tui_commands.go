@@ -43,6 +43,7 @@ func commands() []commandItem {
 		{name: "pin", usage: "[name]", desc: "name this point in the session; /fork <name> branches back to it", run: cmdPin},
 		{name: "tier", usage: "<id>", desc: "switch tier (bare /t2 works too)", run: cmdTier},
 		{name: "tiers", desc: "show the configured ladder", busySafe: true, run: cmdTiers},
+		{name: "ladder", desc: "where recorded turns opened and where they ended, summed per rung", busySafe: true, run: cmdLadder},
 		{name: "why", desc: "how this tier was chosen, and what the others would have cost", busySafe: true, run: cmdWhy},
 		{name: "race", usage: "[tier [tier]] <prompt>", desc: "one prompt on two rungs at once; bare form races the next rung up", run: cmdRace},
 		{name: "races", usage: "[all]", desc: "every paired verdict collected, tallied by pair; all spans workspaces", busySafe: true, run: cmdRaces},
@@ -123,7 +124,7 @@ var helpGroups = []struct {
 	names []string
 }{
 	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
-	{"the ladder", []string{"tier", "tiers", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
+	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},

@@ -236,6 +236,16 @@ Beyond the expected commands, a few are Switchboard's own:
   their own store and do not. No other tool can answer "what has this
   workspace's history cost, and what would it have cost pinned to one
   model," because no other tool has a ladder to price it against.
+- `/ladder` and `sb ladder` answer the question the ladder itself poses:
+  does work that starts low stay low. Every recorded turn, summed per
+  rung across the workspace's sessions — where it opened, whether it
+  stayed, where the ones that moved went, each destination named by the
+  rung that serves it today. `/why` answers for one session; this is the
+  same record at workspace scale, and the caveats ride in the output
+  because the record demands them: a move is not a verdict on the rung
+  it left, and an abandoned turn is counted as opened and nothing more.
+  The paired verdicts stay in `/races`, the surviving lines in `/blame`,
+  the money in `/stats` — this is the fourth leg, position.
 - `/find <text>` and `sb find` search what was actually said across the
   workspace's recorded sessions — prompts and answers, case-insensitive —
   and hand back the ids `/resume` takes, because "which session did I fix

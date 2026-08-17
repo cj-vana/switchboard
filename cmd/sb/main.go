@@ -181,6 +181,24 @@ func run() error {
 		}
 		return runRacesCLI(os.Stdout, store, cwd)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "ladder" {
+		if len(os.Args) > 2 {
+			return fmt.Errorf("sb ladder takes no argument; %q is not one", os.Args[2])
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		return runLadderCLI(os.Stdout, cfg.Tiers, store, cwd)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mistakes" {
 		if len(os.Args) > 2 {
 			return fmt.Errorf("sb mistakes takes no argument; %q is not one", os.Args[2])
