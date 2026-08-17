@@ -15,6 +15,7 @@ package bisect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -68,11 +69,23 @@ type Runner struct {
 	OnProbe func(turn, probes int)
 }
 
+// RestoreError wraps a failure to put the tree back — the one error that
+// outranks any answer, cancellation included, because a bisect that
+// leaves the workspace in the past has done damage no verdict repays. It
+// is typed so a surface can refuse to say "restored" when it was not.
+type RestoreError struct{ Err error }
+
+func (e *RestoreError) Error() string {
+	return "the workspace was not fully restored: " + e.Err.Error()
+}
+
+func (e *RestoreError) Unwrap() error { return e.Err }
+
 // Run bisects. Every exit path — a verdict, a verifier error, an
-// unwritable file, cancellation — restores the current state first;
-// restore failures are the one error that outranks the answer, because a
-// bisect that leaves the tree in the past has done damage no verdict
-// repays.
+// unwritable file, cancellation — restores the current state first, and
+// a restore failure joins whatever error was already in flight rather
+// than deferring to it: the caller must never be told less than that the
+// tree is wrong.
 func (r *Runner) Run(ctx context.Context) (result Result, err error) {
 	if len(r.States) == 0 {
 		return Result{}, fmt.Errorf("no recorded turns to bisect")
@@ -89,8 +102,8 @@ func (r *Runner) Run(ctx context.Context) (result Result, err error) {
 		current[path] = st
 	}
 	defer func() {
-		if restoreErr := restoreAll(current); restoreErr != nil && err == nil {
-			err = restoreErr
+		if restoreErr := restoreAll(current); restoreErr != nil {
+			err = errors.Join(err, &RestoreError{Err: restoreErr})
 		}
 	}()
 

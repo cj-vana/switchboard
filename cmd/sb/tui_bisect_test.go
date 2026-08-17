@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,5 +175,31 @@ func TestBisectVerdictFoldsIntoTheNextPrompt(t *testing.T) {
 	}
 	if strings.Contains(folded, "sk-ant-api03-abcdefghijklmnopqrstuvwxyz") {
 		t.Errorf("a key-shaped string in verifier output rode the fold unredacted:\n%s", folded)
+	}
+}
+
+// Whatever else ended the run, a restore failure must never be softened
+// into "the workspace is restored" — that is the lie the contract exists
+// to prevent.
+func TestBisectDoneRefusesToClaimRestoredWhenItWasNot(t *testing.T) {
+	m := testModel(t)
+	run := &bisectRun{
+		command:   "go test ./...",
+		labels:    []string{"only"},
+		cancel:    func() {},
+		cancelled: true,
+		rail:      m.tr.add(&entry{kind: kindInfo, text: "bisect"}),
+	}
+	m.bisect = run
+	m.busy = true
+
+	m.onBisectDone(bisectDoneMsg{err: errors.Join(context.Canceled, &bisect.RestoreError{Err: os.ErrPermission})})
+
+	joined := strings.Join(m.tr.flat, "\n")
+	if strings.Contains(joined, "workspace is restored") {
+		t.Errorf("a failed restore was reported as restored:\n%s", joined)
+	}
+	if !strings.Contains(joined, "not fully restored") {
+		t.Errorf("the restore failure is not named:\n%s", joined)
 	}
 }

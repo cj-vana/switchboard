@@ -192,3 +192,48 @@ func TestRunWithNoTurnsRefuses(t *testing.T) {
 		t.Fatal("no recorded turns must refuse, not probe")
 	}
 }
+
+// A restore failure outranks any answer, cancellation included: the
+// caller must never be told less than that the tree is wrong.
+func TestRunSurfacesARestoreFailureBesideCancellation(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f.go")
+	if err := os.WriteFile(f, []byte("broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	probes := 0
+	r := &Runner{
+		States: []map[string]checkpoint.FileState{
+			{f: state("fine v0\n")},
+			{f: state("fine v1\n")},
+			{f: state("fine v2\n")},
+		},
+		Verify: func(context.Context) Verdict {
+			probes++
+			if probes == 2 {
+				// Make the final restore unwritable, then walk away: the
+				// path becomes a directory, so WriteFile cannot put the
+				// bytes back. Passing keeps the search going, so the next
+				// probe is where the cancellation lands.
+				if err := os.Remove(f); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(f, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				cancel()
+				return Verdict{Passed: true}
+			}
+			return Verdict{FirstFail: "broken"}
+		},
+	}
+	_, err := r.Run(ctx)
+	var restoreFail *RestoreError
+	if !errors.As(err, &restoreFail) {
+		t.Fatalf("err = %v, want the restore failure surfaced beside the cancellation", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, the cancellation should still be in it", err)
+	}
+}

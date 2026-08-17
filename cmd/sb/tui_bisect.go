@@ -188,7 +188,15 @@ func (m *tuiModel) onBisectDone(msg bisectDoneMsg) tea.Cmd {
 	run.cancel()
 
 	summary := ""
+	var restoreFail *bisect.RestoreError
 	switch {
+	case errors.As(msg.err, &restoreFail):
+		// The one message that must never soften: whatever else ended the
+		// run — cancellation included — the tree may sit at a past state,
+		// and saying "restored" here would be the lie the contract exists
+		// to prevent.
+		summary = "bisect: " + restoreFail.Error() + " — /diff shows what stands"
+		m.addNotice("error", summary)
 	case run.cancelled || errors.Is(msg.err, context.Canceled):
 		summary = "bisect cancelled; the workspace is restored"
 		m.addNotice("", summary)
