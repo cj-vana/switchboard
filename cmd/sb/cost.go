@@ -10,6 +10,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/session"
@@ -87,4 +88,58 @@ func costWord(cat *catalog.Catalog, state session.State, total *catalog.Money, p
 		*total += catalog.Money(state.CostMicroUSD)
 		return catalog.Money(state.CostMicroUSD).String()
 	}
+}
+
+// costTurnsLines is the per-ask receipt: the session's turns ordered by
+// what they billed, each beside its own words, so "which asks cost the
+// most" reads straight off the record. Turns that billed nothing fold
+// into one closing line — local, plan, and unpriced stay out of the
+// dollar rows, because a $0.00 row teaches the wrong lesson here as
+// everywhere.
+func costTurnsLines(turns []session.TurnCost) []string {
+	if len(turns) == 0 {
+		return []string{"  no turns recorded yet"}
+	}
+	billed := make([]session.TurnCost, 0, len(turns))
+	var unbilled, unbilledCalls, unbilledIn, unbilledOut int
+	for _, t := range turns {
+		if t.CostMicroUSD > 0 {
+			billed = append(billed, t)
+			continue
+		}
+		unbilled++
+		unbilledCalls += t.Calls
+		unbilledIn += t.Usage.InputTokens + t.Usage.CacheReadTokens + t.Usage.CacheWriteTokens
+		unbilledOut += t.Usage.OutputTokens
+	}
+	sort.SliceStable(billed, func(i, j int) bool { return billed[i].CostMicroUSD > billed[j].CostMicroUSD })
+
+	var lines []string
+	const shown = 8
+	for i, t := range billed {
+		if i == shown {
+			var rest catalog.Money
+			for _, more := range billed[shown:] {
+				rest += catalog.Money(more.CostMicroUSD)
+			}
+			lines = append(lines, fmt.Sprintf("  … and %d more billed turns, %s between them", len(billed)-shown, rest))
+			break
+		}
+		in := t.Usage.InputTokens + t.Usage.CacheReadTokens + t.Usage.CacheWriteTokens
+		lines = append(lines, fmt.Sprintf("  #%-3d %-10s ↓%s ↑%s  %d calls  %q",
+			t.Turn, catalog.Money(t.CostMicroUSD).String(), compact(in), compact(t.Usage.OutputTokens),
+			t.Calls, truncate(t.Prompt, 48)))
+	}
+	if len(billed) == 0 {
+		lines = append(lines, "  no turn billed dollars")
+	}
+	if unbilled > 0 {
+		word := "turns"
+		if unbilled == 1 {
+			word = "turn"
+		}
+		lines = append(lines, fmt.Sprintf("  %d %s billed nothing — local, plan, or unpriced calls (↓%s ↑%s across %d calls); /cost keeps those meterings apart",
+			unbilled, word, compact(unbilledIn), compact(unbilledOut), unbilledCalls))
+	}
+	return lines
 }

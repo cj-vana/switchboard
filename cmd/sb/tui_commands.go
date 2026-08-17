@@ -48,7 +48,7 @@ func commands() []commandItem {
 		{name: "races", usage: "[all]", desc: "every paired verdict collected, tallied by pair; all spans workspaces", busySafe: true, run: cmdRaces},
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
-		{name: "cost", aliases: []string{"usage"}, usage: "[rungs]", desc: "tokens and cost; /cost rungs reprices the session on every rung", busySafe: true, run: cmdCost},
+		{name: "cost", aliases: []string{"usage"}, usage: "[rungs|turns]", desc: "tokens and cost; rungs reprices the session per rung, turns orders its asks by bill", busySafe: true, run: cmdCost},
 		{name: "estimate", usage: "[prompt]", desc: "price the next turn on every rung before it is sent", run: cmdEstimate},
 		{name: "stats", usage: "[all]", desc: "every session this workspace has recorded, repriced on today's ladder; all spans workspaces", busySafe: true, run: cmdStats},
 		{name: "find", usage: "[all] <text>", desc: "search recorded sessions for what was said; all spans workspaces", busySafe: true, run: cmdFind},
@@ -373,8 +373,17 @@ func cmdCost(m *tuiModel, args string) tea.Cmd {
 		}
 		m.addInfo(strings.Join(costRungsLines(m.app.config.Tiers, m.app.catalog, m.app.tier.ID, usages), "\n"))
 		return nil
+	case "turns":
+		// Same read-only posture as rungs; the question is per ask rather
+		// than per rung: which prompts cost the money.
+		turns, err := session.ReadTurnCosts(m.app.loop.Session.Path())
+		if err != nil {
+			return noticeCmd("error", err.Error())
+		}
+		m.addInfo("the session's turns, by what they billed\n" + strings.Join(costTurnsLines(turns), "\n"))
+		return nil
 	default:
-		return noticeCmd("error", "/cost shows this session; /cost rungs reprices it on every rung of the ladder")
+		return noticeCmd("error", "/cost shows this session; /cost rungs reprices it on every rung, /cost turns orders its asks by what they billed")
 	}
 }
 

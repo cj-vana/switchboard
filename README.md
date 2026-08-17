@@ -196,6 +196,11 @@ Beyond the expected commands, a few are Switchboard's own:
   accounting for every session the workspace has recorded, from the
   command line, with the three meterings kept apart throughout: dollars
   are summed, local sessions say local, plan sessions say plan.
+- `/cost turns` orders the session's asks by what they billed — each
+  turn's dollars, tokens, and calls beside the prompt's own words, so
+  "which ask cost the money" reads straight off the record. Turns that
+  billed nothing fold into one stated line rather than rendering as
+  $0.00, because local, plan, and unpriced are not free.
 - `/cost rungs` reprices the session that just happened on every rung of
   your ladder: each recorded call, priced cold on each rung — no cache
   assumed, since a counterfactual has no provider reports — next to what
