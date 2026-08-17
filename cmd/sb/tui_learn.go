@@ -95,7 +95,11 @@ func cmdLearn(m *tuiModel, args string) tea.Cmd {
 			return noticeMsg{level: "error", text: "learn failed, nothing written: " + err.Error()}
 		}
 
-		content, redacted, err := composeSkill(name, generated)
+		provenance := fmt.Sprintf(
+			"Provenance: distilled from session %s on %s, %d messages, written by %s. "+
+				"When this method stops matching the repository, delete the pack and /learn a fresh one; the session remains the evidence.",
+			state.ID, time.Now().Format("2006-01-02"), len(state.Messages), target.ID())
+		content, redacted, err := composeSkill(name, generated, provenance)
 		if err != nil {
 			return noticeMsg{level: "error", text: "learn failed, nothing written: " + err.Error()}
 		}
@@ -152,7 +156,16 @@ func distill(ctx context.Context, client provider.Provider, target provider.Rout
 // passes the credential scan before anything reaches disk. The redaction is
 // unconditional, never a prompt, because the file outlives every chance to
 // ask.
-func composeSkill(name, generated string) (content string, redacted int, err error) {
+//
+// The provenance paragraph exists so the pack can be deleted safely later.
+// Instruction files grow without bound precisely because the reason an
+// instruction exists is lost the day it is written, and deleting one whose
+// rationale is gone feels like risking a regression; a pack that names the
+// session it came from can be judged against that session and dropped when
+// the method stops matching the repository. It rides the body rather than
+// the frontmatter, because the neighboring tools' parsers ignore unknown
+// frontmatter keys and this line is written for readers, not parsers.
+func composeSkill(name, generated, provenance string) (content string, redacted int, err error) {
 	desc, body, _ := strings.Cut(strings.TrimSpace(generated), "\n")
 	// The parser reads the description to the end of its line, so it is cut
 	// at the distiller's first newline; a wrapped tail is not lost, it opens
@@ -164,6 +177,9 @@ func composeSkill(name, generated string) (content string, redacted int, err err
 	}
 
 	content = "---\nname: " + name + "\ndescription: " + desc + "\n---\n\n" + body + "\n"
+	if provenance != "" {
+		content += "\n" + provenance + "\n"
+	}
 	if leaks := credential.ScanPrompt(content); len(leaks) > 0 {
 		content = credential.Redact(content, leaks)
 		redacted = len(leaks)

@@ -452,6 +452,15 @@ content for the token is the guarantee. Do not add a path that writes the
 distiller's output to disk without that scan, and do not register a freshly
 written pack into a running session's registry.
 
+The pack ends with a provenance paragraph — the session it was distilled
+from, the date, the writing model — because a rule whose rationale is
+lost can never be safely deleted, and instruction files rot by exactly
+that mechanism. It rides the body, not the frontmatter: the neighboring
+tools' parsers ignore unknown frontmatter keys, and the line is written
+for the reader deciding whether the pack still earns its place. The
+provenance string sits inside the credential scan's reach like the rest
+of the file.
+
 There is deliberately no exported boolean for this. `execution.Capability`
 carries a `*Confinement`, which is produced only by a self-test that passed on
 this machine and is also the thing that wraps the command. Do not add a

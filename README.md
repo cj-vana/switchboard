@@ -570,6 +570,15 @@ so redaction there is unconditional. The new skill is offered when the
 next session assembles its tools: discovery is once per session, and
 the command says so rather than pretending otherwise.
 
+Every pack `/learn` writes ends with a provenance paragraph: which
+session it was distilled from, when, and by which model. Instruction
+files grow without bound precisely because the reason an instruction
+exists is lost the day it is written, and deleting one whose rationale
+is gone feels like risking a regression. A pack that names its session
+can be judged against it and dropped the day the method stops matching
+the repository — the session remains the evidence, and `/learn` writes
+a fresh one.
+
 ## Credentials
 
 Local targets need none. For everything else, the resolution order is: an

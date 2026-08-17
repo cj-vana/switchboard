@@ -16,7 +16,7 @@ func TestComposeSkillRedactsBeforeAnythingReachesDisk(t *testing.T) {
 	token := "ghp_" + strings.Repeat("a", 36)
 	generated := "Use when releasing this package.\n\nRun the publish script with the token " + token + " set in the env."
 
-	content, redacted, err := composeSkill("release-checklist", generated)
+	content, redacted, err := composeSkill("release-checklist", generated, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestComposeSkillRoundTripsThroughTheLoader(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // the loader also reads ~/.switchboard/skills
 	generated := "Use when the build cache misbehaves in this repo.\n\n1. Stop the daemon.\n2. Clear ~/.cache/build.\n3. Rebuild with -x."
 
-	content, _, err := composeSkill("cache-repair", generated)
+	content, _, err := composeSkill("cache-repair", generated, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestComposeSkillCutsAWrappedDescriptionAtItsLine(t *testing.T) {
 	// The parser reads the description to the end of its line, so the cut is
 	// at the distiller's first newline; the wrapped tail must land in the
 	// body rather than leak a newline into the frontmatter or be dropped.
-	content, _, err := composeSkill("npm-release", generated)
+	content, _, err := composeSkill("npm-release", generated, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +86,38 @@ func TestComposeSkillCutsAWrappedDescriptionAtItsLine(t *testing.T) {
 	}
 }
 
+// The provenance paragraph is what makes the pack deletable later: it rides
+// the body where a reader finds it, it survives the loader round trip, and
+// it sits inside the credential scan's reach like everything else composed.
+func TestComposeSkillCarriesProvenanceInTheBody(t *testing.T) {
+	generated := "Use when releasing this package.\n\nRun the publish script."
+	prov := "Provenance: distilled from session abc123 on 2026-08-17, 12 messages, written by ollama/local/qwen3:4b."
+
+	content, _, err := composeSkill("release-checklist", generated, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, prov) {
+		t.Errorf("the provenance paragraph is missing:\n%s", content)
+	}
+	if strings.Contains(strings.SplitN(content, "---\n\n", 2)[0], "Provenance") {
+		t.Errorf("provenance belongs in the body, not the frontmatter:\n%s", content)
+	}
+
+	// A key that somehow reached the provenance string redacts like one in
+	// the method: the scan covers the whole file, not the distiller's half.
+	token := "ghp_" + strings.Repeat("b", 36)
+	leaked, redacted, err := composeSkill("x-ray", generated, "Provenance: "+token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(leaked, token) || redacted != 1 {
+		t.Fatalf("the provenance escaped the scan (redacted=%d):\n%s", redacted, leaked)
+	}
+}
+
 func TestComposeSkillRefusesAnEmptyMethod(t *testing.T) {
-	if _, _, err := composeSkill("nothing", "Only a description, no body."); err == nil {
+	if _, _, err := composeSkill("nothing", "Only a description, no body.", ""); err == nil {
 		t.Fatal("a skill with no instructions is not a skill")
 	}
 }
