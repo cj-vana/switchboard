@@ -13,7 +13,7 @@ import (
 )
 
 // completionSubcommands is every word main dispatches on before flags.
-var completionSubcommands = []string{"auth", "update", "doctor", "cost", "find", "stats", "races", "completion"}
+var completionSubcommands = []string{"auth", "update", "doctor", "cost", "find", "stats", "races", "blame", "completion"}
 
 // completionFlags is every flag the main flag set registers.
 var completionFlags = []string{

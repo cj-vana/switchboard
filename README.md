@@ -235,6 +235,14 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace's own view) and `/undo` (taking a turn back). Its scope is
   stated in its output: what write and edit touched; a shell command's
   side effects are not captured, because the recorder cannot see them.
+- `/blame <path>` and `sb blame` answer the question `/changes` raises:
+  not which files a turn touched but which lines of this file each
+  recorded turn wrote, on which rung and model, asked what — replayed
+  from the session logs, where every write's bytes and every edit's
+  replacement already live, and aligned against the file as it is now.
+  Lines the record cannot explain say so: typed, shell-made, or before
+  the log, never guessed. It is `git blame` for the half git cannot
+  see, and it reads across every session the workspace has recorded.
 - `/copy` takes the last response to the clipboard, `/copy code` its
   newest fenced block — the thing a mouse selection across wrapped,
   styled terminal lines mangles — and `/copy code 2` the block before

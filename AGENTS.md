@@ -39,6 +39,11 @@ point into it, and this file restates the constraints that bind the code.
                          {path, line, symbol} and resolve the column
     internal/checkpoint/ per-turn file snapshots behind /undo; files are
                          restored, messages never are
+    internal/blame/      line-level provenance behind /blame: replays the
+                         write and edit calls the session logs carry and
+                         aligns them against the file on disk; a line the
+                         replay cannot explain is outside the record,
+                         never guessed
     internal/config/     the ladder and settings; the TUI owns the file and
                          Save regenerates it, so nothing may depend on
                          comments in config.toml surviving
@@ -96,6 +101,18 @@ approximating them would escalate on evidence that does not exist.
 A failure signature is the first line that looks like a failure, with digits
 stripped. Comparing whole outputs would make every retry look new, because
 timings and counts differ between two runs of the same broken thing.
+
+**Provenance is replay of the record, never inference about it.** `/blame`
+(`internal/blame`) attributes a line only when replaying the recorded write
+and edit calls reproduces that line: the write's bytes and the edit's
+replacement come from the session log, an edit re-applies under the same
+exactly-once-or-replace_all rule the tool enforced, and one that no longer
+applies against the reconstruction is counted as unplaced and said, not
+forced into place. Everything else — hands, shell commands, formatters, the
+file before the log began — reads as outside the record. Attribution is
+evidence about which rungs earn their keep, and one guessed line poisons
+every claim built on it, so do not widen the replay with fuzzy matching or
+nearest-edit heuristics.
 
 **Feasibility is not economics.** A target that cannot hold the context, lacks a
 capability, or is not an approved destination is infeasible, not expensive. The

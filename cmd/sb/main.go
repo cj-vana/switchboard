@@ -181,6 +181,23 @@ func run() error {
 		}
 		return runRacesCLI(os.Stdout, store, cwd)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "blame" {
+		if len(os.Args) < 3 {
+			return fmt.Errorf("sb blame takes the file to annotate")
+		}
+		if len(os.Args) > 3 {
+			return fmt.Errorf("sb blame takes one file; %q is extra", os.Args[3])
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		store, err := session.DefaultStore()
+		if err != nil {
+			return err
+		}
+		return runBlameCLI(os.Stdout, store, cwd, os.Args[2])
+	}
 
 	var opts options
 	// The flag package prints flags alone; the subcommands live in the

@@ -100,6 +100,23 @@ cache. Rewind mutates history to move; fork moves without mutating. And
 it whenever, the pin a plain record that survives resume and rides any
 fork containing it.
 
+**Line-level provenance to the model that wrote it.** `git blame` answers
+"who committed this"; in an agent session the missing half is "which
+model, asked what", and the session log already holds it — every write's
+bytes and every edit's exact replacement, beside the usage record that
+names the target and the route record that names the rung. `/blame
+<path>` and `sb blame` replay those calls oldest-first and align the
+result against the file on disk (`internal/blame`), so every current
+line reads as: this rung, this model, this session and turn, the turn's
+own words — or as outside the record, the label for what hands, shell
+commands, and formatters produced, because only write and edit put their
+bytes where replay can see them. A recorded edit that no longer applies
+is counted and said, never guessed into place. The neighbors keep
+transcripts and checkpoints; none can tell you which lines of a file the
+cheap model wrote and which lines nobody's model wrote at all — the
+question that decides whether a ladder's lower rungs are earning their
+keep.
+
 **An outbound credential gate.** The credential posture points both ways:
 the keys the tool holds are unprintable by type
 (`internal/credential/credential.go`), and the keys the user is about to
@@ -246,16 +263,17 @@ Switchboard now concedes nothing: the converged skeleton is fully present
 custom commands, skills that load the neighbors' own packs, availability
 fallbacks, per-turn undo, session fork with named pins, structural search,
 web search and fetch, and language-server symbol lookup), and
-on top of it sit twelve axes — evidence-based routing with `/why`,
+on top of it sit thirteen axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
 verified-or-absent sandboxing, delegation priced on the ladder, the
 `/race` paired trial whose verdicts feed that harness, the `/watch`
 verifier that speaks in deltas and moves the ladder, the byte-identical
 `/retry` whose verdicts join the same corpus, the outbound credential
-gate that covers the web tools' egress, and the tracked cache belief
-with its `/cache` surface — where the neighbors have no counterpart at
-all.
+gate that covers the web tools' egress, the tracked cache belief
+with its `/cache` surface, and line-level provenance through `/blame`,
+which reads which rung wrote which lines out of the record itself —
+where the neighbors have no counterpart at all.
 
 By the measure this product defines — capability per dollar, safely, with
 every model decision visible and explainable — Switchboard is the
