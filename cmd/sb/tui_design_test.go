@@ -179,3 +179,23 @@ func TestStatusBarShedsLuxuriesFirst(t *testing.T) {
 		}
 	}
 }
+
+// The tab's title answers "which terminal was that": workspace and tier,
+// marked while a turn runs. Startup and every later update share one
+// formatter, so the two can never disagree about what the title holds.
+func TestTitleNamesWorkspaceAndTierAndMarksWork(t *testing.T) {
+	m := testModel(t)
+	idle := m.titleText()
+	if !strings.Contains(idle, "ws") || !strings.Contains(idle, "t1") {
+		t.Fatalf("idle title lost the workspace or the tier: %q", idle)
+	}
+	m.busy = true
+	if busy := m.titleText(); !strings.HasPrefix(busy, "● ") {
+		t.Fatalf("a running turn is not marked in the title: %q", busy)
+	}
+	m.busy = false
+	m.syncTitle()
+	if cmd := m.syncTitle(); cmd != nil {
+		t.Fatal("an unchanged title was rewritten; the memo should keep quiet")
+	}
+}

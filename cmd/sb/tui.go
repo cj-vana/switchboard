@@ -306,8 +306,12 @@ func runTUI(
 		initial = append(initial, startAdvisor(app))
 	}
 	// The tab's title answers "which terminal was that" for a user with six
-	// of them: this workspace, this tier.
-	initial = append(initial, tea.SetWindowTitle("sb · "+filepath.Base(workspace)+" · "+tier.ID))
+	// of them: this workspace, this tier. It goes through syncTitle so the
+	// startup title and every later update are the same format by
+	// construction.
+	if cmd := m.syncTitle(); cmd != nil {
+		initial = append(initial, cmd)
+	}
 	m.initialCmd = tea.Batch(initial...)
 
 	_, err := p.Run()
@@ -482,10 +486,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recordMove(msg.rank)
 		m.tierLine = m.app.tierLine()
 		m.refreshCtxWindow()
-		return m, nil
+		return m, m.syncTitle()
 
 	case tierSwitchMsg:
-		return m, m.onTierSwitch(msg)
+		return m, tea.Batch(m.onTierSwitch(msg), m.syncTitle())
 
 	case overrideProbeMsg:
 		return m, m.onOverrideProbe(msg)
@@ -1389,20 +1393,25 @@ func (m *tuiModel) ring() {
 	}
 }
 
-// syncTitle keeps the terminal title naming the workspace, marked while a
-// turn runs, so the working pane is findable from a wall of terminals. It
-// returns nil when nothing changed, because a title rewrite per tick would
-// be chatter.
+// syncTitle keeps the terminal title naming the workspace and the active
+// tier, marked while a turn runs, so the working pane is findable from a
+// wall of terminals. It returns nil when nothing changed, because a title
+// rewrite per tick would be chatter.
 func (m *tuiModel) syncTitle() tea.Cmd {
-	title := "sb · " + filepath.Base(m.app.workspace)
-	if m.busy {
-		title = "● " + title
-	}
+	title := m.titleText()
 	if title == m.lastTitle {
 		return nil
 	}
 	m.lastTitle = title
 	return tea.SetWindowTitle(title)
+}
+
+func (m *tuiModel) titleText() string {
+	title := "sb · " + filepath.Base(m.app.workspace) + " · " + m.app.tier.ID
+	if m.busy {
+		title = "● " + title
+	}
+	return title
 }
 
 func itoa(n int) string { return fmt.Sprint(n) }
