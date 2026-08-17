@@ -179,6 +179,12 @@ func (a *tuiApp) moveTo(rank int, why string) {
 	// switch does, and the same honesty applies: priced before the rebind
 	// discards the tracker, spoken only when there is a number to speak.
 	abandoned := abandonedCacheNote(a.loop.Cache, a.catalog, time.Now())
+	if abandoned != "" {
+		// The note is a fact about this session's economics, so it goes in
+		// the session's record: /export carries it where it happened, and a
+		// resumed reading still sees what the move cost.
+		a.loop.Session.AppendNote("info", abandoned)
+	}
 	a.tier = probed
 	a.loop.Target = probed.Target
 	a.loop.Provider = client

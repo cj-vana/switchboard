@@ -939,6 +939,7 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 	if abandoned != "" {
 		m.addInfo(abandoned)
 		m.routeLog = append(m.routeLog, abandoned)
+		m.app.loop.Session.AppendNote("info", abandoned)
 	}
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
@@ -1086,8 +1087,12 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 		m.app.loop.Session.AppendNote("warn", msg.note)
 	}
 	// What the old target held warm is priced before the bind discards its
-	// tracker: afterwards there is nothing left to ask.
+	// tracker: afterwards there is nothing left to ask. A spoken note goes
+	// in the session record too, so the export and a later reading keep it.
 	abandoned := abandonedCacheNote(m.app.loop.Cache, m.app.catalog, time.Now())
+	if abandoned != "" {
+		m.app.loop.Session.AppendNote("info", abandoned)
+	}
 	m.app.bind(msg.tier, msg.client, true)
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
