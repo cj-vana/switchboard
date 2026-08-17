@@ -67,7 +67,7 @@ func commands() []commandItem {
 		{name: "undo", usage: "[list|path]", desc: "take back the last turn's file changes, or one file's", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
 		{name: "retry", usage: "[tier]", desc: "take back the last turn and run it again, optionally on another rung", run: cmdRetry},
-		{name: "copy", usage: "[n]", desc: "copy the last (or nth-latest) response", busySafe: true, run: cmdCopy},
+		{name: "copy", usage: "[n|code [n]]", desc: "copy the last response, or its code: /copy code takes the newest block", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
 		{name: "models", desc: "browse models and bind tiers", run: cmdModels},
 		{name: "think", aliases: []string{"effort"}, usage: "[level]", desc: "reasoning effort for the active model, this session", run: cmdThink},
@@ -667,6 +667,41 @@ func cmdTrust(m *tuiModel, args string) tea.Cmd {
 }
 
 func cmdCopy(m *tuiModel, args string) tea.Cmd {
+	// /copy code [n] takes the nth-newest fenced block across the
+	// transcript's responses: a block is what a mouse selection across
+	// wrapped, styled lines mangles, which is exactly when copying is
+	// wanted.
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(args), "code"); ok {
+		n := 1
+		if rest = strings.TrimSpace(rest); rest != "" {
+			v, err := strconv.Atoi(rest)
+			if err != nil || v < 1 {
+				return noticeCmd("error", "/copy code takes a positive number: /copy code 2 copies the second-newest block")
+			}
+			n = v
+		}
+		var blocks []string
+		for i := len(m.tr.entries) - 1; i >= 0; i-- {
+			if m.tr.entries[i].kind != kindAssistant {
+				continue
+			}
+			found := codeBlocks(m.tr.entries[i].text)
+			for j := len(found) - 1; j >= 0; j-- {
+				blocks = append(blocks, found[j])
+			}
+		}
+		if len(blocks) == 0 {
+			return noticeCmd("error", "no fenced code blocks in this session's responses")
+		}
+		if n > len(blocks) {
+			return noticeCmd("error", fmt.Sprintf("only %d code blocks to copy", len(blocks)))
+		}
+		block := blocks[n-1]
+		return func() tea.Msg {
+			return copyMsg{n: n, what: "code block", err: clipboard.WriteAll(block)}
+		}
+	}
+
 	n := 1
 	if args != "" {
 		v, err := strconv.Atoi(args)
@@ -688,6 +723,38 @@ func cmdCopy(m *tuiModel, args string) tea.Cmd {
 	return func() tea.Msg {
 		return copyMsg{n: n, err: clipboard.WriteAll(text)}
 	}
+}
+
+// codeBlocks extracts fenced blocks in document order, fence lines
+// excluded. Both fence styles markdown admits are read, and an unclosed
+// fence yields what it opened: a streaming response cut mid-block still
+// hands over the code it showed.
+func codeBlocks(text string) []string {
+	var blocks []string
+	var current []string
+	fence := ""
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if fence == "" {
+			switch {
+			case strings.HasPrefix(trimmed, "```"):
+				fence = "```"
+			case strings.HasPrefix(trimmed, "~~~"):
+				fence = "~~~"
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, fence) {
+			blocks = append(blocks, strings.Join(current, "\n"))
+			current, fence = nil, ""
+			continue
+		}
+		current = append(current, line)
+	}
+	if fence != "" && len(current) > 0 {
+		blocks = append(blocks, strings.Join(current, "\n"))
+	}
+	return blocks
 }
 
 func cmdTheme(m *tuiModel, args string) tea.Cmd {

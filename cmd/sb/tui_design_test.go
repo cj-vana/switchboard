@@ -312,3 +312,35 @@ func TestUndoPathRestoresOneFile(t *testing.T) {
 		t.Fatalf("an uncaptured path did not say so:\n%s", joined)
 	}
 }
+
+// /copy code takes a block a mouse selection across wrapped styled lines
+// would mangle. Blocks count newest-first across responses, both fence
+// styles read, and a fence a stream left unclosed still yields its code.
+func TestCodeBlocksExtractFences(t *testing.T) {
+	text := "intro\n```go\nfunc a() {}\n```\nmiddle\n~~~\nplain block\n~~~\ntail\n```py\nunclosed"
+	blocks := codeBlocks(text)
+	if len(blocks) != 3 {
+		t.Fatalf("got %d blocks, want 3: %q", len(blocks), blocks)
+	}
+	if blocks[0] != "func a() {}" || blocks[1] != "plain block" || blocks[2] != "unclosed" {
+		t.Fatalf("blocks = %q", blocks)
+	}
+	if len(codeBlocks("no fences here")) != 0 {
+		t.Fatal("prose grew a code block")
+	}
+}
+
+func TestCopyCodeCountsNewestFirst(t *testing.T) {
+	m := testModel(t)
+	m.tr.add(&entry{kind: kindAssistant, text: "```\nold block\n```"})
+	m.tr.add(&entry{kind: kindAssistant, text: "```\nnew block\n```"})
+
+	if cmd := cmdCopy(m, "code 5"); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if joined := strings.Join(m.tr.flat, "\n"); !strings.Contains(joined, "only 2 code blocks") {
+		t.Fatalf("an out-of-range block did not say the count:\n%s", joined)
+	}
+}

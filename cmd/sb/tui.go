@@ -96,8 +96,9 @@ type updateCheckMsg struct {
 }
 type updateAppliedMsg struct{ version string }
 type copyMsg struct {
-	n   int
-	err error
+	n    int
+	what string // "response" or "code block"; the notice names what landed
+	err  error
 }
 type disarmQuitMsg struct{}
 
@@ -528,10 +529,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case copyMsg:
+		what := msg.what
+		if what == "" {
+			what = "response"
+		}
 		if msg.err != nil {
 			m.addNotice("error", "copy failed: "+msg.err.Error())
 		} else {
-			m.addNotice("", "copied response "+itoa(msg.n)+" to the clipboard")
+			m.addNotice("", "copied "+what+" "+itoa(msg.n)+" to the clipboard")
 		}
 		return m, nil
 

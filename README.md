@@ -205,6 +205,10 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace's own view) and `/undo` (taking a turn back). Its scope is
   stated in its output: what write and edit touched; a shell command's
   side effects are not captured, because the recorder cannot see them.
+- `/copy` takes the last response to the clipboard, `/copy code` its
+  newest fenced block — the thing a mouse selection across wrapped,
+  styled terminal lines mangles — and `/copy code 2` the block before
+  that, counted newest-first across the session's responses.
 - `/undo <path>` is the surgical form: one file back to what it was
   before the newest turn that captured it, typed the way `/changes`
   displays it, the turn's other files standing — and the capture is
