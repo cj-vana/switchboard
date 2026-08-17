@@ -13,7 +13,7 @@ func TestMentionTokenFindsOnlyTheActiveToken(t *testing.T) {
 	}{
 		{"look at @cmd/sb", "cmd/sb"},
 		{"@a", "a"},
-		{"@", ""},                        // nothing typed yet
+		{"@", ""},                         // nothing typed yet
 		{"mail me user@example.com ", ""}, // cursor past a space
 		{"plain text", ""},
 		{"two @first then @sec", "sec"},

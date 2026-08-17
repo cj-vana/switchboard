@@ -134,7 +134,8 @@ keys
   ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
   ctrl+o           expand the last route or tool entry; clicking one expands it too
   esc              interrupt the turn    ctrl+c ctrl+c      exit
-  pgup/pgdn        scroll                mouse wheel        scroll`)
+  pgup/pgdn        scroll                mouse wheel        scroll
+  home/end         top / bottom of the transcript`)
 	m.addInfo(b.String())
 	return nil
 }

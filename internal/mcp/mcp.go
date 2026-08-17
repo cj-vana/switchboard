@@ -175,8 +175,8 @@ func Connect(ctx context.Context, spec Spec, logf func(level, text string)) (*Cl
 	return c, nil
 }
 
-func (c *Client) Name() string    { return c.spec.Name }
-func (c *Client) Spec() Spec      { return c.spec }
+func (c *Client) Name() string { return c.spec.Name }
+func (c *Client) Spec() Spec   { return c.spec }
 func (c *Client) Tools() []ToolInfo {
 	return append([]ToolInfo(nil), c.tools...)
 }

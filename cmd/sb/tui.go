@@ -665,6 +665,15 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+d":
 		m.tr.scrollBy(-m.pageSize() / 2)
 		return nil
+	case "home":
+		// The endpoints of the scroll story: home is the session's opening,
+		// end is where the work is. Both are one press because reaching
+		// either by page is a chore proportional to the day's length.
+		m.tr.scrollBy(len(m.tr.flat))
+		return nil
+	case "end":
+		m.tr.scrollToBottom()
+		return nil
 	}
 
 	if m.suggestionsVisible() {
