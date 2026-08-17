@@ -13,7 +13,8 @@ Claude Code, Codex CLI, OpenCode, and Switchboard have all converged on the
 same skeleton: an agent loop over read/write/edit/exec plus file search, web
 fetch (and in most, search), MCP for the long tail of tools, hooks at
 tool-call boundaries, custom slash commands, repo instructions read from
-`AGENTS.md` or equivalent, subagents, permission modes, model fallbacks for
+`AGENTS.md` or equivalent, subagents, permission modes, a tool for asking
+the user a question with options, model fallbacks for
 availability, and session resume. On
 this skeleton none of the four is interesting; the differences are in what
 each tool believes about models, money, and safety.
@@ -129,6 +130,20 @@ transcripts and checkpoints; none can tell you which lines of a file the
 cheap model wrote and which lines nobody's model wrote at all — the
 question that decides whether a ladder's lower rungs are earning their
 keep.
+
+**The record answers for itself.** Two commands read the workspace's
+whole history back as evidence. `/mistakes` sums failure signatures
+across sessions — a failing test-shaped run reduced to the same
+digit-stripped signature the escalation detector compares live
+(`cmd/sb/mistakes.go`), so the ledger and the routing record cannot
+disagree about what a failure was — and reports what more than one
+session met, each entry naming its sessions for `/resume`, a fork's
+copied prefix counted once. `/ladder` sums the route records per rung:
+where turns opened, whether they stayed, where the moved ones went
+(`cmd/sb/ladder.go`), under §8.4's own caveats, stated in the output.
+None of the neighbors can ask its history which failure keeps returning
+or whether the cheap rungs held, because none records routing evidence
+to ask.
 
 **An outbound credential gate.** The credential posture points both ways:
 the keys the tool holds are unprintable by type
@@ -246,7 +261,8 @@ file is ever edited by hand (`cmd/sb/tui_onboard.go`, tested in
 flag registrations so the script cannot offer what the binary refuses
 (`cmd/sb/completion.go`); /help reads in five groups with every command
 held to exactly one by test; every CLI surface with in-session relevance
-has its in-session twin — cost, stats, find, doctor, races — each pair
+has its in-session twin — cost, stats, find, doctor, races, blame,
+mistakes, ladder — each pair
 sharing one body so the two can never tell different stories; and
 enforcement announces itself before it acts, the budget readout warming
 through the context gauge's own thresholds as the ceiling nears

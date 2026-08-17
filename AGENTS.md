@@ -578,8 +578,8 @@ code.
 
 Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
 hooks, the workspace-trust flow, named subagent definitions, skills —
-along with the `glob`/`grep`/`todo` tools and phase 6's `delegate`, each
-under the constraints above. Deliberately absent until their phases: the learned
+along with the `glob`/`grep`/`todo`/`ask` tools and phase 6's `delegate`,
+each under the constraints above. Deliberately absent until their phases: the learned
 router (phase 7 gates it on beating the heuristic) and everything in the
 phase 8 platform program.
 
