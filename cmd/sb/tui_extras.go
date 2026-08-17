@@ -146,6 +146,12 @@ func cmdContext(m *tuiModel, _ string) tea.Cmd {
 		fmt.Fprintf(&b, "the next request, estimated: system %s · tools %s · conversation %s · ~%s total\n",
 			compact(sys), compact(tools), compact(conv), compact(sys+tools+conv))
 	}
+	// The meter's consequence sits beside the meter: a reading at 78% means
+	// something different when the tripwire at 85% is in the same glance.
+	if m.app.config.CompactAuto {
+		fmt.Fprintf(&b, "auto-compact fires at %d%%; /compact preview states the trade, /compact auto off disarms it\n",
+			compactThreshold(m.app.config))
+	}
 	fmt.Fprintf(&b, "messages %d · tool calls %d · session ↓%s ↑%s tokens",
 		len(state.Messages), state.Calls, compact(state.Usage.InputTokens), compact(state.Usage.OutputTokens))
 	m.addInfo(b.String())

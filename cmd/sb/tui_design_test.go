@@ -275,10 +275,19 @@ func TestContextSplitsTheZones(t *testing.T) {
 	m.app.loop.Session.AppendMessage(provider.UserText(strings.Repeat("c", 800)))
 	cmdContext(m, "")
 	joined := strings.Join(m.tr.flat, "\n")
-	for _, want := range []string{"system", "tools", "conversation", "estimated"} {
+	for _, want := range []string{"system", "tools", "conversation", "estimated", "auto-compact fires at 85%"} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("/context is missing the %q zone:\n%s", want, joined)
+			t.Fatalf("/context is missing %q:\n%s", want, joined)
 		}
+	}
+
+	// Disarmed means unsaid: a tripwire that will not fire is not a fact
+	// about this session's window.
+	m.app.config.CompactAuto = false
+	m.tr.reset()
+	cmdContext(m, "")
+	if strings.Contains(strings.Join(m.tr.flat, "\n"), "auto-compact fires") {
+		t.Fatal("/context announced a disarmed tripwire")
 	}
 }
 
