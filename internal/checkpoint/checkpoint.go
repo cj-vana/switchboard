@@ -41,6 +41,16 @@ type fileState struct {
 	content []byte
 }
 
+// FileState is one captured file's bytes-and-existence, exported for the
+// surfaces that reconstruct past states rather than pop them — /bisect
+// above all. Existed false means the file was not there: restoring that
+// state is deleting the file.
+type FileState struct {
+	Existed bool
+	Mode    fs.FileMode
+	Content []byte
+}
+
 // Turn is one user turn's capture set.
 type Turn struct {
 	label   string
@@ -194,6 +204,29 @@ func (r *Recorder) Details() []TurnDetail {
 	}
 	if r.cur != nil && (len(r.cur.files) > 0 || len(r.cur.skipped) > 0) {
 		out = append(out, detail(r.cur))
+	}
+	return out
+}
+
+// StateBefore returns, for every file any turn from index turn onward
+// captured, its state just before that turn ran: the oldest pre-image at
+// or after it. The index is into Turns(), the still-open scope included.
+// Files no turn in that range captured are absent from the map — their
+// state before the turn is whatever they hold now, and the caller already
+// has that. Paths a partial turn skipped are absent too, which is why a
+// reconstruction over a partial turn must be refused, not attempted.
+func (r *Recorder) StateBefore(turn int) map[string]FileState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	scopes := r.turns
+	if r.cur != nil && (len(r.cur.files) > 0 || len(r.cur.skipped) > 0) {
+		scopes = append(append([]*Turn(nil), r.turns...), r.cur)
+	}
+	out := map[string]FileState{}
+	for i := len(scopes) - 1; i >= turn && i >= 0; i-- {
+		for path, st := range scopes[i].files {
+			out[path] = FileState{Existed: st.existed, Mode: st.mode, Content: append([]byte(nil), st.content...)}
+		}
 	}
 	return out
 }

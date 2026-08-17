@@ -178,6 +178,11 @@ type tuiModel struct {
 	race    *raceRun
 	raceLog []string
 
+	// bisect is the checkpoint bisect in flight, nil otherwise. It holds
+	// busy the way a race does: the tree is being rewritten under the
+	// probes, and a turn started mid-bisect would edit a reconstruction.
+	bisect *bisectRun
+
 	// Reverse history search (tui_history.go).
 	histSearch bool
 	histQuery  string
@@ -470,6 +475,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchReportMsg:
 		m.onWatchReport(msg)
 		return m, nil
+
+	case bisectProbeMsg:
+		m.onBisectProbe(msg)
+		return m, nil
+
+	case bisectDoneMsg:
+		return m, m.onBisectDone(msg)
 
 	case retryStartMsg:
 		return m, m.retryStart(msg)
@@ -789,6 +801,12 @@ func (m *tuiModel) pageSize() int {
 // interrupt cancels a running turn; at the prompt it clears the input, and a
 // second ctrl-c leaves.
 func (m *tuiModel) interrupt() tea.Cmd {
+	if m.bisect != nil && m.bisect.cancel != nil {
+		m.bisect.cancelled = true
+		m.bisect.cancel()
+		m.addNotice("", "cancelling the bisect; the workspace is being restored")
+		return nil
+	}
 	if m.race != nil && m.race.cancel != nil {
 		m.race.cancelled = true
 		m.race.cancel()

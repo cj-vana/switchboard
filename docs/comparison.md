@@ -150,6 +150,22 @@ the user writes, whose output replays in full every time and informs no
 routing, because there is no routing to inform. None ships a verifier
 that speaks in deltas, colors the status bar, and moves the ladder.
 
+**git bisect over turns, not commits.** When the verifier is red and
+nobody knows which turn broke it, `/bisect` binary-searches the
+session's checkpoints — the same per-turn pre-images `/undo` restores
+from — reconstructing the workspace before each probed turn, running
+the declared verifier, and naming the turn that turned it red with its
+first failing line (`internal/bisect`, `cmd/sb/tui_bisect.go`). The
+discipline is the workspace-safety one: the tree is put back on every
+exit path, cancellation included; a turn whose capture passed the
+snapshot cap refuses the whole bisect rather than restoring half a
+turn; and the verifier is the armed `/watch` command or one typed into
+`/bisect` itself, never inferred. Agent sessions produce exactly the
+situation git bisect was invented for — many small mutations, one of
+them wrong — at a granularity git never sees, because turns are not
+commits; the neighbors keep checkpoints, and none can ask them which
+one broke the build.
+
 **A rerun that is a controlled experiment.** `/retry` takes the last turn
 back — files revert through the undo checkpoints, the conversation forks
 at the turn's opening — and replays the recorded opening byte-for-byte,
@@ -263,12 +279,14 @@ Switchboard now concedes nothing: the converged skeleton is fully present
 custom commands, skills that load the neighbors' own packs, availability
 fallbacks, per-turn undo, session fork with named pins, structural search,
 web search and fetch, and language-server symbol lookup), and
-on top of it sit thirteen axes — evidence-based routing with `/why`,
+on top of it sit fourteen axes — evidence-based routing with `/why`,
 three-way cost honesty, a hard budget the machinery itself obeys, the
 measured estimator, the falsification harness with its runs in the tree,
 verified-or-absent sandboxing, delegation priced on the ladder, the
 `/race` paired trial whose verdicts feed that harness, the `/watch`
-verifier that speaks in deltas and moves the ladder, the byte-identical
+verifier that speaks in deltas and moves the ladder, the `/bisect` that
+binary-searches the session's own turns for the one that turned that
+verifier red, the byte-identical
 `/retry` whose verdicts join the same corpus, the outbound credential
 gate that covers the web tools' egress, the tracked cache belief
 with its `/cache` surface, and line-level provenance through `/blame`,

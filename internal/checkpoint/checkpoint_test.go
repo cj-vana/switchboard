@@ -272,3 +272,44 @@ func TestUndoFileRestoresOneAndConsumesTheCapture(t *testing.T) {
 		t.Fatalf("an emptied turn stayed on the stack: %+v", details)
 	}
 }
+
+func TestStateBeforeTakesTheOldestPreimageInRange(t *testing.T) {
+	dir := t.TempDir()
+	churned := filepath.Join(dir, "churned.go")
+	late := filepath.Join(dir, "late.go")
+	write(t, churned, "v0\n")
+
+	r := NewRecorder()
+	r.Begin("turn 0")
+	r.Record(churned)
+	write(t, churned, "v1\n")
+
+	r.Begin("turn 1")
+	r.Record(churned)
+	write(t, churned, "v2\n")
+
+	r.Begin("turn 2") // the open scope counts too
+	r.Record(late)
+	write(t, late, "created in turn 2\n")
+
+	before0 := r.StateBefore(0)
+	if got := string(before0[churned].Content); got != "v0\n" {
+		t.Errorf("before turn 0, churned = %q, want the oldest pre-image", got)
+	}
+	if before0[late].Existed {
+		t.Error("before turn 0, late.go had not been created")
+	}
+
+	before1 := r.StateBefore(1)
+	if got := string(before1[churned].Content); got != "v1\n" {
+		t.Errorf("before turn 1, churned = %q, want turn 1's own pre-image", got)
+	}
+
+	before2 := r.StateBefore(2)
+	if _, ok := before2[churned]; ok {
+		t.Error("no turn from 2 onward captured churned; its state then is whatever it holds now")
+	}
+	if before2[late].Existed {
+		t.Error("before turn 2, late.go had not been created")
+	}
+}

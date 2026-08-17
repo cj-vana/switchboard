@@ -73,6 +73,7 @@ func commands() []commandItem {
 		{name: "blame", usage: "<path>", desc: "which recorded turn wrote each line of a file, on which rung and model", busySafe: true, run: cmdBlame},
 		{name: "undo", usage: "[list|path]", desc: "take back the last turn's file changes, or one file's", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
+		{name: "bisect", usage: "[cmd]", desc: "binary-search this session's turns for the one that turned the verifier red", run: cmdBisect},
 		{name: "retry", usage: "[tier]", desc: "take back the last turn and run it again, optionally on another rung", run: cmdRetry},
 		{name: "copy", usage: "[n|code [n]]", desc: "copy the last response, or its code: /copy code takes the newest block", busySafe: true, run: cmdCopy},
 		{name: "setup", desc: "connect providers: keys, local server, an existing codex login", run: cmdSetup},
@@ -121,7 +122,7 @@ var helpGroups = []struct {
 }{
 	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "why", "race", "races", "cost", "stats", "budget", "think", "cache", "advisor"}},
-	{"files and work", []string{"diff", "changes", "blame", "undo", "watch", "copy", "init", "learn"}},
+	{"files and work", []string{"diff", "changes", "blame", "undo", "watch", "bisect", "copy", "init", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }

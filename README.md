@@ -294,6 +294,18 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace and offers the verifier it implies — a Makefile's test
   target, `go test ./...` for a module, `npm test` when the script is
   real — but only ever offers: arming stays a thing you type.
+- `/bisect` is `git bisect` for turns instead of commits: when the
+  verifier is red and you do not know which turn broke it, it
+  binary-searches this session's checkpoints — the same per-turn
+  pre-images `/undo` restores from — reconstructing the workspace before
+  each probed turn, running the declared verifier, and naming the turn
+  that turned it red, with the first failing line. The verifier is the
+  armed `/watch` command, or `/bisect <cmd>` names one for the run;
+  there is deliberately no inferred form. The tree is put back on every
+  exit path, cancellation included, and the report states the boundary:
+  reconstruction covers what write and edit captured, so shell-made and
+  hand-made changes ride along at today's state. While it runs the
+  session is busy the way a turn is — prompts queue, esc cancels.
 - `/race review this diff` runs one prompt on this rung and the next
   one up at once, side by side — the comparison every escalation
   decision is implicitly making, at the cost of typing five letters;

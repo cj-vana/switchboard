@@ -44,6 +44,11 @@ point into it, and this file restates the constraints that bind the code.
                          aligns them against the file on disk; a line the
                          replay cannot explain is outside the record,
                          never guessed
+    internal/bisect/     /bisect: binary search over the checkpoint
+                         recorder's per-turn states for the turn that
+                         turned the declared verifier red; mutates the
+                         tree in place and restores it on every exit
+                         path, cancellation included
     internal/config/     the ladder and settings; the TUI owns the file and
                          Save regenerates it, so nothing may depend on
                          comments in config.toml surviving
@@ -113,6 +118,19 @@ file before the log began — reads as outside the record. Attribution is
 evidence about which rungs earn their keep, and one guessed line poisons
 every claim built on it, so do not widen the replay with fuzzy matching or
 nearest-edit heuristics.
+
+**A bisect leaves the tree the way it found it, or that is the error.**
+`internal/bisect` probes past states in place, and its contract has three
+legs that must survive any change. The restore runs on every exit path —
+verdict, verifier error, unwritable file, cancellation — and a restore
+failure outranks the answer, because a bisect that leaves the workspace in
+the past has done damage no verdict repays. The verifier is declared, the
+/watch posture: the armed command or one typed into /bisect, never
+inferred from the workspace. And a turn whose capture passed the snapshot
+cap refuses the whole bisect, because reconstructing over it would restore
+half a turn — the same refusal /undo makes, applied before any probe runs.
+While one runs the session is busy the way a turn is; do not add a path
+that lets a turn start against a reconstructed tree.
 
 **Feasibility is not economics.** A target that cannot hold the context, lacks a
 capability, or is not an approved destination is infeasible, not expensive. The
