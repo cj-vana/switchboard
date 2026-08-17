@@ -195,7 +195,17 @@ their evidence too. Setup is one checksum-verified install command and one
 checklist: first run detects every reachable provider, takes keys into the
 OS keychain, wires an existing Codex login in one pick, and binds t1 — no
 file is ever edited by hand (`cmd/sb/tui_onboard.go`, tested in
-`tui_onboard_test.go`). The §14 performance discipline is tested rather
+`tui_onboard_test.go`). The binary emits its own shell completion
+(`sb completion zsh|bash`), with a test that reads main's dispatch and
+flag registrations so the script cannot offer what the binary refuses
+(`cmd/sb/completion.go`); /help reads in five groups with every command
+held to exactly one by test; every CLI surface with in-session relevance
+has its in-session twin — cost, stats, find, doctor, races — each pair
+sharing one body so the two can never tell different stories; and
+enforcement announces itself before it acts, the budget readout warming
+through the context gauge's own thresholds as the ceiling nears
+(`cmd/sb/tui_status.go`), because a gate whose first word is "no" taught
+its user nothing on the way there. The §14 performance discipline is tested rather
 than asserted: completed entries render once per width and streaming text
 never touches the renderer cache (`tui_test.go`), and the transcript
 renders the viewport rather than the session —
