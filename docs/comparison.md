@@ -265,7 +265,7 @@ flag registrations so the script cannot offer what the binary refuses
 (`cmd/sb/completion.go`); /help reads in five groups with every command
 held to exactly one by test; every CLI surface with in-session relevance
 has its in-session twin — cost, stats, find, doctor, races, blame,
-mistakes, ladder — each pair
+mistakes, ladder, recap — each pair
 sharing one body so the two can never tell different stories; and
 enforcement announces itself before it acts, the budget readout warming
 through the context gauge's own thresholds as the ceiling nears

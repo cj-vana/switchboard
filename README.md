@@ -256,6 +256,15 @@ Beyond the expected commands, a few are Switchboard's own:
   it left, and an abandoned turn is counted as opened and nothing more.
   The paired verdicts stay in `/races`, the surviving lines in `/blame`,
   the money in `/stats` — this is the fourth leg, position.
+- `/recap` and `sb recap` answer the morning question: where did I
+  leave off. The last session's story from its record — the opening
+  prompt, its turns and their bill, where the turns opened and how often
+  they moved, the files write and edit touched, the race verdicts — and
+  the two next actions: the `/resume` that picks it up, the `/blame`
+  that says which of its lines survived. `sb recap <id>` tells any
+  recorded session's story; inside a session, bare `/recap` looks past
+  the conversation it is typed into, because "where you left off" is
+  the previous log, not this one.
 - `/find <text>` and `sb find` search what was actually said across the
   workspace's recorded sessions — prompts and answers, case-insensitive —
   and hand back the ids `/resume` takes, because "which session did I fix

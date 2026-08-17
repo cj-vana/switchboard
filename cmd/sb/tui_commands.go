@@ -39,6 +39,7 @@ func commands() []commandItem {
 		{name: "exit", aliases: []string{"quit"}, desc: "leave", busySafe: true, run: cmdExit},
 		{name: "clear", aliases: []string{"new", "reset"}, desc: "start a fresh session", run: cmdClear},
 		{name: "resume", usage: "[id]", desc: "pick up an earlier session", run: cmdResume},
+		{name: "recap", usage: "[id]", desc: "where you left off: the last session's story from its record", busySafe: true, run: cmdRecap},
 		{name: "fork", usage: "[n|pin]", desc: "branch this session, less its last n user turns, or back to a pin", run: cmdFork},
 		{name: "pin", usage: "[name]", desc: "name this point in the session; /fork <name> branches back to it", run: cmdPin},
 		{name: "tier", usage: "<id>", desc: "switch tier (bare /t2 works too)", run: cmdTier},
@@ -123,7 +124,7 @@ var helpGroups = []struct {
 	title string
 	names []string
 }{
-	{"session", []string{"clear", "resume", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
+	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},

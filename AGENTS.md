@@ -119,6 +119,16 @@ evidence about which rungs earn their keep, and one guessed line poisons
 every claim built on it, so do not widen the replay with fuzzy matching or
 nearest-edit heuristics.
 
+**A recap claims only what a ladder-less reader can carry.** /recap
+(`cmd/sb/recap.go`) tells one recorded session's story — opening, route,
+files, races, bill — and its route line is deliberately built from
+opening tiers and move counts alone: a moved turn's destination is a
+target id in the record, and naming it as a rung would need a ladder
+this reader does not take. Bare /recap from inside a session skips the
+log it is typed into, because "where you left off" is the previous
+session, not the running one. The recorder's boundary is stated in the
+output, and an unbilled session says "nothing billed", never $0.00.
+
 **A recurrence is two sessions, not two lines of output.** /mistakes
 (`cmd/sb/mistakes.go`) sums failure signatures across the workspace's
 recorded sessions, and every choice defers to machinery that already
