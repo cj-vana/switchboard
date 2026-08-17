@@ -115,6 +115,12 @@ func registerDelegate(
 			// which is right — a grant written on one machine must not
 			// depend on another machine's binaries.
 			addStructuralSearch(subRegistry)
+			// Computer use joins under the astgrep rule: a conditional tool
+			// an unrestricted subagent keeps and a restricted one loses with
+			// everything else unnamed. Its calls still carry the external
+			// effect through the shared engine, so a delegated errand asks
+			// the same user the primary would.
+			addComputerUse(subRegistry)
 			// Skills too, and for the same reason as astgrep's placement: a
 			// named agent's grant validates against the core suite, so a
 			// restricted agent loses skill with everything else unnamed.

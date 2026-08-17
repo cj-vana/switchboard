@@ -233,6 +233,23 @@ plan gates any claim that this *wins* on an eval against single-primary
 baselines (§19.2 phase 6), and that eval has not run, so the honest
 statement is: the mechanism ships, the verdict is pending.
 
+**The user's own screen, behind the same gate.** On macOS a first-party
+`computer` tool drives applications through the accessibility tree —
+state, click, type, key combos, menu paths
+(`internal/tools/computer.go`, [computer.md](computer.md)). OpenAI ships
+computer use as a skill of its own hosted surface and Anthropic as an API
+reference implementation; neither Claude Code nor OpenCode has it in the
+terminal agent. The distinctive part here is less the capability than its
+posture: it runs on the machine the session runs on, against the user's
+own apps, and every call passes the same permission engine as everything
+else — the external effect no mode auto-allows, an approval covering one
+app for one session, outbound keystrokes scanned for key-shaped strings,
+everything read back redacted unconditionally. The scripts were verified
+against live applications before the schema froze, and the limits are
+stated rather than papered over: no screenshots (a capture without
+Screen Recording permission silently lies), deep web content walked
+partially and saying so.
+
 ## What the neighbors do better
 
 Claude Code has the deepest skills and plugin ecosystem — the skills

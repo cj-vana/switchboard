@@ -492,8 +492,28 @@ language server runs what the workspace's build graph directs; opening a
 repository is not permission to run what its module implies. The server
 starts on the first question, and a session that never asks pays
 nothing. Each listed server was verified live before earning its place;
-one that nobody has run for real does not get offered. Declare servers in
-`~/.switchboard/mcp.toml`:
+one that nobody has run for real does not get offered.
+
+On macOS, computer use joins the same way. A `computer` tool lets the
+model read an application's windows and controls through the system
+accessibility tree, click them, type, press key combos, and pick menu
+items — the simulator that needs one button pressed, the browser showing
+the rendered page, the dialog holding a build hostage. It drives apps
+only through System Events and `open`, so one Accessibility grant to
+your terminal covers every app, and the grant is probed by `sb doctor`
+rather than at startup, because the probe can pop a consent dialog.
+Every call is external in the permission engine's terms — no mode
+auto-allows it, bypass included, plan refuses it — and an approval
+covers that app for the session, the way a web approval covers a host.
+What the tool types is scanned for key-shaped strings before it leaves,
+what it reads back is redacted unconditionally, and there are
+deliberately no screenshots: a capture taken without Screen Recording
+permission silently returns wallpaper, and a tool that might be lying is
+worse than a stated limit. [docs/computer.md](docs/computer.md)
+documents the surface, the permission posture, and what was verified
+against live applications.
+
+Declare servers in `~/.switchboard/mcp.toml`:
 
 ```toml
 [mcp.github]

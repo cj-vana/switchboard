@@ -390,6 +390,9 @@ func run() error {
 	// binary: looked up once, so the frozen zone never changes mid-session.
 	addStructuralSearch(registry)
 
+	// Computer use joins the same way, where the platform can serve it.
+	addComputerUse(registry)
+
 	// Skills load the same way named agents do — both directories, no trust
 	// gate, nothing executing at read time — and with none found the tool is
 	// absent, keeping the schemas byte-identical.

@@ -224,7 +224,7 @@ func (e *Engine) modeDefault(mode Mode, req Request) Outcome {
 		return Outcome{Decision: Allow, Reason: "reads do not change the workspace"}
 	}
 	if req.Effect == EffectExternal {
-		return Outcome{Decision: Ask, Reason: "an MCP tool acts outside the sandbox; its effect is whatever the server does"}
+		return Outcome{Decision: Ask, Reason: "this tool acts outside the workspace and outside any sandbox; no mode covers that"}
 	}
 
 	switch mode {

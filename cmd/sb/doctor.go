@@ -211,6 +211,10 @@ func doctorToolRows(ctx context.Context, workspace string, ts *trust.Store) []do
 		rows = append(rows, doctorRow{label: "astgrep", detail: "ast-grep not found; installing it adds structural search"})
 	}
 
+	if row, ok := doctorComputerRow(ctx); ok {
+		rows = append(rows, row)
+	}
+
 	rows = append(rows, doctorLSPRow(workspace, ts))
 
 	if list, skillNotes := skills.Load(workspace); len(list) > 0 || len(skillNotes) > 0 {
