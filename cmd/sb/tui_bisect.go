@@ -20,6 +20,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/bisect"
 	"github.com/cj-vana/switchboard/internal/checkpoint"
+	"github.com/cj-vana/switchboard/internal/credential"
 	"github.com/cj-vana/switchboard/internal/execution"
 	route "github.com/cj-vana/switchboard/internal/router"
 	"github.com/cj-vana/switchboard/internal/watch"
@@ -138,6 +139,20 @@ func runVerifier(ctx context.Context, command, workspace string) bisect.Verdict 
 	return bisect.Verdict{FirstFail: fail}
 }
 
+// bisectInjectText is the verdict shaped for the model. The failure line
+// came out of verifier output, exactly the surface an env dump leaks a
+// key through, and a fold has no one to ask — so it redacts
+// unconditionally, the watch injection's posture.
+func bisectInjectText(command, label string, res bisect.Result) string {
+	text := fmt.Sprintf(
+		"[bisect] The user bisected this session's checkpoints against `%s`. Turn %d (%q) is where it turned red — green just before it, red ever since. First failure:\n%s",
+		command, res.Culprit+1, label, truncate(res.Fail.FirstFail, 200))
+	if leaks := credential.ScanPrompt(text); len(leaks) > 0 {
+		text = credential.Redact(text, leaks)
+	}
+	return text
+}
+
 func bisectRailLine(command string, span, state, probes int) string {
 	where := "the current state"
 	if state >= 0 && state < span {
@@ -193,6 +208,10 @@ func (m *tuiModel) onBisectDone(msg bisectDoneMsg) tea.Cmd {
 		m.addInfo(summary + "\n" +
 			"  first failure: " + msg.res.Fail.FirstFail + "\n" +
 			fmt.Sprintf("  %d probes; reconstruction covers what write and edit captured — shell-made and hand-made changes rode along at today's state", msg.res.Probes))
+		// The verdict folds behind the next typed prompt, the watch
+		// posture: the user who now types "fix it" should not have to
+		// restate what the machine just measured.
+		m.app.watchSt.addFold(bisectInjectText(run.command, label, msg.res))
 	}
 	run.rail.text = summary
 	if idx := m.tr.indexOf(run.rail); idx >= 0 {

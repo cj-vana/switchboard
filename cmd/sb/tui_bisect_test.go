@@ -146,3 +146,32 @@ func TestRedWatchVerdictNamesBisectOnce(t *testing.T) {
 		t.Error("the lesson repeated; once is the contract")
 	}
 }
+
+// The verdict folds behind the next typed prompt, so "fix it" after a
+// bisect carries what the machine measured — and the fold redacts what
+// the credential gate would hold, because verifier output is exactly the
+// surface an env dump leaks a key through.
+func TestBisectVerdictFoldsIntoTheNextPrompt(t *testing.T) {
+	m := testModel(t)
+	run := &bisectRun{
+		command: "go test ./...",
+		labels:  []string{"first", "break things"},
+		cancel:  func() {},
+		rail:    m.tr.add(&entry{kind: kindInfo, text: "bisect"}),
+	}
+	m.bisect = run
+	m.busy = true
+	m.onBisectDone(bisectDoneMsg{res: bisect.Result{
+		Outcome: bisect.Found,
+		Culprit: 1,
+		Fail:    bisect.Verdict{FirstFail: "--- FAIL: TestX  sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd-suffixAA"},
+	}})
+
+	folded := m.watchContext("fix it")
+	if !strings.Contains(folded, "[bisect]") || !strings.Contains(folded, `"break things"`) {
+		t.Errorf("the verdict did not fold behind the prompt:\n%s", folded)
+	}
+	if strings.Contains(folded, "sk-ant-api03-abcdefghijklmnopqrstuvwxyz") {
+		t.Errorf("a key-shaped string in verifier output rode the fold unredacted:\n%s", folded)
+	}
+}

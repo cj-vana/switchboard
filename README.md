@@ -313,7 +313,10 @@ Beyond the expected commands, a few are Switchboard's own:
   exit path, cancellation included, and the report states the boundary:
   reconstruction covers what write and edit captured, so shell-made and
   hand-made changes ride along at today's state. While it runs the
-  session is busy the way a turn is — prompts queue, esc cancels.
+  session is busy the way a turn is — prompts queue, esc cancels. The
+  verdict folds behind the next typed prompt the way a watch report
+  does, so "fix it" carries the culprit turn and its first failure
+  without the user restating what the machine just measured.
 - `/race review this diff` runs one prompt on this rung and the next
   one up at once, side by side — the comparison every escalation
   decision is implicitly making, at the cost of typing five letters;
