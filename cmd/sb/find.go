@@ -10,6 +10,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,6 +20,59 @@ import (
 )
 
 const findMaxSessions = 20
+
+// findAllLines searches every workspace the store holds, the workspace
+// resolved from each log's own header, and says where each match lives -
+// the cross-workspace question is "which project was that", so the
+// project is the answer's first word.
+func findAllLines(store *session.Store, query string) []string {
+	byWorkspace, err := store.ListAll()
+	if err != nil {
+		return []string{"  " + err.Error()}
+	}
+	if len(byWorkspace) == 0 {
+		return []string{"  no sessions recorded anywhere yet"}
+	}
+	workspaces := make([]string, 0, len(byWorkspace))
+	for ws := range byWorkspace {
+		workspaces = append(workspaces, ws)
+	}
+	sort.Strings(workspaces)
+
+	needle := strings.ToLower(query)
+	var lines []string
+	matched, scanned := 0, 0
+	for _, ws := range workspaces {
+		for _, info := range byWorkspace[ws] {
+			scanned++
+			state, err := session.ReadState(info.Path)
+			if err != nil {
+				continue
+			}
+			hits, snippet := searchMessages(state.Messages, needle)
+			if hits == 0 {
+				continue
+			}
+			matched++
+			if matched > findMaxSessions {
+				lines = append(lines, fmt.Sprintf("  … more sessions match; a narrower query sees past the first %d", findMaxSessions))
+				return append(lines, "  sb -workspace <path> then /resume <id> picks one up")
+			}
+			word := "match"
+			if hits > 1 {
+				word = "matches"
+			}
+			lines = append(lines,
+				fmt.Sprintf("  %s", ws),
+				fmt.Sprintf("    %s  %s  %d %s", state.ID, info.Modified.Local().Format("Jan 2 15:04"), hits, word),
+				"      "+snippet)
+		}
+	}
+	if matched == 0 {
+		return []string{fmt.Sprintf("  nothing in %d sessions across %d workspaces says %q", scanned, len(byWorkspace), query)}
+	}
+	return append(lines, "  sb -workspace <path> then /resume <id> picks one up")
+}
 
 func findLines(store *session.Store, workspace, query string) []string {
 	infos, err := store.List(workspace)
@@ -99,7 +153,16 @@ func searchMessages(messages []provider.Message, needle string) (int, string) {
 func cmdFind(m *tuiModel, args string) tea.Cmd {
 	query := strings.TrimSpace(args)
 	if query == "" {
-		return noticeCmd("error", "/find takes text to search this workspace's sessions for")
+		return noticeCmd("error", "/find takes text to search this workspace's sessions for; /find all <text> spans workspaces")
+	}
+	if rest, ok := strings.CutPrefix(query, "all "); ok {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return noticeCmd("error", "/find all takes the text to search every workspace for")
+		}
+		m.addInfo(fmt.Sprintf("sessions saying %q, every workspace\n", rest) +
+			strings.Join(findAllLines(m.app.store, rest), "\n"))
+		return nil
 	}
 	m.addInfo(fmt.Sprintf("sessions saying %q\n", query) +
 		strings.Join(findLines(m.app.store, m.app.workspace, query), "\n"))
@@ -107,10 +170,17 @@ func cmdFind(m *tuiModel, args string) tea.Cmd {
 }
 
 func runFindCLI(w io.Writer, store *session.Store, workspace, query string) error {
-	if strings.TrimSpace(query) == "" {
-		return fmt.Errorf("sb find takes text to search this workspace's sessions for")
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return fmt.Errorf("sb find takes text to search this workspace's sessions for; sb find all <text> spans workspaces")
 	}
-	for _, line := range findLines(store, workspace, strings.TrimSpace(query)) {
+	if rest, ok := strings.CutPrefix(query, "all "); ok {
+		for _, line := range findAllLines(store, strings.TrimSpace(rest)) {
+			fmt.Fprintln(w, strings.TrimRight(line, " "))
+		}
+		return nil
+	}
+	for _, line := range findLines(store, workspace, query) {
 		fmt.Fprintln(w, strings.TrimRight(line, " "))
 	}
 	return nil

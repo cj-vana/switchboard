@@ -211,6 +211,9 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace's recorded sessions — prompts and answers, case-insensitive —
   and hand back the ids `/resume` takes, because "which session did I fix
   that race in" outgrows a picker's first-words labels by lunchtime.
+  `find all <text>` spans every workspace, matches grouped under the
+  project each log's own header names, because the cross-workspace
+  question is "which project was that" and the project is the answer.
 - A tier switch that abandons observed warmth says what it walked away
   from: the prefix tokens the old target reported holding, the modeled
   hit chance, and that warmth's value against re-sending them cold —

@@ -56,3 +56,37 @@ func TestFindSearchesTheConversation(t *testing.T) {
 		t.Fatalf("an empty result did not say so:\n%s", none)
 	}
 }
+
+// The all-form answers "which project was that": matches grouped under the
+// workspace each log's own header names.
+func TestFindAllSpansWorkspaces(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.RouteTargetID("ollama/local/test:7b")
+	wsA, wsB := t.TempDir(), t.TempDir()
+	for i, ws := range []string{wsA, wsB} {
+		sess, err := store.Create(ws, target, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			sess.AppendMessage(provider.UserText("the zeppelin design goes here"))
+		} else {
+			sess.AppendMessage(provider.UserText("nothing relevant"))
+		}
+		sess.Close()
+	}
+
+	out := strings.Join(findAllLines(store, "zeppelin"), "\n")
+	if !strings.Contains(out, wsA) {
+		t.Fatalf("the matching workspace is absent:\n%s", out)
+	}
+	if strings.Contains(out, wsB) {
+		t.Fatalf("a workspace with no match was listed:\n%s", out)
+	}
+	if !strings.Contains(out, "-workspace") {
+		t.Fatalf("the way to pick a session up across workspaces is not stated:\n%s", out)
+	}
+}
