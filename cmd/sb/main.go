@@ -67,6 +67,13 @@ func run() error {
 	// A subcommand is dispatched before flag parsing, because `sb auth login`
 	// takes a credential rather than flags and must not be reachable in a form
 	// that puts one on the command line.
+	if len(os.Args) > 1 && os.Args[1] == "completion" {
+		shell := ""
+		if len(os.Args) > 2 {
+			shell = os.Args[2]
+		}
+		return runCompletionCLI(os.Stdout, shell)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "auth" {
 		cfg, err := config.Load()
 		if err != nil {

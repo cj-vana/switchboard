@@ -29,7 +29,11 @@ macOS and Linux. The script verifies release checksums before installing to
 curl -fsSL https://raw.githubusercontent.com/cj-vana/switchboard/main/install.sh | bash
 ```
 
-Or build from source with Go 1.26: `go build -o sb ./cmd/sb`.
+Or build from source with Go 1.26: `go build -o sb ./cmd/sb`. Shell
+completion for the subcommands and flags comes from the binary itself —
+`sb completion zsh` or `sb completion bash` prints the script with its
+install line in the header — and a test pins the completion lists to the
+real dispatch, so the script cannot offer what the binary refuses.
 
 Switchboard keeps itself current. The TUI checks for a release at startup
 and, by default, installs it in the background with the same checksum
