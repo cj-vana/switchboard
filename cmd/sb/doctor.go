@@ -58,6 +58,14 @@ func printDoctorSection(w io.Writer, title string, rows []doctorRow) {
 }
 
 func runDoctorCLI(ctx context.Context, w io.Writer, cfg *config.Config, cat *catalog.Catalog, reg *providers, workspace string) error {
+	return runDoctor(ctx, w, cfg, cat, reg, workspace, true)
+}
+
+// runDoctor is the shared body: the CLI takes every section; the in-session
+// /doctor skips the MCP probe, because probing would spawn a second instance
+// of each declared server beside the ones this session already runs, and
+// /mcp answers the in-session question from live state instead.
+func runDoctor(ctx context.Context, w io.Writer, cfg *config.Config, cat *catalog.Catalog, reg *providers, workspace string, probeMCP bool) error {
 	version := currentVersion()
 	if version == "" {
 		version = "dev"
@@ -86,7 +94,12 @@ func runDoctorCLI(ctx context.Context, w io.Writer, cfg *config.Config, cat *cat
 	printDoctorSection(w, "sandbox", doctorSandboxRows(execution.Detect()))
 	printDoctorSection(w, "workspace", count(doctorWorkspaceRows(workspace, trustStore, trustErr)))
 	printDoctorSection(w, "tools", count(doctorToolRows(ctx, workspace, trustStore)))
-	printDoctorSection(w, "mcp", count(doctorMCPRows(ctx, workspace, trustStore)))
+	if probeMCP {
+		printDoctorSection(w, "mcp", count(doctorMCPRows(ctx, workspace, trustStore)))
+	} else {
+		printDoctorSection(w, "mcp", []doctorRow{{label: "servers",
+			detail: "not probed from inside a session - a probe would spawn each declared server twice; /mcp shows the live connections"}})
+	}
 
 	switch bad {
 	case 0:

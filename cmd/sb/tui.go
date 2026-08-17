@@ -101,6 +101,7 @@ type copyMsg struct {
 	err  error
 }
 type disarmQuitMsg struct{}
+type doctorDoneMsg struct{ report string }
 
 func noticeCmd(level, text string) tea.Cmd {
 	return func() tea.Msg { return noticeMsg{level: level, text: text} }
@@ -526,6 +527,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateAppliedMsg:
 		m.updateAvail = msg.version + " ready"
 		m.addNotice("", "updated to "+msg.version+" in the background; the next start runs it")
+		return m, nil
+
+	case doctorDoneMsg:
+		m.addInfo(msg.report)
 		return m, nil
 
 	case copyMsg:

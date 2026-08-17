@@ -50,7 +50,9 @@ credential. Then you pick the model t1 starts on, and you are in a session.
 Nothing requires editing a file, then or later. `/models` browses what your
 server and the catalog offer and binds rungs. `/login` and `/logout` manage
 keys. `/setup` reopens the checklist. When something is not working, `sb
-doctor` checks every gate between this machine and a working session — each
+doctor` — or `/doctor` from inside the session, where quitting to
+diagnose costs the most — checks every gate between this machine and a
+working session — each
 rung probed the way session start probes it, credentials, the sandbox
 self-test, the conditional tools, every declared MCP server — and a row
 that fails names the next action, not just the diagnosis. `/theme`, `/think`, `/update`,

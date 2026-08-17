@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,6 +58,7 @@ func commands() []commandItem {
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},
 		{name: "session", desc: "session id, target, and message count", busySafe: true, run: cmdSession},
 		{name: "sandbox", desc: "what isolation this host provides", busySafe: true, run: cmdSandbox},
+		{name: "doctor", desc: "probe every gate a session depends on, from inside the session", run: cmdDoctor},
 		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
 		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
@@ -792,6 +795,28 @@ func (m *tuiModel) setTheme(dark bool) {
 	m.th = themeFor(dark)
 	m.md.setDark(dark)
 	m.tr.setTheme(m.th)
+}
+
+// cmdDoctor is sb doctor reachable from inside the session, because the
+// moment something breaks mid-session is the moment quitting to diagnose it
+// costs the most. The probes run off the UI goroutine and the report lands
+// as one entry; the MCP section is the one deliberate difference, stated in
+// the output, since probing would spawn each declared server a second time
+// beside this session's own.
+func cmdDoctor(m *tuiModel, _ string) tea.Cmd {
+	if m.app.providers == nil {
+		return noticeCmd("error", "doctor needs the provider registry; run sb doctor from a shell")
+	}
+	cfg, cat, reg, workspace := m.app.config, m.app.catalog, m.app.providers, m.app.workspace
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var b strings.Builder
+		if err := runDoctor(ctx, &b, cfg, cat, reg, workspace, false); err != nil {
+			return noticeMsg{level: "error", text: err.Error()}
+		}
+		return doctorDoneMsg{report: strings.TrimRight(b.String(), "\n")}
+	}
 }
 
 // cmdChanges maps the session's file changes to the turns that made them:
