@@ -43,19 +43,19 @@ func TestCompletionListsMatchTheBinary(t *testing.T) {
 }
 
 func TestCompletionEmitsForBothShellsAndRefusesOthers(t *testing.T) {
-	for _, shell := range []string{"zsh", "bash"} {
+	for _, shell := range []string{"zsh", "bash", "fish"} {
 		var b strings.Builder
 		if err := runCompletionCLI(&b, shell); err != nil {
 			t.Fatalf("%s: %v", shell, err)
 		}
-		for _, want := range []string{"doctor", "-resume", "sb completion"} {
+		for _, want := range []string{"doctor", "resume", "sb completion"} {
 			if !strings.Contains(b.String(), want) {
 				t.Errorf("%s script missing %q", shell, want)
 			}
 		}
 	}
 	var b strings.Builder
-	if err := runCompletionCLI(&b, "fish"); err == nil {
+	if err := runCompletionCLI(&b, "powershell"); err == nil {
 		t.Error("an unsupported shell should refuse with the supported ones named")
 	}
 }

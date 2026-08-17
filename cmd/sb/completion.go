@@ -54,8 +54,17 @@ _sb_complete() {
 }
 complete -F _sb_complete sb
 `, spaceJoin(completionSubcommands), spaceJoin(completionFlags), spaceJoin(completionFlags))
+	case "fish":
+		fmt.Fprintf(w, `# Switchboard shell completion. Install:
+#   sb completion fish > ~/.config/fish/completions/sb.fish
+complete -c sb -f
+complete -c sb -n __fish_use_subcommand -a "%s"
+`, spaceJoin(completionSubcommands))
+		for _, f := range completionFlags {
+			fmt.Fprintf(w, "complete -c sb -o %s\n", f[1:])
+		}
 	default:
-		return fmt.Errorf("sb completion takes zsh or bash, not %q", shell)
+		return fmt.Errorf("sb completion takes zsh, bash, or fish, not %q", shell)
 	}
 	return nil
 }

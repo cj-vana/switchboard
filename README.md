@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/cj-vana/switchboard/main/install.sh
 
 Or build from source with Go 1.26: `go build -o sb ./cmd/sb`. Shell
 completion for the subcommands and flags comes from the binary itself —
-`sb completion zsh` or `sb completion bash` prints the script with its
+`sb completion zsh`, `bash`, or `fish` prints the script with its
 install line in the header — and a test pins the completion lists to the
 real dispatch, so the script cannot offer what the binary refuses.
 
