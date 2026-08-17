@@ -168,6 +168,16 @@ func run() error {
 	}
 
 	var opts options
+	// The flag package prints flags alone; the subcommands live in the
+	// same list the shell completions are pinned to, so -h, tab, and the
+	// dispatch cannot name three different tools.
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(),
+			"usage: sb [flags]            an interactive session in this workspace\n"+
+				"       sb <subcommand>       %s\n\nflags:\n",
+			strings.Join(completionSubcommands, ", "))
+		flag.PrintDefaults()
+	}
 	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
 	flag.StringVar(&opts.tier, "tier", "", "tier to start on, for example t2 (default: the lowest configured tier)")
 	flag.StringVar(&opts.host, "host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")
