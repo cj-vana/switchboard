@@ -344,3 +344,24 @@ func TestCopyCodeCountsNewestFirst(t *testing.T) {
 		t.Fatalf("an out-of-range block did not say the count:\n%s", joined)
 	}
 }
+
+// The moment of granting is the moment that has to be plain: /trust names
+// what this checkout's declarations would actually enable - which servers,
+// which hooks - before and at the grant, and reads them without running
+// anything.
+func TestTrustNamesWhatAGrantCovers(t *testing.T) {
+	m := testModel(t)
+	m.app.workspace = t.TempDir()
+	dir := m.app.workspace + "/.switchboard"
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(dir+"/mcp.toml", []byte("[mcp.docs]\ncommand = \"npx some-docs-server\"\n"), 0o644)
+	os.WriteFile(dir+"/hooks.toml", []byte("[[hooks.pre_tool]]\ntools = [\"exec\"]\nrun = \"./guard.sh\"\n"), 0o644)
+
+	decls := trustDeclarations(m)
+	joined := strings.Join(decls, "\n")
+	for _, want := range []string{"docs", "npx some-docs-server", "exec", "guard.sh"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("declarations missing %q:\n%s", want, joined)
+		}
+	}
+}

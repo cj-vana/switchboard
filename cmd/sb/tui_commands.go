@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cj-vana/switchboard/internal/catalog"
 	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/cj-vana/switchboard/internal/hooks"
 	"github.com/cj-vana/switchboard/internal/mcp"
 	"github.com/cj-vana/switchboard/internal/permission"
 	"github.com/cj-vana/switchboard/internal/provider"
@@ -634,24 +636,75 @@ func cmdSkills(m *tuiModel, _ string) tea.Cmd {
 // processes it declares. The wording stays concrete about what a grant
 // enables, because "trust this workspace?" answered without knowing the
 // stakes is the permission-prompt-as-sandbox mistake in another costume.
+// trustDeclarations reads what this checkout's .switchboard/ actually
+// declares, without executing any of it - a declaration is data until
+// trust says otherwise, the same read-only posture skills and agent
+// definitions already hold. The moment of granting is the moment that has
+// to be plain, and "MCP servers and hooks" is a category, not a fact; the
+// fact is which servers, which hooks, which language server.
+func trustDeclarations(m *tuiModel) []string {
+	var lines []string
+	ws := m.app.workspace
+	if specs, err := mcp.LoadSpecs(filepath.Join(ws, ".switchboard", mcp.SpecFileName)); err == nil {
+		for _, spec := range specs {
+			what := spec.Command
+			if what == "" {
+				what = spec.URL
+			}
+			line := fmt.Sprintf("  mcp server %q - %s", spec.Name, truncate(what, 50))
+			if len(spec.Allow) > 0 {
+				line += fmt.Sprintf(" (%d tools pre-allowed)", len(spec.Allow))
+			}
+			lines = append(lines, line)
+		}
+	}
+	if set, err := hooks.Load(filepath.Join(ws, ".switchboard", hooks.FileName), ws); err == nil {
+		for _, h := range set.Hooks() {
+			scope := "every tool"
+			if len(h.Tools) > 0 {
+				scope = strings.Join(h.Tools, ", ")
+			}
+			lines = append(lines, fmt.Sprintf("  %s hook on %s - %s", h.Event, scope, truncate(h.Run, 50)))
+		}
+	}
+	if argv, marker, ok := lspCandidate(ws); ok {
+		lines = append(lines, fmt.Sprintf("  language server %s over this workspace (%s present)", filepath.Base(argv[0]), marker))
+	}
+	return lines
+}
+
 func cmdTrust(m *tuiModel, args string) tea.Cmd {
 	s := m.app.trust
 	if s == nil {
 		return noticeCmd("error", "the trust store is unavailable: "+m.app.trustErr)
 	}
 	ws := m.app.workspace
+	decls := trustDeclarations(m)
 	switch strings.TrimSpace(args) {
 	case "":
-		state := "not trusted: MCP servers and hooks declared in this repository's .switchboard/ stay off"
+		state := "not trusted: what this repository's .switchboard/ declares stays off"
 		if s.Trusted(ws) {
-			state = "trusted: MCP servers and hooks declared in this repository's .switchboard/ may run"
+			state = "trusted: what this repository's .switchboard/ declares may run"
 		}
-		m.addInfo(fmt.Sprintf("  %s\n  %s\n  /trust grant enables, /trust revoke withdraws; ~/.switchboard config always runs", ws, state))
+		var b strings.Builder
+		fmt.Fprintf(&b, "  %s\n  %s\n", ws, state)
+		if len(decls) > 0 {
+			b.WriteString("  a grant covers, specifically:\n" + strings.Join(decls, "\n") + "\n")
+		} else {
+			b.WriteString("  this checkout declares nothing a grant would enable\n")
+		}
+		b.WriteString("  /trust grant enables, /trust revoke withdraws; ~/.switchboard config always runs")
+		m.addInfo(b.String())
 	case "grant":
 		if err := s.Grant(ws); err != nil {
 			return noticeCmd("error", "grant failed: "+err.Error())
 		}
-		m.addInfo("  workspace trusted; repository-declared MCP servers and hooks start on the next run of sb")
+		if len(decls) > 0 {
+			m.addInfo("  workspace trusted; from the next run of sb this enables:\n" +
+				strings.Join(decls, "\n"))
+		} else {
+			m.addInfo("  workspace trusted; this checkout currently declares nothing, so the grant enables nothing until it does")
+		}
 	case "revoke":
 		if err := s.Revoke(ws); err != nil {
 			return noticeCmd("error", "revoke failed: "+err.Error())

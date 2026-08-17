@@ -82,6 +82,22 @@ func typescriptNative() ([]string, bool) {
 	return []string{path, "--lsp", "-stdio"}, true
 }
 
+// lspCandidate answers which server would speak for this workspace: the
+// first marker present whose server the machine has, the same precedence
+// setup applies. It runs nothing - /trust uses it to say what a grant
+// covers before the grant is given.
+func lspCandidate(workspace string) ([]string, string, bool) {
+	for _, c := range lspCandidates {
+		if _, err := os.Stat(filepath.Join(workspace, c.marker)); err != nil {
+			continue
+		}
+		if argv, ok := c.detect(); ok {
+			return argv, c.marker, true
+		}
+	}
+	return nil, "", false
+}
+
 // setupLSP registers the tools when everything lines up, and returns the
 // server for shutdown plus a note explaining whichever line did not.
 func setupLSP(workspace string, trustStore *trust.Store, registry *tools.Registry) (*lsp.Server, string) {

@@ -219,6 +219,11 @@ Beyond the expected commands, a few are Switchboard's own:
   newest fenced block — the thing a mouse selection across wrapped,
   styled terminal lines mangles — and `/copy code 2` the block before
   that, counted newest-first across the session's responses.
+- `/trust` names what a grant would actually cover before it is given —
+  which declared MCP servers, which hooks on which tools, which language
+  server — read from the checkout's own files without running any of
+  them, because "servers and hooks" is a category and the moment of
+  granting deserves the facts.
 - `/undo <path>` is the surgical form: one file back to what it was
   before the newest turn that captured it, typed the way `/changes`
   displays it, the turn's other files standing — and the capture is
