@@ -432,3 +432,23 @@ func TestBudgetReadoutWarmsBeforeTheCeiling(t *testing.T) {
 		t.Fatalf("an ungoverned session kept a stale ratio: %d", m.costPct)
 	}
 }
+
+// alt+N jumps to rung N; a digit past the ladder says how many rungs
+// exist instead of guessing, and a plain digit still types.
+func TestAltDigitJumpsToTheRung(t *testing.T) {
+	m := testModel(t)
+	if cmd := m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}, Alt: true}); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "the ladder has 1 rungs") {
+		t.Fatalf("an out-of-ladder alt+digit did not say the count:\n%s", joined)
+	}
+	before := m.ta.Value()
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	if m.ta.Value() == before {
+		t.Fatal("a plain digit stopped reaching the composer")
+	}
+}

@@ -164,6 +164,7 @@ keys
   ↑↓               history / choose      ctrl+r             search prompt history
   ctrl+f           search the transcript
   shift+tab        cycle permission mode ctrl+t             tier picker
+  alt+1…alt+9      jump straight to that rung
   ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
   ctrl+o           expand the last route or tool entry; clicking one expands it too
   esc              interrupt the turn    ctrl+c ctrl+c      exit

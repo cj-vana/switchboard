@@ -680,6 +680,19 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 	case "end":
 		m.tr.scrollToBottom()
 		return nil
+	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
+		// The ladder under the fingers: alt+N jumps straight to rung N.
+		// Plain digits belong to the composer; the modifier is what makes
+		// a rung switch deliberate rather than a typo.
+		pressed := msg.String()
+		idx := int(pressed[len(pressed)-1] - '1')
+		if idx >= len(m.app.config.Tiers) {
+			return noticeCmd("", fmt.Sprintf("the ladder has %d rungs; alt+%c names none", len(m.app.config.Tiers), pressed[len(pressed)-1]))
+		}
+		if m.busy {
+			return noticeCmd("warn", "a turn is running; esc to interrupt it first")
+		}
+		return m.app.switchTier(m.app.config.Tiers[idx].ID)
 	}
 
 	if m.suggestionsVisible() {
