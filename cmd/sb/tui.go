@@ -1070,6 +1070,9 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 		m.addNotice("warn", msg.note)
 		m.app.loop.Session.AppendNote("warn", msg.note)
 	}
+	// What the old target held warm is priced before the bind discards its
+	// tracker: afterwards there is nothing left to ask.
+	abandoned := abandonedCacheNote(m.app.loop.Cache, m.app.catalog, time.Now())
 	m.app.bind(msg.tier, msg.client, true)
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
@@ -1078,7 +1081,7 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 		m.tr.add(&entry{kind: kindNotice, level: "route", text: "now on " + m.tierLine,
 			rank: m.app.rankOf(msg.tier)})
 		m.routeLog = append(m.routeLog, "you switched to "+msg.tier.ID)
-		m.cacheSwitchNote(msg.tier)
+		m.cacheSwitchNote(msg.tier, abandoned)
 		return nil
 	}
 	// A silent switch is a /tN override restoring what it borrowed; a queued
@@ -1091,11 +1094,18 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 	return nil
 }
 
-// cacheSwitchNote says plainly what a switch abandons: cache state is scoped
-// to a target, so whatever was warm on the old one stays with it.
-func (m *tuiModel) cacheSwitchNote(tier config.Tier) {
+// cacheSwitchNote says what a switch abandons: cache state is scoped to a
+// target, so whatever was warm on the old one stays with it. When the old
+// target's warmth can be priced honestly, the modeled number is the note;
+// when it cannot - nothing observed, a metering that is not dollars, a
+// value that would round to free money - the fact is stated without one.
+func (m *tuiModel) cacheSwitchNote(tier config.Tier, abandoned string) {
+	if abandoned != "" {
+		m.addInfo(abandoned)
+		return
+	}
 	if info, _, ok := m.app.catalog.Lookup(tier.Target); ok && !info.Free() {
-		m.addInfo("a target switch leaves the previous target's cache behind; what that costs is not modelled yet")
+		m.addInfo("a target switch leaves the previous target's cache behind")
 	}
 }
 

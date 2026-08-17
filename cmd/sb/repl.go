@@ -418,17 +418,18 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 	// the cache: markers, minimums, and observed state all belong to a target,
 	// and carrying one target's tracker onto another would attribute its cache
 	// to a server that never held it.
+	abandoned := abandonedCacheNote(r.loop.Cache, r.catalog, time.Now())
 	r.loop.Provider = client
 	r.loop.Cache = cacheFor(probed.Target, r.catalog)
 	r.out.line("  now on " + r.tierLine())
 
-	// Cache state is scoped to a target, so a switch abandons whatever was warm
-	// on the old one. The breakpoint manager and cost estimator that would put
-	// a number on that arrive in phase 2a; until then the fact is stated rather
-	// than priced.
-	if info, _, ok := r.catalog.Lookup(probed.Target); ok && !info.Free() {
-		r.out.line(r.out.style(dim, "  a target switch leaves the previous target's cache behind; "+
-			"what that costs is not modelled yet"))
+	// Cache state is scoped to a target, so a switch abandons whatever was
+	// warm on the old one. When that warmth can be priced honestly the
+	// modeled number is the note; otherwise the fact is stated without one.
+	if abandoned != "" {
+		r.out.line(r.out.style(dim, "  "+abandoned))
+	} else if info, _, ok := r.catalog.Lookup(probed.Target); ok && !info.Free() {
+		r.out.line(r.out.style(dim, "  a target switch leaves the previous target's cache behind"))
 	}
 }
 

@@ -205,6 +205,11 @@ Beyond the expected commands, a few are Switchboard's own:
   workspace's recorded sessions — prompts and answers, case-insensitive —
   and hand back the ids `/resume` takes, because "which session did I fix
   that race in" outgrows a picker's first-words labels by lunchtime.
+- A tier switch that abandons observed warmth says what it walked away
+  from: the prefix tokens the old target reported holding, the modeled
+  hit chance, and that warmth's value against re-sending them cold —
+  every input observed or modeled and labeled as which, with silence
+  where a number would be an argument instead of a note.
 - `/cache` shows the belief the routing runs on: what the active target
   is thought to hold warm, the modeled hit chance for the next send with
   its reason, the session's eligible-hit count, and the alarm when a
