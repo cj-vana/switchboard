@@ -24,6 +24,7 @@ import (
 	"github.com/cj-vana/switchboard/internal/hooks"
 	"github.com/cj-vana/switchboard/internal/mcp"
 	"github.com/cj-vana/switchboard/internal/skills"
+	"github.com/cj-vana/switchboard/internal/tools"
 	"github.com/cj-vana/switchboard/internal/trust"
 )
 
@@ -84,7 +85,7 @@ func runDoctorCLI(ctx context.Context, w io.Writer, cfg *config.Config, cat *cat
 	printDoctorSection(w, "credentials", count(doctorCredentialRows(ctx, cfg)))
 	printDoctorSection(w, "sandbox", doctorSandboxRows(execution.Detect()))
 	printDoctorSection(w, "workspace", count(doctorWorkspaceRows(workspace, trustStore, trustErr)))
-	printDoctorSection(w, "tools", count(doctorToolRows(workspace, trustStore)))
+	printDoctorSection(w, "tools", count(doctorToolRows(ctx, workspace, trustStore)))
 	printDoctorSection(w, "mcp", count(doctorMCPRows(ctx, workspace, trustStore)))
 
 	switch bad {
@@ -179,8 +180,17 @@ func doctorWorkspaceRows(workspace string, ts *trust.Store, trustErr error) []do
 // doctorToolRows reports the conditional tools: present, or absent with what
 // would make them present. Absence is a standing, not a failure — the same
 // framing assembly itself uses.
-func doctorToolRows(workspace string, ts *trust.Store) []doctorRow {
+func doctorToolRows(ctx context.Context, workspace string, ts *trust.Store) []doctorRow {
 	var rows []doctorRow
+
+	webCtx, cancel := context.WithTimeout(ctx, doctorProbeTimeout)
+	defer cancel()
+	if err := tools.ProbeWeb(webCtx); err != nil {
+		rows = append(rows, doctorRow{label: "web", bad: true,
+			detail: "the search backend is unreachable: " + truncate(err.Error(), 80) + "; websearch and webfetch will error until the network answers"})
+	} else {
+		rows = append(rows, doctorRow{label: "web", detail: "the search backend answers; websearch and webfetch are in the suite"})
+	}
 
 	if _, err := exec.LookPath("ast-grep"); err == nil {
 		rows = append(rows, doctorRow{label: "astgrep", detail: "ast-grep found; structural search is in the suite"})

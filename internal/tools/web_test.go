@@ -269,3 +269,33 @@ func TestWebsearchLive(t *testing.T) {
 		t.Fatalf("no results:\n%s", res.Content)
 	}
 }
+
+// The doctor probe asks the one question doctor needs answered: will the
+// next search error. A healthy backend and a client-side status both pass;
+// a server fault and a dead network both fail with the reason.
+func TestProbeWebReportsReachability(t *testing.T) {
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != webUserAgent {
+			t.Errorf("the probe did not identify itself: %q", r.Header.Get("User-Agent"))
+		}
+	}))
+	defer healthy.Close()
+	if err := probeWeb(context.Background(), healthy.Client(), healthy.URL); err != nil {
+		t.Fatalf("a healthy backend failed the probe: %v", err)
+	}
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer broken.Close()
+	if err := probeWeb(context.Background(), broken.Client(), broken.URL); err == nil {
+		t.Fatal("a 502 backend passed the probe")
+	}
+
+	dead := httptest.NewServer(nil)
+	deadURL := dead.URL
+	dead.Close()
+	if err := probeWeb(context.Background(), &http.Client{}, deadURL); err == nil {
+		t.Fatal("a dead network passed the probe")
+	}
+}

@@ -66,6 +66,32 @@ func pinnedToHost(base *http.Client, host string) *http.Client {
 	return &pinned
 }
 
+// ProbeWeb answers whether the search backend is reachable from this
+// machine, for doctor: the same endpoint, client posture, and identity a
+// real search uses, reading nothing but the status. A server fault and an
+// unreachable network are both "the next search will error", which is what
+// the caller is really asking.
+func ProbeWeb(ctx context.Context) error {
+	return probeWeb(ctx, newWebClient(), ddgEndpoint)
+}
+
+func probeWeb(ctx context.Context, client *http.Client, endpoint string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", webUserAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("the search backend answered %s", resp.Status)
+	}
+	return nil
+}
+
 // scanOutbound refuses to send a key-shaped string off the machine. The
 // finding's own rendering is masked, so the refusal cannot leak what it
 // held back.
