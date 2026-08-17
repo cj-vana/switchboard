@@ -240,7 +240,10 @@ mechanism now exists here and its packs load by copying the folder, but
 the library and the community writing it are theirs — plus agent teams,
 IDE integrations, and MCP OAuth flows; it is the deepest single-vendor
 experience. Codex CLI has
-the most configurable profile-per-workload setup, several sandbox postures
+the most configurable profile-per-workload setup — Switchboard's
+`-profile` now covers the ladder half of that, an alternate tier set per
+workload chosen at launch, but Codex profiles reach further into
+approvals and models — plus several sandbox postures
 to choose between, and cloud execution. OpenCode has the broadest provider
 matrix, LSP coverage across more languages than Switchboard's verified
 four (Go, TypeScript, Python, and C/C++ where a compilation database

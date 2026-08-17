@@ -106,6 +106,16 @@ not change because a server went away, and each candidate passes the
 same probe a primary does. Entries take the provider's default serving
 surface.
 
+A workload that wants a different ladder gets one by name.
+`[profiles.review.tiers.t1]` declares an alternate ladder in the same
+file, and `sb -profile review` runs a session on it — the review ladder
+that opens high, the docs ladder that never leaves the local rung. A
+profile is tiers and nothing else; slots, keys, and settings stay
+global, because the ladder is what a workload changes. `/tiers` says
+when one is active, and a save from inside the session — a theme, a
+budget, a rung bound with `/models` — keeps the main ladder intact and
+lands rung edits in the profile they were made under.
+
 Cost stays honest about what money is. A local model consumes nothing
 scarce, a plan-metered model consumes quota, and a per-token model consumes
 dollars. The three are never collapsed into "free," because telling a router

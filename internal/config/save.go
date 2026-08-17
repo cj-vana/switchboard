@@ -78,21 +78,37 @@ func (c *Config) render() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString(header)
 
-	for _, t := range c.Tiers {
-		fmt.Fprintf(&buf, "[tiers.%s]\n", t.ID)
-		entry := tierEntry{
-			Label:   t.Label,
-			Model:   t.Target.Provider + "/" + t.Target.ModelID,
-			Surface: surfaceToWrite(t.Target.Provider, t.Target.Surface),
-			Effort:  effortOf(t.Target),
-		}
-		for _, fb := range t.Fallbacks {
-			entry.Fallback = append(entry.Fallback, fb.Provider+"/"+fb.ModelID)
-		}
-		if err := encode(&buf, entry); err != nil {
+	// While a profile is active the main ladder lives in mainTiers, and it
+	// is the main ladder the [tiers] sections must carry: a save under a
+	// profile that wrote the profile's rungs there would overwrite the
+	// ladder every unprofiled session runs on.
+	mainLadder := c.Tiers
+	if c.ActiveProfile != "" {
+		mainLadder = c.mainTiers
+	}
+	for _, t := range mainLadder {
+		if err := writeTierSection(&buf, "tiers."+t.ID, t); err != nil {
 			return nil, err
 		}
-		buf.WriteString("\n")
+	}
+
+	profileNames := make([]string, 0, len(c.Profiles))
+	for name := range c.Profiles {
+		profileNames = append(profileNames, name)
+	}
+	sort.Strings(profileNames)
+	for _, name := range profileNames {
+		ladder := c.Profiles[name]
+		// The active profile writes the live ladder, so a rung bound with
+		// /models under -profile persists to the profile it was bound in.
+		if name == c.ActiveProfile {
+			ladder = c.Tiers
+		}
+		for _, t := range ladder {
+			if err := writeTierSection(&buf, "profiles."+name+".tiers."+t.ID, t); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if len(c.Slots) > 0 {
@@ -198,6 +214,26 @@ func encode(buf *bytes.Buffer, v any) error {
 	enc := toml.NewEncoder(buf)
 	enc.Indent = ""
 	return enc.Encode(v)
+}
+
+// writeTierSection renders one rung under the given heading, shared by the
+// main ladder and the profiles so the two can never drift in format.
+func writeTierSection(buf *bytes.Buffer, heading string, t Tier) error {
+	fmt.Fprintf(buf, "[%s]\n", heading)
+	entry := tierEntry{
+		Label:   t.Label,
+		Model:   t.Target.Provider + "/" + t.Target.ModelID,
+		Surface: surfaceToWrite(t.Target.Provider, t.Target.Surface),
+		Effort:  effortOf(t.Target),
+	}
+	for _, fb := range t.Fallbacks {
+		entry.Fallback = append(entry.Fallback, fb.Provider+"/"+fb.ModelID)
+	}
+	if err := encode(buf, entry); err != nil {
+		return err
+	}
+	buf.WriteString("\n")
+	return nil
 }
 
 func (c *Config) authEntries() map[string]authEntry {

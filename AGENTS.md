@@ -166,6 +166,22 @@ ceiling governs dollars only — a local or plan rung passes the gate, because
 the three meterings are never collapsed — and an unpriced target passes too,
 with /budget saying so, since a ceiling cannot govern what has no price.
 
+**A profile is a ladder, not a mode.** `[profiles.<name>]`
+(`internal/config`) holds tiers and nothing else — slots, auth, and
+settings stay global — and the undecoded-keys check refuses anything
+more, which is the honest answer until a workload proves it needs more
+than a different ladder. The swap is launch time only (`-profile`,
+`Config.ApplyProfile`): the ladder feeds session assembly and the frozen
+zone, and a mid-session swap would repoint records that name tiers by
+id. While a profile is active, `Tiers` holds its ladder and `mainTiers`
+keeps the main one for the file; the save contract has two legs that
+must both survive any change to the writer — a save under a profile
+writes the main ladder into `[tiers.*]` untouched, and a rung bound with
+/models under a profile lands in the profile it was bound in.
+`TestSaveUnderAProfileKeepsTheMainLadder` is that contract run, not
+described. /tiers says when a profile is active, because "which ladder
+am I on" is the first question a surprising route decision raises.
+
 **Fallback is availability, never routing.** A tier's `fallback` list
 (§5.4, `probeTierFallback`) is consulted only when the primary cannot be
 probed, the rung's identity does not change, and each candidate passes the

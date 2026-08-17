@@ -294,6 +294,11 @@ func cmdTiers(m *tuiModel, _ string) tea.Cmd {
 		return noticeCmd("", "no tiers configured in "+m.app.config.Path)
 	}
 	var b strings.Builder
+	if p := m.app.config.ActiveProfile; p != "" {
+		// A ladder that came from a profile says so, because "which ladder
+		// am I on" is the first question a surprising route decision raises.
+		b.WriteString("profile " + p + " — the main ladder stands aside for this session\n")
+	}
 	for _, t := range m.app.config.Tiers {
 		marker := "  "
 		if t.ID == m.app.tier.ID {

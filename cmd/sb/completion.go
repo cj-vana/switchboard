@@ -19,7 +19,7 @@ var completionSubcommands = []string{"auth", "update", "doctor", "cost", "find",
 var completionFlags = []string{
 	"-model", "-tier", "-host", "-mode", "-think", "-workspace", "-p",
 	"-output", "-resume", "-continue", "-sessions", "-tiers", "-repl",
-	"-version", "-allow-secrets",
+	"-version", "-allow-secrets", "-profile",
 }
 
 func runCompletionCLI(w io.Writer, shell string) error {

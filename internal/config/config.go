@@ -109,7 +109,46 @@ type Config struct {
 	// quota, and neither is what this bounds (§4, §15).
 	Budget catalog.Money
 
+	// Profiles are alternate ladders for other workloads, selected at
+	// launch with -profile: a review ladder that opens high, a docs ladder
+	// that never leaves the local rung. A profile holds tiers and nothing
+	// else — slots, auth, and settings stay global — because the ladder is
+	// what a workload changes.
+	Profiles map[string][]Tier
+
+	// ActiveProfile names the launch selection, empty when the main ladder
+	// runs. While a profile is active, Tiers holds its ladder and mainTiers
+	// keeps the main one for the file: a save under a profile must not
+	// overwrite the main ladder with the profile's rungs.
+	ActiveProfile string
+	mainTiers     []Tier
+
 	Path string
+}
+
+// ApplyProfile swaps the active ladder for the named profile's. Launch time
+// only: the ladder feeds session assembly and the frozen zone, and a swap
+// mid-session would repoint records that name tiers by id.
+func (c *Config) ApplyProfile(name string) error {
+	ladder, ok := c.Profiles[name]
+	if !ok {
+		if len(c.Profiles) == 0 {
+			return fmt.Errorf("no profiles are configured; a [profiles.%s.tiers.t1] section in %s declares one", name, c.Path)
+		}
+		names := make([]string, 0, len(c.Profiles))
+		for n := range c.Profiles {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("profile %q is not configured; the file holds %s", name, strings.Join(names, ", "))
+	}
+	if len(ladder) == 0 {
+		return fmt.Errorf("profile %q has no tiers; an empty ladder cannot open a session", name)
+	}
+	c.mainTiers = c.Tiers
+	c.Tiers = ladder
+	c.ActiveProfile = name
+	return nil
 }
 
 type ProviderSettings struct {
@@ -155,6 +194,7 @@ func (c *Config) Tier(id string) (Tier, bool) {
 
 type file struct {
 	Tiers     map[string]tierEntry     `toml:"tiers"`
+	Profiles  map[string]profileEntry  `toml:"profiles"`
 	Slots     map[string]string        `toml:"slots"`
 	Auth      map[string]authEntry     `toml:"auth"`
 	Providers map[string]providerEntry `toml:"providers"`
@@ -162,6 +202,14 @@ type file struct {
 	Compact   compactEntry             `toml:"compact"`
 	UI        uiEntry                  `toml:"ui"`
 	Limits    limitsEntry              `toml:"limits"`
+}
+
+// profileEntry is one alternate ladder. Deliberately tiers-only: a key that
+// tried to override slots or auth per profile would be refused by the
+// undecoded-keys check, which is the honest answer until a workload proves
+// it needs more than a different ladder.
+type profileEntry struct {
+	Tiers map[string]tierEntry `toml:"tiers"`
 }
 
 // limitsEntry holds the spending ceiling. Money's own text form is what the
@@ -347,21 +395,46 @@ func LoadFile(path string) (*Config, error) {
 	if err := c.buildTiers(f.Tiers, path); err != nil {
 		return nil, err
 	}
+	if len(f.Profiles) > 0 {
+		c.Profiles = make(map[string][]Tier, len(f.Profiles))
+		for name, p := range f.Profiles {
+			ladder, err := buildTierList(p.Tiers, path, "profile "+name+" ")
+			if err != nil {
+				return nil, err
+			}
+			if len(ladder) == 0 {
+				return nil, fmt.Errorf("%s: profile %s has no tiers; an empty ladder cannot open a session", path, name)
+			}
+			c.Profiles[name] = ladder
+		}
+	}
 	return c, nil
 }
 
 func (c *Config) buildTiers(entries map[string]tierEntry, path string) error {
+	tiers, err := buildTierList(entries, path, "")
+	if err != nil {
+		return err
+	}
+	c.Tiers = tiers
+	return nil
+}
+
+// buildTierList validates and orders one ladder's entries. The where prefix
+// scopes error messages, so a broken rung inside a profile names the
+// profile rather than pointing at the main ladder.
+func buildTierList(entries map[string]tierEntry, path, where string) ([]Tier, error) {
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(entries) > MaxTiers {
-		return fmt.Errorf("%s: %d tiers configured, more than the %d ceiling", path, len(entries), MaxTiers)
+		return nil, fmt.Errorf("%s: %d %stiers configured, more than the %d ceiling", path, len(entries), where, MaxTiers)
 	}
 
 	ids := make([]string, 0, len(entries))
 	for id := range entries {
 		if _, err := tierNumber(id); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s: %s%w", path, where, err)
 		}
 		ids = append(ids, id)
 	}
@@ -372,23 +445,24 @@ func (c *Config) buildTiers(entries map[string]tierEntry, path string) error {
 		return a < b
 	})
 
+	var tiers []Tier
 	for _, id := range ids {
 		entry := entries[id]
 		target, err := ParseTarget(entry.Model, entry.Surface, entry.Effort)
 		if err != nil {
-			return fmt.Errorf("%s: tier %s: %w", path, id, err)
+			return nil, fmt.Errorf("%s: %stier %s: %w", path, where, id, err)
 		}
 		tier := Tier{ID: id, Label: entry.Label, Target: target}
 		for _, ref := range entry.Fallback {
 			fb, err := ParseTarget(ref, "", "")
 			if err != nil {
-				return fmt.Errorf("%s: tier %s fallback: %w", path, id, err)
+				return nil, fmt.Errorf("%s: %stier %s fallback: %w", path, where, id, err)
 			}
 			tier.Fallbacks = append(tier.Fallbacks, fb)
 		}
-		c.Tiers = append(c.Tiers, tier)
+		tiers = append(tiers, tier)
 	}
-	return nil
+	return tiers, nil
 }
 
 // tierNumber enforces the t1..tN scheme. Numeric IDs are the only scheme that

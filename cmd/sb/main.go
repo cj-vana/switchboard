@@ -51,6 +51,7 @@ type options struct {
 	prompt    string
 	output    string
 	resume    string
+	profile   string
 	cont      bool
 	list      bool
 	showTiers bool
@@ -253,6 +254,7 @@ func run() error {
 	flag.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, or bypass")
 	flag.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")
 	flag.StringVar(&opts.workspace, "workspace", "", "workspace root (default: current directory)")
+	flag.StringVar(&opts.profile, "profile", "", "run on a named alternate ladder from [profiles.<name>] in the config")
 	flag.StringVar(&opts.prompt, "p", "", "run a single prompt and exit; piped stdin is attached to it")
 	flag.StringVar(&opts.output, "output", "text", "what a -p run prints: text, or json for one machine-readable result line")
 	flag.StringVar(&opts.resume, "resume", "", "resume a session by id")
@@ -305,6 +307,15 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	// The profile swap happens here, before anything reads the ladder:
+	// session opening, routing, onboarding's empty-ladder check, and the
+	// TUI all see the profile's tiers as the ladder, while Save keeps the
+	// main ladder for the file.
+	if opts.profile != "" {
+		if err := cfg.ApplyProfile(opts.profile); err != nil {
+			return err
+		}
 	}
 	if opts.showTiers {
 		return listTiers(cfg, cat)
