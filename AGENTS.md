@@ -262,7 +262,12 @@ requests put the host in `Path`, so the remembered answer covers a host
 for the session rather than one byte-exact URL, and the outbound URL and
 query pass `credential.ScanPrompt` before anything leaves — the test that
 greps the refusal for the token is the guarantee, the same pattern as
-every other rendering of a secret. The search backend's HTML is parsed
+every other rendering of a secret. A redirect is held to the approval's
+own grain: one that stays on the hostname is the server's routing and
+follows, one that leaves it is refused before anything is dialed, because
+a grant naming host X must not read from host Y — an internal service
+included — on X's say-so; the refusal names the destination so a fetch of
+it goes through its own approval. The search backend's HTML is parsed
 against the captured response in `internal/tools/testdata/ddg.html` (wire
 formats get captured before they get mapped); result links arrive as
 redirect URLs and the parser unwraps `uddg`, taking a direct href as it

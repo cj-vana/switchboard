@@ -3,9 +3,11 @@
 // The suite stays small on purpose. Everything beyond it arrives over MCP,
 // because a one-person project cannot build the long tail but can build the
 // socket the long tail plugs into (design principle 5). Phase 0 shipped the
-// four tools §19.2 names — read, write, edit, and exec — and glob and grep
+// four tools §19.2 names — read, write, edit, and exec — glob and grep
 // joined them so a model can search a tree without shelling out to whatever
-// this host happens to have installed.
+// this host happens to have installed, and websearch and webfetch joined so
+// it can reach current documentation, under the egress posture web.go
+// documents.
 package tools
 
 import (

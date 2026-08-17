@@ -48,6 +48,24 @@ func newWebClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+// pinnedToHost derives a client that refuses redirects leaving the named
+// host. The user approved a host, not wherever that host points: a server
+// redirecting off itself would otherwise read from hosts nobody approved —
+// an internal service included — under a grant that named someone else.
+// The check is by hostname, the same grain as the remember key, and the
+// refusal names the destination so the model can fetch it directly and
+// route the new host through its own approval.
+func pinnedToHost(base *http.Client, host string) *http.Client {
+	pinned := *base
+	pinned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Hostname() != host {
+			return fmt.Errorf("redirect leaves the approved host %s for %s; fetch the destination directly to approve its host", host, req.URL.Hostname())
+		}
+		return nil
+	}
+	return &pinned
+}
+
 // scanOutbound refuses to send a key-shaped string off the machine. The
 // finding's own rendering is masked, so the refusal cannot leak what it
 // held back.
@@ -135,7 +153,7 @@ func (t *websearchTool) search(ctx context.Context, query string, count int) (Re
 		return errorf("websearch: %v", err)
 	}
 	req.Header.Set("User-Agent", webUserAgent)
-	resp, err := t.client.Do(req)
+	resp, err := pinnedToHost(t.client, req.URL.Hostname()).Do(req)
 	if err != nil {
 		return errorf("websearch: %v", err)
 	}
@@ -269,7 +287,8 @@ func (t *webfetchTool) Description() string {
 	return "Fetch a page from the web by URL. HTML is reduced to its readable text; " +
 		"JSON and plain text return as they are, truncated past a limit. The first " +
 		"fetch to a new host asks for approval, and the approval covers that host " +
-		"for the rest of the session."
+		"for the rest of the session. A redirect that leaves the approved host is " +
+		"refused; fetch the destination directly to approve its host."
 }
 
 func (t *webfetchTool) ParallelSafe() bool { return true }
@@ -325,7 +344,7 @@ func (t *webfetchTool) fetch(ctx context.Context, u *url.URL) (Result, error) {
 		return errorf("webfetch: %v", err)
 	}
 	req.Header.Set("User-Agent", webUserAgent)
-	resp, err := t.client.Do(req)
+	resp, err := pinnedToHost(t.client, u.Hostname()).Do(req)
 	if err != nil {
 		return errorf("webfetch: %v", err)
 	}
@@ -359,10 +378,11 @@ func (t *webfetchTool) fetch(ctx context.Context, u *url.URL) (Result, error) {
 	}
 
 	var notes []string
-	// A redirect is the server's routing, not the model's request, so it is
-	// followed; a landing host that differs from the asked-for one is said.
-	if final := resp.Request.URL; final.Hostname() != u.Hostname() {
-		notes = append(notes, fmt.Sprintf("[fetched from %s after redirect]", final.Hostname()))
+	// Same-host redirects are the server's own routing and were followed —
+	// the pinned client already refused anything that left the host — and a
+	// moved page is still worth saying.
+	if final := resp.Request.URL; final.String() != u.String() {
+		notes = append(notes, fmt.Sprintf("[fetched %s after redirect]", final))
 	}
 	if len(text) > webTextLimit {
 		text = text[:webTextLimit]

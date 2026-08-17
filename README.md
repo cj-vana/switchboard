@@ -279,7 +279,8 @@ grep, a task list the transcript renders live as the model works through
 it, and the web pair — websearch for current documentation and unfamiliar
 errors, webfetch to read a result. Both treat egress as what it is: the
 first call to a new host asks, the approval covers that host for the
-session, no mode skips the question, and a key-shaped string in an
+session, no mode skips the question, a redirect that leaves the approved
+host is refused rather than followed, and a key-shaped string in an
 outbound URL or query is refused before it leaves the machine. A repeated
 read of an unchanged file answers with a short marker rather than the
 bytes, because the content already sits in the context — token reduction

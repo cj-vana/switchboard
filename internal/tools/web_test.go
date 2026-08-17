@@ -205,29 +205,50 @@ func TestWebfetchTruncatesAndSaysSo(t *testing.T) {
 	}
 }
 
-func TestWebfetchNotesACrossHostRedirect(t *testing.T) {
+// The approval covers a hostname, so redirects are held to the same grain:
+// one that stays on the host is the server's own routing and follows; one
+// that leaves it is refused before anything is dialed, because a grant
+// naming host X must not read from host Y — an internal service included —
+// on X's say-so.
+func TestWebfetchRefusesARedirectOffTheApprovedHost(t *testing.T) {
 	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, "landed")
 	}))
 	defer final.Close()
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, final.URL, http.StatusFound)
+		switch r.URL.Path {
+		case "/same":
+			// httptest servers share 127.0.0.1, so this is a same-hostname
+			// redirect — the grain the remember key uses — and must follow.
+			http.Redirect(w, r, final.URL, http.StatusFound)
+		case "/away":
+			http.Redirect(w, r, "http://sb-unapproved-host.invalid/x", http.StatusFound)
+		}
 	}))
 	defer first.Close()
 
 	tool := &webfetchTool{client: &http.Client{}}
-	plan, _ := tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": %q}`, first.URL)))
+	plan, _ := tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": "%s/same"}`, first.URL)))
 	res, err := plan.Run(context.Background())
 	if err != nil || res.IsError {
-		t.Fatalf("fetch failed: %v %s", err, res.Content)
+		t.Fatalf("a same-host redirect failed the fetch: %v %s", err, res.Content)
 	}
 	if !strings.Contains(res.Content, "landed") {
-		t.Fatalf("the redirect was not followed: %q", res.Content)
+		t.Fatalf("the same-host redirect was not followed: %q", res.Content)
 	}
-	// httptest servers share 127.0.0.1, so the hosts differ only by port;
-	// the note keys on hostname and stays silent here. What must hold is
-	// that a redirect never fails the fetch.
+
+	plan, _ = tool.Plan(json.RawMessage(fmt.Sprintf(`{"url": "%s/away"}`, first.URL)))
+	res, err = plan.Run(context.Background())
+	if err != nil || !res.IsError {
+		t.Fatalf("a cross-host redirect should refuse as a tool error: %v %q", err, res.Content)
+	}
+	if !strings.Contains(res.Content, "sb-unapproved-host.invalid") {
+		t.Fatalf("the refusal does not name the destination: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "fetch the destination directly") {
+		t.Fatalf("the refusal does not say the way through: %q", res.Content)
+	}
 }
 
 // The live path, guarded the way every network test is.
