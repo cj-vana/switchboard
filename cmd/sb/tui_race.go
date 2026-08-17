@@ -466,7 +466,7 @@ func (m *tuiModel) finishRace(run *raceRun, pick, outcome string) tea.Cmd {
 	// command leaves a gap where the session is idle but still the old one,
 	// and a prompt submitted into that gap would open a turn on a log about
 	// to be closed.
-	return m.onSessionSwap(sessionSwapMsg{sess: kept.sess, tier: kept.tier, client: kept.client, note: note})
+	return m.onSessionSwap(sessionSwapMsg{sess: kept.sess, tier: kept.tier, client: kept.client, note: note, keepFold: true})
 }
 
 // raceDialog is the verdict. Its options depend on what survived: two

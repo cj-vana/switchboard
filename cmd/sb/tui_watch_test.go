@@ -236,3 +236,29 @@ func TestBareWatchOffersTheWorkspaceVerifier(t *testing.T) {
 		t.Fatalf("the hint does not offer the implied verifier: %q", hint)
 	}
 }
+
+// A fold is a report to the conversation that made the edits. A swap that
+// replaces the conversation drops it; a compaction, which continues the
+// same conversation in summary, carries it.
+func TestSessionSwapDropsTheFoldUnlessAsked(t *testing.T) {
+	m := testModel(t)
+	m.app.watchSt.addFold("[watch] verdict for the old conversation")
+	fresh, err := m.app.store.Create(m.app.workspace, m.app.tier.Target.ID(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.onSessionSwap(sessionSwapMsg{sess: fresh, tier: m.app.tier, client: m.app.loop.Provider, fresh: true})
+	if got := m.watchContext("hello"); got != "hello" {
+		t.Errorf("a cleared session inherited the old conversation's verdict:\n%s", got)
+	}
+
+	m.app.watchSt.addFold("[watch] verdict that predates the compaction")
+	compacted, err := m.app.store.Create(m.app.workspace, m.app.tier.Target.ID(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.onSessionSwap(sessionSwapMsg{sess: compacted, tier: m.app.tier, client: m.app.loop.Provider, keepFold: true})
+	if got := m.watchContext("continue"); !strings.Contains(got, "predates the compaction") {
+		t.Errorf("a compaction lost the pending verdict:\n%s", got)
+	}
+}

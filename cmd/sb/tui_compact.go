@@ -123,7 +123,7 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 			sess.Close()
 			return noticeMsg{level: "error", text: "compact failed, session unchanged: " + err.Error()}
 		}
-		return sessionSwapMsg{sess: sess, tier: app.tier, client: app.loop.Provider, fresh: false}
+		return sessionSwapMsg{sess: sess, tier: app.tier, client: app.loop.Provider, fresh: false, keepFold: true}
 	}
 }
 

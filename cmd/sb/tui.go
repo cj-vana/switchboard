@@ -86,6 +86,13 @@ type sessionSwapMsg struct {
 	// andThen, when set, runs once the swap has landed — how /retry sends
 	// its replay into the forked session rather than the one it left.
 	andThen tea.Cmd
+
+	// keepFold carries a queued watch or bisect verdict across the swap.
+	// A fold is a report to the conversation that made the edits, so only
+	// the swaps that continue that conversation set this: compaction, and
+	// keeping a race arm. A clear, a resume, a fork, a retry replace the
+	// conversation — or revert the files — and the verdict dies with it.
+	keepFold bool
 }
 type overrideProbeMsg struct {
 	prompt string
@@ -1164,6 +1171,9 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	m.app.bind(msg.tier, msg.client, false)
 	if old != nil && old != msg.sess {
 		old.Close()
+	}
+	if !msg.keepFold {
+		m.app.watchSt.takeFold()
 	}
 	// The swapped-in context has read nothing, whatever the registry
 	// remembers from the old one: reads must happen again before writes,
