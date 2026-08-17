@@ -158,20 +158,29 @@ func cmdStats(m *tuiModel, args string) tea.Cmd {
 	// Read-only over the workspace's logs, the current one included; its
 	// open log reads the way `sb cost` reads it, which is what makes this
 	// busy-safe.
-	if strings.TrimSpace(args) == "all" {
+	switch strings.TrimSpace(args) {
+	case "all":
 		m.addInfo(strings.Join(statsAllLines(m.app.catalog, m.app.store), "\n"))
 		return nil
+	case "":
+		m.addInfo(strings.Join(statsLines(m.app.config.Tiers, m.app.catalog, m.app.tier.ID, m.app.store, m.app.workspace), "\n"))
+		return nil
+	default:
+		return noticeCmd("error", "/stats takes no argument, or all")
 	}
-	m.addInfo(strings.Join(statsLines(m.app.config.Tiers, m.app.catalog, m.app.tier.ID, m.app.store, m.app.workspace), "\n"))
-	return nil
 }
 
 func runStatsCLI(w io.Writer, store *session.Store, cat *catalog.Catalog, cfg *config.Config, workspace, scope string) error {
-	if scope == "all" {
+	switch scope {
+	case "all":
 		for _, line := range statsAllLines(cat, store) {
 			fmt.Fprintln(w, strings.TrimRight(line, " "))
 		}
 		return nil
+	case "":
+	default:
+		// A swallowed argument is a silent lie about what ran.
+		return fmt.Errorf("sb stats takes no argument, or all; %q is neither", scope)
 	}
 	// No session is active in a CLI run, so no rung wears the marker.
 	for _, line := range statsLines(cfg.Tiers, cat, "", store, workspace) {

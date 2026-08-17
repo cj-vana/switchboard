@@ -898,10 +898,13 @@ func (m *tuiModel) setTheme(dark bool) {
 func cmdRaces(m *tuiModel, args string) tea.Cmd {
 	var b strings.Builder
 	var err error
-	if strings.TrimSpace(args) == "all" {
+	switch strings.TrimSpace(args) {
+	case "all":
 		err = runRacesAllCLI(&b, m.app.store)
-	} else {
+	case "":
 		err = runRacesCLI(&b, m.app.store, m.app.workspace)
+	default:
+		return noticeCmd("error", "/races takes no argument, or all")
 	}
 	if err != nil {
 		return noticeCmd("error", err.Error())

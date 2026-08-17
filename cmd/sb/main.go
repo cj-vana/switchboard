@@ -161,7 +161,10 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		if len(os.Args) > 2 && os.Args[2] == "all" {
+		if len(os.Args) > 2 {
+			if os.Args[2] != "all" {
+				return fmt.Errorf("sb races takes no argument, or all; %q is neither", os.Args[2])
+			}
 			return runRacesAllCLI(os.Stdout, store)
 		}
 		return runRacesCLI(os.Stdout, store, cwd)
