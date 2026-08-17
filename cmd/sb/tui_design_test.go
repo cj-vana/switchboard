@@ -271,6 +271,7 @@ func TestChangesMapsFilesToTurns(t *testing.T) {
 // what the provider reported.
 func TestContextSplitsTheZones(t *testing.T) {
 	m := testModel(t)
+	m.app.config.CompactAuto = true
 	m.app.loop.System = []provider.Block{provider.Text{Text: strings.Repeat("s", 400)}}
 	m.app.loop.Session.AppendMessage(provider.UserText(strings.Repeat("c", 800)))
 	cmdContext(m, "")
