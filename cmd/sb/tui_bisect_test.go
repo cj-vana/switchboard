@@ -203,3 +203,31 @@ func TestBisectDoneRefusesToClaimRestoredWhenItWasNot(t *testing.T) {
 		t.Errorf("the restore failure is not named:\n%s", joined)
 	}
 }
+
+// The warning is worthless if a queued prompt fires against the
+// unrestored tree in the same breath: a restore failure drops the queue
+// with its count instead of draining it.
+func TestBisectRestoreFailureDropsTheQueue(t *testing.T) {
+	m := testModel(t)
+	run := &bisectRun{
+		command: "go test ./...",
+		labels:  []string{"only"},
+		cancel:  func() {},
+		rail:    m.tr.add(&entry{kind: kindInfo, text: "bisect"}),
+	}
+	m.bisect = run
+	m.busy = true
+	m.queue = []string{"fix the parser", "run the suite"}
+
+	cmd := m.onBisectDone(bisectDoneMsg{err: &bisect.RestoreError{Err: os.ErrPermission}})
+	if cmd != nil {
+		t.Fatal("a turn started against a possibly-unrestored tree")
+	}
+	if len(m.queue) != 0 {
+		t.Errorf("the queue survived to fire later: %v", m.queue)
+	}
+	joined := strings.Join(m.tr.flat, "\n")
+	if !strings.Contains(joined, "2 queued prompts dropped") {
+		t.Errorf("the drop is not named with its count:\n%s", joined)
+	}
+}

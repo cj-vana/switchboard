@@ -227,6 +227,22 @@ func (m *tuiModel) onBisectDone(msg bisectDoneMsg) tea.Cmd {
 	}
 	m.app.loop.Session.AppendNote("info", summary)
 
+	// A queued prompt was written assuming the tree it queued against.
+	// When the restore failed, that premise failed with it: draining now
+	// would fire a turn at a past state in the same breath as the warning,
+	// so the queue drops with its count instead of running.
+	if restoreFail != nil {
+		if dropped := len(m.queue); dropped > 0 {
+			m.queue = nil
+			word := "prompts"
+			if dropped == 1 {
+				word = "prompt"
+			}
+			m.addNotice("warn", fmt.Sprintf("%d queued %s dropped — the workspace needs your eyes before anything runs", dropped, word))
+		}
+		return nil
+	}
+
 	if len(m.queue) > 0 && !m.busy {
 		next := m.queue[0]
 		m.queue = m.queue[1:]
