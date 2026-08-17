@@ -197,6 +197,11 @@ Beyond the expected commands, a few are Switchboard's own:
   is waiting, and the terminal title carries a mark while work runs, so
   a session parked in another pane says when it needs you. Default on;
   `/notify off` persists the quiet.
+- `/changes` maps the session's file changes to the turns that made
+  them, newest first — the review surface between `/diff` (the
+  workspace's own view) and `/undo` (taking a turn back). Its scope is
+  stated in its output: what write and edit touched; a shell command's
+  side effects are not captured, because the recorder cannot see them.
 - `/undo` takes back the last turn's file changes, turn by turn: write
   and edit capture what a file looked like before the turn first touched
   it, and a restored file forces the model to re-read before it may write

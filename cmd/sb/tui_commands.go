@@ -63,6 +63,7 @@ func commands() []commandItem {
 		{name: "skills", desc: "instruction packs the model pulls in when a task matches", busySafe: true, run: cmdSkills},
 		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
+		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
 		{name: "undo", usage: "[list]", desc: "take back the last turn's file changes", run: cmdUndo},
 		{name: "watch", usage: "[cmd|off]", desc: "run your verifier after the model's edits; only changes are reported", run: cmdWatch},
 		{name: "retry", usage: "[tier]", desc: "take back the last turn and run it again, optionally on another rung", run: cmdRetry},
@@ -694,6 +695,42 @@ func (m *tuiModel) setTheme(dark bool) {
 	m.th = themeFor(dark)
 	m.md.setDark(dark)
 	m.tr.setTheme(m.th)
+}
+
+// cmdChanges maps the session's file changes to the turns that made them:
+// the review surface between /diff (the workspace's own view) and /undo
+// (taking a turn back). The evidence is the checkpoint recorder's, so the
+// scope is the recorder's scope, stated rather than implied: what write
+// and edit touched, with a shell command's side effects absent because
+// the recorder cannot see them - the absent-not-guessed rule, applied
+// here the way /watch applies it. A turn /undo took back is gone from the
+// list, because its changes are no longer in the workspace.
+func cmdChanges(m *tuiModel, _ string) tea.Cmd {
+	rec := m.app.undo
+	if rec == nil {
+		return noticeCmd("error", "change tracking is unavailable in this session")
+	}
+	details := rec.Details()
+	if len(details) == 0 {
+		m.addInfo("  no turn has changed files, as far as write and edit saw")
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("files this session touched, newest turn first:\n")
+	for i := len(details) - 1; i >= 0; i-- {
+		d := details[i]
+		fmt.Fprintf(&b, "  %2d  %s\n", i+1, truncate(firstLine(d.Label), 60))
+		for _, p := range d.Paths {
+			fmt.Fprintf(&b, "        %s\n", m.app.displayPath(p))
+		}
+		for _, p := range d.Skipped {
+			fmt.Fprintf(&b, "        %s  (over the snapshot cap; /undo cannot restore it)\n", m.app.displayPath(p))
+		}
+	}
+	b.WriteString("  via write and edit; a shell command's side effects are not captured\n")
+	b.WriteString("  /diff shows the workspace's own view; /undo takes back the newest turn")
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
 }
 
 // cmdQueue shows what waits behind the running turn, because a prompt that

@@ -163,6 +163,41 @@ func (r *Recorder) Turns() []Info {
 	return out
 }
 
+// TurnDetail is one turn's capture set for display: which files, not just
+// how many. Paths are absolute and sorted; Skipped names what the snapshot
+// cap kept uncovered.
+type TurnDetail struct {
+	Label   string
+	Paths   []string
+	Skipped []string
+}
+
+// Details lists checkpoints oldest first with their captured paths,
+// including the still-open scope when it has captures. It is the same
+// evidence Undo restores from, shaped for a surface that wants to say what
+// a session touched rather than take it back.
+func (r *Recorder) Details() []TurnDetail {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	detail := func(t *Turn) TurnDetail {
+		d := TurnDetail{Label: t.label, Skipped: append([]string(nil), t.skipped...)}
+		for path := range t.files {
+			d.Paths = append(d.Paths, path)
+		}
+		sort.Strings(d.Paths)
+		sort.Strings(d.Skipped)
+		return d
+	}
+	out := make([]TurnDetail, 0, len(r.turns)+1)
+	for _, t := range r.turns {
+		out = append(out, detail(t))
+	}
+	if r.cur != nil && (len(r.cur.files) > 0 || len(r.cur.skipped) > 0) {
+		out = append(out, detail(r.cur))
+	}
+	return out
+}
+
 // Undo restores the most recent turn that changed files and reports the
 // restored and removed paths, sorted, plus anything the cap kept it from
 // covering. Restore-or-report is per file: one unwritable path does not

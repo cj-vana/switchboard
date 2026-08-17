@@ -196,3 +196,33 @@ func TestPendingFilesCountsTheOpenScope(t *testing.T) {
 		t.Errorf("the previous turn's captures leaked into the new scope: %d", got)
 	}
 }
+
+// Details is Turns with the paths attached: the same evidence Undo restores
+// from, shaped for a surface that says what a session touched.
+func TestDetailsNamesThePathsPerTurn(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.go")
+	b := filepath.Join(dir, "b.go")
+	os.WriteFile(a, []byte("a"), 0o644)
+
+	r := NewRecorder()
+	r.Begin("first turn")
+	r.Record(a)
+	r.Begin("second turn")
+	r.Record(a)
+	r.Record(b)
+
+	details := r.Details()
+	if len(details) != 2 {
+		t.Fatalf("got %d turns, want 2", len(details))
+	}
+	if details[0].Label != "first turn" || len(details[0].Paths) != 1 {
+		t.Fatalf("first turn: %+v", details[0])
+	}
+	if details[1].Label != "second turn" || len(details[1].Paths) != 2 {
+		t.Fatalf("second turn: %+v", details[1])
+	}
+	if details[1].Paths[0] != a {
+		t.Fatalf("paths are not sorted: %v", details[1].Paths)
+	}
+}

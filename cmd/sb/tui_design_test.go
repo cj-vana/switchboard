@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"github.com/cj-vana/switchboard/internal/checkpoint"
 )
 
 // The redesign's invariants, asserted at the SGR level for the same reason
@@ -236,5 +239,26 @@ func TestQueueShowsAndClears(t *testing.T) {
 	cmdQueue(m, "clear")
 	if len(m.queue) != 0 {
 		t.Fatal("/queue clear left prompts queued")
+	}
+}
+
+// /changes maps files to the turns that touched them, states its scope -
+// the recorder's, not the workspace's - and says the way to act on what
+// it shows.
+func TestChangesMapsFilesToTurns(t *testing.T) {
+	m := testModel(t)
+	m.app.undo = checkpoint.NewRecorder()
+	dir := t.TempDir()
+	path := dir + "/main.go"
+	os.WriteFile(path, []byte("x"), 0o644)
+	m.app.undo.Begin("fix the flaky test")
+	m.app.undo.Record(path)
+
+	cmdChanges(m, "")
+	joined := strings.Join(m.tr.flat, "\n")
+	for _, want := range []string{"fix the flaky test", "main.go", "shell command's side effects are not captured", "/undo"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("/changes is missing %q:\n%s", want, joined)
+		}
 	}
 }
