@@ -3,7 +3,7 @@
 A terminal coding agent where the model is a slot, not a fixed property of
 the tool.
 
-<img src="docs/tui.svg" alt="Switchboard running a session: the ladder in heat colors, tool rails, a route escalation, and the status bar" width="812">
+<img src="https://raw.githubusercontent.com/cj-vana/switchboard/main/docs/tui.svg" alt="Switchboard running a session: the ladder in heat colors, tool rails, a route escalation, and the status bar" width="812">
 
 You configure a ladder of models, cheapest at the bottom: a small local model
 on t1, a bigger one on t2, a subscription model on t3. Switchboard starts
