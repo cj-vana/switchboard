@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/switchboard-code/switchboard/internal/childenv"
 )
 
 const (
@@ -66,42 +67,6 @@ type Result struct {
 	Duration  time.Duration
 }
 
-// providerCredentialVars hold the keys the harness itself authenticates with.
-// They are dropped from the child environment so a model-requested command
-// cannot read them back out.
-//
-// This is credential hygiene and explicitly not containment. Any allowed
-// interpreter, package manager, or compiler can still read a credential from
-// disk, so the sandbox and the permission model remain the boundary (§10.2).
-var providerCredentialVars = []string{
-	"ANTHROPIC_API_KEY",
-	"ANTHROPIC_AUTH_TOKEN",
-	"OPENAI_API_KEY",
-	"OPENAI_ORG_ID",
-	"GEMINI_API_KEY",
-	"GOOGLE_API_KEY",
-	"KIMI_API_KEY",
-	"SWITCHBOARD_TOKEN",
-}
-
-func credentialEnvKey(key string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(key))
-	for _, known := range providerCredentialVars {
-		if upper == known {
-			return true
-		}
-	}
-	// Env-backed provider references include dynamic
-	// SB_<PROVIDER>[_<ACCOUNT>]_API_KEY names. These markers also cover a new
-	// provider's conventional variable before the static list is updated.
-	for _, marker := range []string{"_API_KEY", "_AUTH_TOKEN", "_ACCESS_TOKEN", "_SESSION_TOKEN", "_PASSWORD", "_PASSWD", "_PRIVATE_KEY", "_CREDENTIAL", "_CLIENT_SECRET"} {
-		if strings.Contains(upper, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 func Run(ctx context.Context, c Command) (Result, error) {
 	if len(c.Argv) == 0 {
 		return Result{}, errors.New("no command given")
@@ -148,36 +113,19 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	if len(c.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(c.Stdin)
 	}
-	setProcessGroup(cmd)
-
 	out := newCapture(c.MaxOutput)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
 	started := time.Now()
-	if err := runCtx.Err(); err != nil {
-		return Result{Duration: time.Since(started)}, err
-	}
-	if err := cmd.Start(); err != nil {
-		return Result{Duration: time.Since(started)}, err
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	var waitErr error
-	var timedOut bool
-	select {
-	case waitErr = <-done:
-	case <-runCtx.Done():
-		timedOut = errors.Is(runCtx.Err(), context.DeadlineExceeded)
-		terminateGroup(cmd, terminateGrace)
-		select {
-		case waitErr = <-done:
-		case <-time.After(reapTimeout):
-			waitErr = errors.New("process group did not exit after SIGKILL")
+	waitErr, contextErr, processStarted := runProcess(runCtx, cmd)
+	if !processStarted {
+		if contextErr != nil {
+			return Result{Duration: time.Since(started)}, contextErr
 		}
+		return Result{Duration: time.Since(started)}, waitErr
 	}
+	timedOut := errors.Is(contextErr, context.DeadlineExceeded)
 
 	text, truncated := out.String()
 	res := Result{
@@ -205,16 +153,98 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	}
 
 	// A cancelled turn is the user's decision, not a command failure.
-	if ctx.Err() != nil && !timedOut {
-		return res, ctx.Err()
+	if contextErr != nil && !timedOut {
+		return res, contextErr
 	}
 	return res, nil
+}
+
+// RunProcess starts cmd and waits for it with the same cancellation boundary
+// as Run. On Unix the command gets its own process group and cancellation
+// reaches every descendant in that group. Platforms without group signalling
+// can stop only the direct process; callers must preserve that limitation in
+// anything they tell the user.
+//
+// Callers must construct cmd with exec.Command, not exec.CommandContext. The
+// latter installs its own direct-child kill path and can race this package's
+// process-tree cleanup. Stdout and stderr may be ordinary io.Writers; the
+// bounded WaitDelay on unsupported platforms closes os/exec's copy pipes when
+// a surviving descendant keeps them open after the direct process exits.
+func RunProcess(ctx context.Context, cmd *exec.Cmd) error {
+	waitErr, contextErr, _ := runProcess(ctx, cmd)
+	if contextErr == nil {
+		return waitErr
+	}
+	if waitErr == nil {
+		return contextErr
+	}
+	return errors.Join(contextErr, waitErr)
+}
+
+// runProcess keeps the wait result, cancellation cause, and successful Start
+// separate so Run can preserve its public distinctions among launch failure, a
+// timed-out Result, and owner cancellation returned as an error.
+func runProcess(ctx context.Context, cmd *exec.Cmd) (waitErr, contextErr error, started bool) {
+	if ctx == nil {
+		return errors.New("nil process context"), nil, false
+	}
+	if cmd == nil {
+		return errors.New("nil command"), nil, false
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err, false
+	}
+
+	setProcessGroup(cmd)
+	// Wait otherwise follows inherited stdout/stderr pipes forever after the
+	// direct child exits on a platform where descendant cleanup is unavailable.
+	// Unix keeps its old zero-delay behavior: an ordinary background process is
+	// allowed to retain the shell's pipes until the command timeout, at which
+	// point group cancellation closes them rather than misreporting a clean
+	// shell exit as ErrWaitDelay.
+	cmd.WaitDelay = processWaitDelay()
+	if err := cmd.Start(); err != nil {
+		return err, nil, false
+	}
+	started = true
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case waitErr = <-done:
+		if err := ctx.Err(); err == nil {
+			return waitErr, nil, true
+		} else {
+			// Cancellation won concurrently with the direct child's exit. A
+			// detached descendant may still occupy the process group, so the
+			// completed Wait does not make cleanup optional.
+			terminateGroup(cmd, terminateGrace)
+			return waitErr, err, true
+		}
+	case <-ctx.Done():
+		contextErr = ctx.Err()
+	}
+
+	terminateGroup(cmd, terminateGrace)
+	// On platforms that need it, WaitDelay bounds inherited-pipe cleanup after
+	// the direct process exits. This outer wait bounds every platform and leaves
+	// a little scheduler room beyond that delay before giving the caller back
+	// control; even an unkillable process cannot hold the prompt forever.
+	timer := time.NewTimer(reapTimeout + 250*time.Millisecond)
+	defer timer.Stop()
+	select {
+	case waitErr = <-done:
+		return waitErr, contextErr, true
+	case <-timer.C:
+		return errors.New("process did not exit after cancellation cleanup"), contextErr, true
+	}
 }
 
 func commandEnv(network NetworkAccess, extra []string) []string {
 	keep := func(kv string) bool {
 		key, _, ok := strings.Cut(kv, "=")
-		if ok && credentialEnvKey(key) {
+		if !ok || childenv.Sensitive(key) {
 			return false
 		}
 		// macOS Seatbelt permits host loopback so test fixtures work. An
@@ -228,7 +258,7 @@ func commandEnv(network NetworkAccess, extra []string) []string {
 		return true
 	}
 
-	env := os.Environ()
+	env := childenv.Current()
 	kept := make([]string, 0, len(env)+len(extra))
 	for _, kv := range env {
 		if keep(kv) {

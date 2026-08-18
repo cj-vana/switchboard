@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/execution"
 	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/provider"
@@ -101,6 +102,60 @@ func use(id, name string, input string) provider.ToolUse {
 	return provider.ToolUse{ID: id, Name: name, Input: json.RawMessage(input)}
 }
 
+func runRegistryTool(t *testing.T, registry *tools.Registry, name, input string) tools.Result {
+	t.Helper()
+	tool, ok := registry.Get(name)
+	if !ok {
+		t.Fatalf("tool %q is not registered", name)
+	}
+	plan, err := tool.Plan(json.RawMessage(input))
+	if err != nil {
+		t.Fatalf("plan %s: %v", name, err)
+	}
+	result, err := plan.Run(context.Background())
+	if err != nil {
+		t.Fatalf("run %s: %v", name, err)
+	}
+	return result
+}
+
+func TestMessageLabelExcludesContinuityWireBlock(t *testing.T) {
+	message := provider.Message{
+		Role:          provider.RoleUser,
+		ContinuityRef: strings.Repeat("a", 32),
+		Content: []provider.Block{
+			provider.Text{Text: "[continuity]\n\n"},
+			provider.Text{Text: "fix the retry path"},
+		},
+	}
+	if got := messageLabel(message); got != "fix the retry path" {
+		t.Fatalf("checkpoint label = %q", got)
+	}
+}
+
+func TestTurnDefensivelyStampsPendingContinuity(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("done"))
+	stored, err := h.sess.AppendContinuity(continuity.Capsule{
+		Source: continuity.SourceManual,
+		Tasks:  []continuity.Task{{Text: "deliver from core", Status: continuity.TaskActive}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.loop.Turn(context.Background(), "visible prompt"); err != nil {
+		t.Fatal(err)
+	}
+	state := h.sess.State()
+	if len(state.Messages) < 1 || state.Messages[0].ContinuityRef != stored.ID || state.Messages[0].AuthoredText() != "visible prompt" {
+		t.Fatalf("durable opening was not defensively stamped: %+v", state.Messages)
+	}
+	if len(h.provider.requests) != 1 || len(h.provider.requests[0].Messages) < 1 ||
+		h.provider.requests[0].Messages[0].ContinuityRef != stored.ID ||
+		!strings.Contains(h.provider.requests[0].Messages[0].Text(), "[continuity ") {
+		t.Fatalf("provider request missed continuity: %+v", h.provider.requests)
+	}
+}
+
 type recordingObserver struct {
 	text     strings.Builder
 	thinking strings.Builder
@@ -120,6 +175,28 @@ type closeSessionOnUsageObserver struct {
 	*recordingObserver
 	sess *session.Session
 	once sync.Once
+}
+
+type closeSessionOnToolEndObserver struct {
+	*recordingObserver
+	sess *session.Session
+	once sync.Once
+}
+
+type cancelOnToolEndObserver struct {
+	*recordingObserver
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (o *cancelOnToolEndObserver) ToolEnd(call provider.ToolUse, request permission.Request, result tools.Result, elapsed time.Duration) {
+	o.recordingObserver.ToolEnd(call, request, result, elapsed)
+	o.once.Do(o.cancel)
+}
+
+func (o *closeSessionOnToolEndObserver) ToolEnd(call provider.ToolUse, request permission.Request, result tools.Result, elapsed time.Duration) {
+	o.recordingObserver.ToolEnd(call, request, result, elapsed)
+	o.once.Do(func() { _ = o.sess.Close() })
 }
 
 func (o *closeSessionOnUsageObserver) TurnUsage(u session.Usage) {
@@ -258,6 +335,330 @@ func TestTurnWithoutTools(t *testing.T) {
 	}
 	if len(durable) != 1 || durable[0].CallID != h.obs.receipts[0].CallID {
 		t.Fatalf("durable usage %#v does not resolve observer receipt %#v", durable, h.obs.receipts)
+	}
+}
+
+func TestSuccessfulTodoBatchPersistsOneCapsuleAfterItsResult(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(
+			use("todo-1", "todo", `{"items":[{"text":"first version","status":"active"}]}`),
+			use("todo-2", "todo", `{"items":[{"text":"finished setup","status":"done"},{"text":"verify restart","status":"active"}]}`),
+		),
+		textTurn("done"),
+	)
+	if err := h.loop.Turn(context.Background(), "work through the plan"); err != nil {
+		t.Fatal(err)
+	}
+	state := h.sess.State()
+	if state.Continuity == nil {
+		t.Fatal("successful todo batch did not persist continuity")
+	}
+	if state.Continuity.Source != continuity.SourceTodo || state.Continuity.BasisMessages != 3 {
+		t.Fatalf("capsule was not ordered immediately after the durable result: %+v", state.Continuity)
+	}
+	if len(state.Continuity.Tasks) != 2 || state.Continuity.Tasks[1].Text != "verify restart" ||
+		state.Continuity.Tasks[1].Status != continuity.TaskActive || state.Continuity.NextAction != "verify restart" {
+		t.Fatalf("capsule did not capture the final batch state: %+v", state.Continuity)
+	}
+	raw, err := os.ReadFile(h.sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(raw), `"type":"message_continuity"`); got != 1 {
+		t.Fatalf("todo batch wrote %d atomic result-continuity records, want one", got)
+	}
+	if strings.Contains(string(raw), `"type":"continuity"`) {
+		t.Fatal("todo batch used a separate continuity frame and reopened a crash gap")
+	}
+}
+
+func TestFailedTodoDoesNotPersistContinuity(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("todo-bad", "todo", `{"items":[{"text":"cannot persist","status":"blocked"}]}`)),
+		textTurn("recovered"),
+	)
+	if err := h.loop.Turn(context.Background(), "try a bad plan"); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.sess.State().Continuity; got != nil {
+		t.Fatalf("failed todo persisted continuity: %+v", got)
+	}
+	raw, err := os.ReadFile(h.sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"type":"continuity"`) || strings.Contains(string(raw), `"type":"message_continuity"`) {
+		t.Fatal("failed todo wrote continuity state")
+	}
+}
+
+func TestUnstorableTodoIsAToolErrorNotAPersistenceFailure(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("todo-control", "todo", `{"items":[{"text":"ok\u0000still","status":"active"}]}`)),
+		textTurn("recovered"),
+	)
+	if err := h.loop.Turn(context.Background(), "try an invalid task"); err != nil {
+		t.Fatalf("turn failed after an invalid todo instead of returning a tool error: %v", err)
+	}
+	state := h.sess.State()
+	if state.Continuity != nil || len(h.loop.Tools.Todos()) != 0 {
+		t.Fatalf("invalid todo changed live or durable state: continuity=%+v todos=%+v", state.Continuity, h.loop.Tools.Todos())
+	}
+	if len(state.Messages) < 3 || state.Messages[2].Role != provider.RoleTool {
+		t.Fatalf("missing durable tool error: %+v", state.Messages)
+	}
+	result, ok := state.Messages[2].Content[0].(provider.ToolResult)
+	if !ok || !result.IsError || !strings.Contains(result.Content, "control character") {
+		t.Fatalf("todo result = %#v", state.Messages[2].Content[0])
+	}
+}
+
+func TestSuccessfulTodoPersistsAtomicallyWhenBatchEndsCancelled(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("todo-cancel", "todo", `{"items":[{"text":"survive cancellation","status":"active"}]}`)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	h.loop.SetObserver(&cancelOnToolEndObserver{recordingObserver: h.obs, cancel: cancel})
+	err := h.loop.Turn(ctx, "plan then cancel")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("turn error = %v, want cancellation", err)
+	}
+	state := h.sess.State()
+	if len(state.Messages) != 3 || state.Continuity == nil || len(state.Continuity.Tasks) != 1 ||
+		state.Continuity.Tasks[0].Text != "survive cancellation" {
+		t.Fatalf("successful todo was lost at cancelled batch boundary: %+v", state)
+	}
+	raw, readErr := os.ReadFile(h.sess.Path())
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Count(string(raw), `"type":"message_continuity"`) != 1 {
+		t.Fatal("cancelled batch did not use the atomic todo frame")
+	}
+	id, path := h.sess.ID(), h.sess.Path()
+	if err := h.sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := session.NewStore(filepath.Dir(filepath.Dir(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	registry, err := tools.NewRegistry(h.root, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop := &Loop{Tools: registry}
+	if err := loop.BindSession(reopened); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.Todos(); len(got) != 1 || got[0].Text != "survive cancellation" {
+		t.Fatalf("restart hydration after cancellation = %+v", got)
+	}
+}
+
+func TestTodoResultAndCapsuleBothFailWhenAtomicAppendFails(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("todo-1", "todo", `{"items":[{"text":"not durable","status":"active"}]}`)),
+	)
+	observer := &closeSessionOnToolEndObserver{recordingObserver: h.obs, sess: h.sess}
+	h.loop.SetObserver(observer)
+	err := h.loop.Turn(context.Background(), "close before result append")
+	if !errors.Is(err, session.ErrSessionPoisoned) {
+		t.Fatalf("turn error = %v, want poisoned result append", err)
+	}
+	if got := h.sess.State(); got.Continuity != nil || len(got.Messages) != 2 {
+		t.Fatalf("failed atomic append published one half: %+v", got)
+	}
+	raw, readErr := os.ReadFile(h.sess.Path())
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(raw), `"type":"message_continuity"`) || strings.Contains(string(raw), `"type":"continuity"`) {
+		t.Fatal("failed atomic append reached the WAL")
+	}
+}
+
+func TestBindSessionHydratesRestartAndClearsOtherSessions(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("todo-1", "todo", `{"items":[{"text":"survive restart","status":"active"}]}`)),
+		textTurn("done"),
+	)
+	if err := h.loop.Turn(context.Background(), "persist a plan"); err != nil {
+		t.Fatal(err)
+	}
+	id, path := h.sess.ID(), h.sess.Path()
+	if err := h.sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := session.NewStore(filepath.Dir(filepath.Dir(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	fresh, err := tools.NewRegistry(h.root, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop := &Loop{Tools: fresh}
+	if err := loop.BindSession(reopened); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.Todos(); len(got) != 1 || got[0].Text != "survive restart" || got[0].Status != tools.TodoActive {
+		t.Fatalf("restart hydration = %+v", got)
+	}
+	if err := loop.BindSession(nil); err == nil {
+		t.Fatal("nil session binding was accepted")
+	}
+	if loop.Session != reopened || len(fresh.Todos()) != 1 {
+		t.Fatal("failed binding partially changed session or todos")
+	}
+
+	blank, err := store.Create(h.root, "scripted/local/blank", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blank.Close()
+	if err := loop.BindSession(blank); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.Todos(); len(got) != 0 {
+		t.Fatalf("binding a session without continuity kept stale todos: %+v", got)
+	}
+
+	if err := fresh.RestoreTodos([]tools.TodoItem{{Text: "stale again", Status: tools.TodoActive}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.ClearContinuity(continuity.SourceManual); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.BindSession(reopened); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.Todos(); len(got) != 0 {
+		t.Fatalf("binding a tombstoned session kept stale todos: %+v", got)
+	}
+}
+
+func TestBindSessionAcceptsSameProcessCapsuleAfterPayloadFitting(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault)
+	large := continuity.Capsule{
+		Source:    continuity.SourceManual,
+		Narrative: strings.Repeat("context ", 2_000),
+		Tasks:     make([]continuity.Task, continuity.MaxTasks),
+		Files:     make([]continuity.File, continuity.MaxFiles),
+		Facts:     make([]string, continuity.MaxFacts),
+	}
+	for i := range large.Tasks {
+		large.Tasks[i] = continuity.Task{Text: strings.Repeat("task ", 100), Status: continuity.TaskDone}
+	}
+	for i := range large.Files {
+		large.Files[i] = continuity.File{Path: strings.Repeat("path/", 120), State: "unverified"}
+	}
+	for i := range large.Facts {
+		large.Facts[i] = strings.Repeat("fact ", 100)
+	}
+	stored, err := h.sess.AppendContinuity(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := continuity.ValidateStored(stored); err != nil {
+		t.Fatalf("same-process stored capsule is not canonical: %v", err)
+	}
+	fresh, err := tools.NewRegistry(h.root, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop := &Loop{Tools: fresh}
+	if err := loop.BindSession(h.sess); err != nil {
+		t.Fatalf("same-process binding rejected fitted capsule: %v", err)
+	}
+	if len(fresh.Todos()) != len(stored.Tasks) {
+		t.Fatalf("hydrated %d tasks, stored %d", len(fresh.Todos()), len(stored.Tasks))
+	}
+}
+
+func TestBindSessionDropsPriorSessionReadAuthorityUntilReread(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault)
+	path := filepath.Join(h.root, "session-bound.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if result := runRegistryTool(t, h.loop.Tools, "read", `{"path":"session-bound.txt"}`); result.IsError {
+		t.Fatalf("session A read failed: %s", result.Content)
+	}
+
+	store, err := session.NewStore(filepath.Dir(filepath.Dir(h.sess.Path())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionB, err := store.Create(h.root, "scripted/local/session-b", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessionB.Close()
+	if err := h.loop.BindSession(sessionB); err != nil {
+		t.Fatal(err)
+	}
+
+	write := runRegistryTool(t, h.loop.Tools, "write", `{"path":"session-bound.txt","content":"written\n"}`)
+	if !write.IsError || !strings.Contains(write.Content, "not been read") {
+		t.Fatalf("session B inherited A's write authority: %+v", write)
+	}
+	edit := runRegistryTool(t, h.loop.Tools, "edit", `{"path":"session-bound.txt","old_string":"before","new_string":"after"}`)
+	if !edit.IsError || !strings.Contains(edit.Content, "not been read") {
+		t.Fatalf("session B inherited A's edit authority: %+v", edit)
+	}
+	if result := runRegistryTool(t, h.loop.Tools, "read", `{"path":"session-bound.txt"}`); result.IsError {
+		t.Fatalf("session B reread failed: %s", result.Content)
+	}
+	if result := runRegistryTool(t, h.loop.Tools, "edit", `{"path":"session-bound.txt","old_string":"before","new_string":"after"}`); result.IsError {
+		t.Fatalf("edit after session B reread failed: %s", result.Content)
+	}
+}
+
+func TestBindSessionWaitsForActiveTurnAndPublishesContextTogether(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("done"))
+	gate := &gatedProvider{started: make(chan struct{}), release: make(chan struct{})}
+	h.loop.Provider = gate
+	store, err := session.NewStore(filepath.Dir(filepath.Dir(h.sess.Path())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.Create(h.root, "scripted/local/next", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+
+	turnDone := make(chan error, 1)
+	go func() { turnDone <- h.loop.Turn(context.Background(), "finish on the old session") }()
+	<-gate.started
+	bindDone := make(chan error, 1)
+	go func() { bindDone <- h.loop.BindSession(next) }()
+	select {
+	case err := <-bindDone:
+		t.Fatalf("bind crossed an active turn: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gate.release)
+	if err := <-turnDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-bindDone; err != nil {
+		t.Fatal(err)
+	}
+	if h.loop.Session != next || len(next.State().Messages) != 0 || len(h.sess.State().Messages) != 2 {
+		t.Fatalf("session swap mixed turn state: old=%d new=%d bound=%p want=%p",
+			len(h.sess.State().Messages), len(next.State().Messages), h.loop.Session, next)
 	}
 }
 

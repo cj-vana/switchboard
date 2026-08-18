@@ -9,7 +9,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -32,14 +31,23 @@ import (
 )
 
 func main() {
-	sweepOldBinary()
 	if err := run(); err != nil {
-		if errors.Is(err, context.Canceled) {
-			os.Exit(130)
-		}
-		fmt.Fprintln(os.Stderr, "sb: "+err.Error())
-		os.Exit(1)
+		os.Exit(writeCLIError(os.Stderr, err))
 	}
+}
+
+func writeCLIError(w io.Writer, err error) int {
+	if errors.Is(err, context.Canceled) {
+		return 130
+	}
+	var parseErr *cliParseError
+	if errors.As(err, &parseErr) {
+		fmt.Fprintln(w, parseErr.Error())
+		writeRootHelp(w)
+		return 2
+	}
+	fmt.Fprintln(w, "sb: "+err.Error())
+	return 1
 }
 
 type options struct {
@@ -60,6 +68,11 @@ type options struct {
 	repl      bool
 	version   bool
 
+	// cliSetFlags records only command-line flags explicitly supplied before a
+	// subcommand. It is parser metadata, not session state: dispatch uses it to
+	// reject combinations whose session intent would otherwise be ignored.
+	cliSetFlags map[string]bool
+
 	// allowSecrets widens the outbound credential gate for a scripted run,
 	// the way -mode widens permissions: deliberately, on the command line,
 	// never by default.
@@ -67,258 +80,21 @@ type options struct {
 }
 
 func run() error {
-	// A subcommand is dispatched before flag parsing, because `sb auth login`
-	// takes a credential rather than flags and must not be reachable in a form
-	// that puts one on the command line.
-	if len(os.Args) > 1 && os.Args[1] == "completion" {
-		if len(os.Args) > 3 {
-			return fmt.Errorf("sb completion takes one shell; %q is extra", os.Args[3])
-		}
-		shell := ""
-		if len(os.Args) > 2 {
-			shell = os.Args[2]
-		}
-		return runCompletionCLI(os.Stdout, shell)
+	// Help is a pure, bounded dispatch path. Keep it ahead of the Windows old
+	// binary sweep and every config, inventory, session, and provider open so a
+	// question about a command can never change the machine it is describing.
+	if handled, err := handleCLIHelp(os.Stdout, os.Args[1:]); handled {
+		return err
 	}
-	if len(os.Args) > 1 && os.Args[1] == "plugins" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		return runPluginsCLI(os.Stdout, cwd, os.Args[2:])
-	}
-	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		return runMCPCLI(os.Stdout, cwd, os.Args[2:])
-	}
-	if len(os.Args) > 1 && os.Args[1] == "auth" {
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		return runAuth(context.Background(), os.Args[2:], cfg)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "update" {
-		if len(os.Args) > 2 {
-			return fmt.Errorf("sb update takes no argument; %q was ignored by nothing", os.Args[2])
-		}
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		return runUpdateCLI(context.Background(), cfg)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "doctor" {
-		if len(os.Args) > 2 {
-			return fmt.Errorf("sb doctor takes no argument; %q is not one", os.Args[2])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		cat, err := catalog.Load()
-		if err != nil {
-			return err
-		}
-		return runDoctorCLI(context.Background(), os.Stdout, cfg, cat, newProviders("", cfg), cwd)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "cost" {
-		if len(os.Args) > 2 {
-			return fmt.Errorf("sb cost takes no argument; %q is not one", os.Args[2])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		cat, err := catalog.Load()
-		if err != nil {
-			return err
-		}
-		return runCostCLI(os.Stdout, store, cat, cwd)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "find" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		return runFindCLI(os.Stdout, store, cwd, strings.Join(os.Args[2:], " "))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "stats" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		cat, err := catalog.Load()
-		if err != nil {
-			return err
-		}
-		scope := ""
-		if len(os.Args) > 2 {
-			scope = os.Args[2]
-		}
-		return runStatsCLI(os.Stdout, store, cat, cfg, cwd, scope)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "races" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		if len(os.Args) > 2 {
-			if os.Args[2] != "all" {
-				return fmt.Errorf("sb races takes no argument, or all; %q is neither", os.Args[2])
-			}
-			return runRacesAllCLI(os.Stdout, store)
-		}
-		return runRacesCLI(os.Stdout, store, cwd)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "recap" {
-		if len(os.Args) > 3 {
-			return fmt.Errorf("sb recap takes one session id, or none for the most recent; %q is extra", os.Args[3])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		id := ""
-		if len(os.Args) > 2 {
-			id = os.Args[2]
-		}
-		return runRecapCLI(os.Stdout, store, cwd, id)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "export" {
-		if len(os.Args) > 3 {
-			return fmt.Errorf("sb export takes one session id, or none for the most recent; %q is extra", os.Args[3])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		id := ""
-		if len(os.Args) > 2 {
-			id = os.Args[2]
-		}
-		return runExportCLI(os.Stdout, store, cwd, id)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "ladder" {
-		if len(os.Args) > 2 {
-			return fmt.Errorf("sb ladder takes no argument; %q is not one", os.Args[2])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		return runLadderCLI(os.Stdout, cfg.Tiers, store, cwd)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "mistakes" {
-		if len(os.Args) > 2 {
-			return fmt.Errorf("sb mistakes takes no argument; %q is not one", os.Args[2])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		return runMistakesCLI(os.Stdout, store, cwd)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "blame" {
-		if len(os.Args) > 3 {
-			return fmt.Errorf("sb blame takes one file, or none for the workspace receipt; %q is extra", os.Args[3])
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		store, err := session.DefaultStore()
-		if err != nil {
-			return err
-		}
-		cat, err := catalog.Load()
-		if err != nil {
-			return err
-		}
-		path := ""
-		if len(os.Args) > 2 {
-			path = os.Args[2]
-		}
-		return runBlameCLI(os.Stdout, store, cat, cwd, path)
-	}
+	sweepOldBinary()
 
-	var opts options
-	// The flag package prints flags alone; the subcommands live in the
-	// same list the shell completions are pinned to, so -h, tab, and the
-	// dispatch cannot name three different tools.
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(),
-			"usage: sb [flags]            an interactive session in this workspace\n"+
-				"       sb <subcommand>       %s\n\nflags:\n",
-			strings.Join(completionSubcommands, ", "))
-		flag.PrintDefaults()
+	opts, args, err := parseCLIOptions(os.Args[1:])
+	if err != nil {
+		return err
 	}
-	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
-	flag.StringVar(&opts.tier, "tier", "", "tier to start on, for example t2 (default: the lowest configured tier)")
-	flag.StringVar(&opts.host, "host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")
-	flag.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, auto, yolo, or bypass")
-	flag.Var(sandboxFlag{target: &opts.sandbox}, "sandbox", "command confinement: bare flag means on; also accepts off, on, or auto (default: config, then off)")
-	flag.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")
-	flag.StringVar(&opts.workspace, "workspace", "", "workspace root (default: current directory)")
-	flag.StringVar(&opts.profile, "profile", "", "run on a named alternate ladder from [profiles.<name>] in the config")
-	flag.StringVar(&opts.prompt, "p", "", "run a single prompt and exit; piped stdin is attached to it")
-	flag.StringVar(&opts.output, "output", "text", "what a -p run prints: text, or json for one machine-readable result line")
-	flag.StringVar(&opts.resume, "resume", "", "resume a session by id")
-	flag.BoolVar(&opts.cont, "continue", false, "resume the most recent session for this workspace")
-	flag.BoolVar(&opts.list, "sessions", false, "list sessions for this workspace and exit")
-	flag.BoolVar(&opts.showTiers, "tiers", false, "list the configured tiers and exit")
-	flag.BoolVar(&opts.repl, "repl", false, "use the line-oriented REPL instead of the TUI")
-	flag.BoolVar(&opts.version, "version", false, "print the version and exit")
-	flag.BoolVar(&opts.allowSecrets, "allow-secrets", false, "send a -p prompt even when it contains something key-shaped")
-	flag.Parse()
-
+	// -version has always been terminal, even when positional words follow it.
+	// Preserve that precedence so a typo cannot turn `sb -version update` into
+	// an updater invocation.
 	if opts.version {
 		v := currentVersion()
 		if v == "" {
@@ -326,6 +102,12 @@ func run() error {
 		}
 		fmt.Println("sb " + v)
 		return nil
+	}
+	if err := validateSubcommandFlags(opts, args); err != nil {
+		return err
+	}
+	if handled, err := runCLISubcommand(context.Background(), os.Stdout, opts, args); handled {
+		return err
 	}
 
 	switch opts.output {
@@ -348,7 +130,7 @@ func run() error {
 		}
 		workspace = cwd
 	}
-	workspace, err := filepath.Abs(workspace)
+	workspace, err = filepath.Abs(workspace)
 	if err != nil {
 		return err
 	}
@@ -545,6 +327,13 @@ func run() error {
 		Hooks:       hookSet,
 		Checkpoints: undoRec,
 	}
+	// Even the initial process binding goes through the session boundary: a
+	// resumed continuity capsule hydrates its todo list, while a fresh or
+	// tombstoned session explicitly starts with none. The same operation drops
+	// any registry read authority before the first turn can observe it.
+	if err := loop.BindSession(sess); err != nil {
+		return fmt.Errorf("restoring session context: %w", err)
+	}
 
 	// The ceiling gates the loop before each call, whatever surface drives
 	// it; /budget adjusts the shared state mid-session.
@@ -589,7 +378,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, undoRec, agents, agentNotes, budget, skillList, onboarded)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, lspServer, lspNote, undoRec, agents, agentNotes, budget, skillList, onboarded)
 	}
 
 	// With -output json, stdout carries exactly one JSON line and nothing
@@ -648,9 +437,9 @@ func run() error {
 	// renderer is driven from the loop's goroutine, and a client's read
 	// loop writing to it concurrently would race. Later notes buffer,
 	// capped, and are simply not the REPL's concern.
-	for _, n := range mcpEnv.attach(nil) {
-		out.Notice(n.level, n.text)
-	}
+	startupNotes, droppedStartupNotes := mcpEnv.attachCounted(nil)
+	r.startupNotes = aggregateStartupNotes(startupNotes, droppedStartupNotes)
+	writeStartupNoteReport(out, r.startupNotes)
 
 	if opts.prompt != "" {
 		// The gate has no one to ask on this surface, so a key-shaped string

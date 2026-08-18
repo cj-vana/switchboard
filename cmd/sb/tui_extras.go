@@ -7,7 +7,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -101,8 +100,9 @@ func cmdContext(m *tuiModel, _ string) tea.Cmd {
 	return nil
 }
 
-// openPalette is ctrl+p: every command in one fuzzy-adjacent picker. It runs
-// the bare command; one that needs arguments opens its own picker or says so.
+// openPalette is ctrl+p: every command in one searchable, fuzzy-ranked picker.
+// It runs the bare command; one that needs arguments opens its own picker or
+// says so.
 func (m *tuiModel) openPalette() tea.Cmd {
 	var items []pickerItem
 	for _, c := range commands() {
@@ -149,7 +149,7 @@ func (m *tuiModel) openEditor() tea.Cmd {
 	tmp.Close()
 
 	parts := strings.Fields(editor) // "code --wait" is a legitimate $EDITOR
-	cmd := exec.Command(parts[0], append(parts[1:], tmp.Name())...)
+	cmd := sanitizedCommand(parts[0], append(parts[1:], tmp.Name())...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorDoneMsg{path: tmp.Name(), err: err}
 	})

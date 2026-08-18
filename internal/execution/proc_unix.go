@@ -19,6 +19,8 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+func processWaitDelay() time.Duration { return 0 }
+
 // terminateGroup signals the whole group, escalating to SIGKILL after a grace
 // period so a well-behaved process can flush first.
 func terminateGroup(cmd *exec.Cmd, grace time.Duration) {

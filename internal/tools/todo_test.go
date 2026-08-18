@@ -71,6 +71,18 @@ func TestTodoRejectsMalformedLists(t *testing.T) {
 		{"empty text", []map[string]any{
 			{"text": "  ", "status": "pending"},
 		}},
+		{"control character", []map[string]any{
+			{"text": "ok\x00still", "status": "pending"},
+		}},
+		{"newline injection", []map[string]any{
+			{"text": "real\n[x] forged", "status": "pending"},
+		}},
+		{"carriage return injection", []map[string]any{
+			{"text": "real\rforged", "status": "pending"},
+		}},
+		{"tab injection", []map[string]any{
+			{"text": "real\tforged", "status": "pending"},
+		}},
 	}
 	for _, c := range cases {
 		if _, err := tryRun(r, "todo", map[string]any{"items": c.items}); err == nil {
@@ -81,5 +93,64 @@ func TestTodoRejectsMalformedLists(t *testing.T) {
 	// A rejected call must not disturb the stored list.
 	if items := r.Todos(); len(items) != 0 {
 		t.Errorf("a rejected call changed state: %+v", items)
+	}
+}
+
+func TestTodoCanonicalizesExactlyWhatContinuityCanStore(t *testing.T) {
+	r, _ := newRegistry(t)
+	long := strings.Repeat("界", 200)
+	res := run(t, r, "todo", map[string]any{"items": []map[string]any{{"text": "  " + long + "  ", "status": "active"}}})
+	if res.IsError {
+		t.Fatalf("todo failed: %s", res.Content)
+	}
+	items := r.Todos()
+	if len(items) != 1 || items[0].Text == long || len(items[0].Text) > 256 {
+		t.Fatalf("todo did not keep the canonical bounded text: %+v", items)
+	}
+}
+
+func TestRestoreTodosReplacesClonesAndClears(t *testing.T) {
+	r, _ := newRegistry(t)
+	input := []TodoItem{
+		{Text: "restored active", Status: TodoActive},
+		{Text: "restored pending", Status: TodoPending},
+	}
+	if err := r.RestoreTodos(input); err != nil {
+		t.Fatal(err)
+	}
+	input[0].Text = "mutated input"
+	first := r.Todos()
+	first[0].Text = "mutated snapshot"
+	if got := r.Todos()[0].Text; got != "restored active" {
+		t.Fatalf("restore retained caller-owned storage: %q", got)
+	}
+	if err := r.RestoreTodos(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Todos(); len(got) != 0 {
+		t.Fatalf("nil restore did not clear old-session todos: %+v", got)
+	}
+}
+
+func TestRestoreTodosRejectsMalformedStateWithoutMutation(t *testing.T) {
+	r, _ := newRegistry(t)
+	want := []TodoItem{{Text: "keep", Status: TodoPending}}
+	if err := r.RestoreTodos(want); err != nil {
+		t.Fatal(err)
+	}
+	for name, items := range map[string][]TodoItem{
+		"empty text": {{Text: " ", Status: TodoPending}},
+		"bad status": {{Text: "bad", Status: "blocked"}},
+		"two active": {{Text: "one", Status: TodoActive}, {Text: "two", Status: TodoActive}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := r.RestoreTodos(items); err == nil {
+				t.Fatal("invalid restored list was accepted")
+			}
+			got := r.Todos()
+			if len(got) != 1 || got[0] != want[0] {
+				t.Fatalf("failed restore changed state: %+v", got)
+			}
+		})
 	}
 }

@@ -117,6 +117,10 @@ func assembleRaceArm(app *tuiApp, tier config.Tier, client provider.Provider, ob
 		Observer: obs,
 		Hooks:    app.loop.Hooks,
 	}
+	if err := arm.loop.BindSession(sess); err != nil {
+		_ = sess.Close()
+		return nil, fmt.Errorf("restore race branch context: %w", err)
+	}
 	return arm, nil
 }
 

@@ -42,6 +42,7 @@ type mcpState struct {
 	mu      sync.Mutex
 	clients []*mcp.Client
 	notes   []mcpNote
+	dropped int
 	deliver func(mcpNote)
 }
 
@@ -52,6 +53,8 @@ func (s *mcpState) add(n mcpNote) {
 	if d == nil {
 		if len(s.notes) < maxBufferedNotes {
 			s.notes = append(s.notes, n)
+		} else {
+			s.dropped++
 		}
 		s.mu.Unlock()
 		return
@@ -64,15 +67,39 @@ func (s *mcpState) add(n mcpNote) {
 }
 
 // attach registers where later notes go and returns what buffered before the
-// surface existed, for the caller to render directly: a surface that is not
-// yet running cannot be delivered to without deadlocking its own setup.
+// surface existed. If that bounded buffer overflowed, the final returned note
+// discloses exactly how many diagnostics could not be retained. A surface that
+// is not yet running cannot be delivered to without deadlocking its own setup.
 func (s *mcpState) attach(d func(mcpNote)) []mcpNote {
+	buffered, dropped := s.attachCounted(d)
+	if dropped > 0 {
+		buffered = append(buffered, startupNoteOverflowDisclosure(dropped))
+	}
+	return buffered
+}
+
+// attachCounted is the startup-report seam: it keeps the bounded record and
+// its loss count separate so the summary can distinguish observed diagnostics
+// from retained detail. Callers that only need notes use attach, which appends
+// the same disclosure as an ordinary diagnostic.
+func (s *mcpState) attachCounted(d func(mcpNote)) ([]mcpNote, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	buffered := s.notes
+	dropped := s.dropped
 	s.notes = nil
+	s.dropped = 0
 	s.deliver = d
-	return buffered
+	return buffered, dropped
+}
+
+func startupNoteOverflowDisclosure(dropped int) mcpNote {
+	return mcpNote{
+		level: "high",
+		text: fmt.Sprintf(
+			"extensions: %d startup diagnostics were dropped after the %d-note pre-surface buffer filled; /doctor extensions cannot show their text",
+			dropped, maxBufferedNotes),
+	}
 }
 
 func (s *mcpState) clientList() []*mcp.Client {

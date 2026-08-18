@@ -3,15 +3,31 @@ package main
 import (
 	"bytes"
 	"context"
-	"os/exec"
+	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/switchboard-code/switchboard/internal/scm"
+	"github.com/switchboard-code/switchboard/internal/terminaltext"
+)
+
+const (
+	tuiDiffMaxBytes              = 1 << 20
+	tuiDiffInventoryMaxBytes     = 16 << 10
+	tuiDiffInventoryMaxPaths     = 64
+	tuiDiffInventoryPathMaxBytes = 512
+	// Leave room inside the one-MiB render envelope for the truncation note
+	// and the bounded inventory. The patch cap remains the only input to Git.
+	tuiDiffPatchMaxBytes = tuiDiffMaxBytes - tuiDiffInventoryMaxBytes - 256
 )
 
 // diffView is the /diff fullscreen. The diff is highlighted once when it
@@ -23,8 +39,10 @@ type diffView struct {
 }
 
 type diffLoadedMsg struct {
-	lines []string
-	err   error
+	sessionID  string
+	generation uint64
+	lines      []string
+	err        error
 }
 
 // openDiff diffs the workspace against HEAD. This is the harness running a
@@ -34,19 +52,153 @@ func openDiff(workspace string, dark bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "git", "-C", workspace, "diff", "HEAD", "--").Output()
+
+		repo, err := scm.Discover(ctx, workspace)
 		if err != nil {
 			return diffLoadedMsg{err: err}
 		}
-		const cap = 1 << 20
-		text := string(out)
-		if len(text) > cap {
-			text = text[:cap] + "\n… diff truncated at 1MB …\n"
+		paths, err := workspaceDiffPaths(workspace, repo.Root)
+		if err != nil {
+			return diffLoadedMsg{err: err}
 		}
-		if strings.TrimSpace(text) == "" {
-			text = "working tree clean\n"
+		result, err := repo.DiffHEAD(ctx, scm.DiffOptions{
+			Paths:    paths,
+			MaxBytes: tuiDiffPatchMaxBytes,
+		})
+		if err != nil {
+			return diffLoadedMsg{err: err}
 		}
+		text := terminaltext.Display(renderSCMDiff(result))
 		return diffLoadedMsg{lines: highlightDiff(text, dark)}
+	}
+}
+
+// workspaceDiffPaths keeps /diff scoped to the directory Switchboard opened,
+// even when that directory is nested inside a larger Git worktree. The SCM
+// layer forces literal pathspec semantics before this value reaches Git.
+func workspaceDiffPaths(workspace, repoRoot string) ([]string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace for diff: %w", err)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		abs = resolved
+	}
+	rel, err := filepath.Rel(repoRoot, abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace within Git worktree: %w", err)
+	}
+	if rel == "." {
+		return nil, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, fmt.Errorf("%w: workspace %s", scm.ErrOutsideRepo, workspace)
+	}
+	return []string{filepath.ToSlash(rel)}, nil
+}
+
+func renderSCMDiff(result scm.DiffResult) string {
+	text := string(result.Text)
+	if result.Truncated {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += "… diff truncated at 1 MiB; some changes are not shown …\n"
+		text += renderDiffOmitted(result.Omitted)
+	}
+	if strings.TrimSpace(text) != "" {
+		return text
+	}
+
+	changed := make([]scm.PathState, 0, len(result.Files))
+	for _, file := range result.Files {
+		if !file.Ignored {
+			changed = append(changed, file)
+		}
+	}
+	if len(changed) == 0 {
+		return "working tree clean\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("working tree has changes with no textual patch:\n")
+	for _, file := range changed {
+		fmt.Fprintf(&b, "  %s  %s\n", diffStateLabel(file), file.Path)
+	}
+	return b.String()
+}
+
+func renderDiffOmitted(files []scm.PathState) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	// SCM already returns path-sorted status, but sorting a copy here makes
+	// this renderer deterministic for every caller and leaves its input alone.
+	ordered := append([]scm.PathState(nil), files...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Path == ordered[j].Path {
+			return ordered[i].OriginalPath < ordered[j].OriginalPath
+		}
+		return ordered[i].Path < ordered[j].Path
+	})
+
+	header := fmt.Sprintf("files not fully shown (%d):\n", len(ordered))
+	var body strings.Builder
+	shown := 0
+	for shown < len(ordered) && shown < tuiDiffInventoryMaxPaths {
+		line := fmt.Sprintf("  %s  %s\n", diffStateLabel(ordered[shown]), diffInventoryPath(ordered[shown]))
+		nextShown := shown + 1
+		summary := ""
+		if nextShown < len(ordered) {
+			summary = fmt.Sprintf("  … %d more path(s) not listed; %d total not fully shown …\n", len(ordered)-nextShown, len(ordered))
+		}
+		if len(header)+body.Len()+len(line)+len(summary) > tuiDiffInventoryMaxBytes {
+			break
+		}
+		body.WriteString(line)
+		shown = nextShown
+	}
+
+	var b strings.Builder
+	b.Grow(len(header) + body.Len() + 80)
+	b.WriteString(header)
+	b.WriteString(body.String())
+	if shown < len(ordered) {
+		fmt.Fprintf(&b, "  … %d more path(s) not listed; %d total not fully shown …\n", len(ordered)-shown, len(ordered))
+	}
+	return b.String()
+}
+
+func diffInventoryPath(file scm.PathState) string {
+	path := terminaltext.Escape(file.Path)
+	if file.OriginalPath != "" && file.OriginalPath != file.Path {
+		path = terminaltext.Escape(file.OriginalPath) + " -> " + path
+	}
+	if len(path) <= tuiDiffInventoryPathMaxBytes {
+		return path
+	}
+	cut := tuiDiffInventoryPathMaxBytes - len("…")
+	for cut > 0 && !utf8.RuneStart(path[cut]) {
+		cut--
+	}
+	return path[:cut] + "…"
+}
+
+func diffStateLabel(file scm.PathState) string {
+	switch {
+	case file.Unmerged:
+		return "unmerged"
+	case file.Untracked:
+		return "untracked"
+	case file.Staged && file.Unstaged:
+		return "staged+unstaged"
+	case file.Staged:
+		return "staged"
+	case file.Unstaged:
+		return "unstaged"
+	default:
+		return "changed"
 	}
 }
 
@@ -79,11 +231,12 @@ func highlightDiff(text string, dark bool) []string {
 	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 }
 
-// key scrolls; it reports true when the view should close.
-func (d *diffView) key(msg tea.KeyMsg) bool {
+// key scrolls; it reports true when the view should close. The diff has no
+// asynchronous key actions, so its command is always nil.
+func (d *diffView) key(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
-		return true
+		return true, nil
 	case "up", "k":
 		d.scroll(-1)
 	case "down", "j":
@@ -98,16 +251,17 @@ func (d *diffView) key(msg tea.KeyMsg) bool {
 		d.offset = len(d.lines)
 		d.scroll(0)
 	}
-	return false
+	return false, nil
 }
 
-func (d *diffView) mouse(msg tea.MouseMsg) {
+func (d *diffView) mouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		d.scroll(-3)
 	case tea.MouseButtonWheelDown:
 		d.scroll(3)
 	}
+	return nil
 }
 
 func (d *diffView) scroll(n int) {

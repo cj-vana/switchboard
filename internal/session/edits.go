@@ -130,37 +130,15 @@ func readFileEditRecords(r *bufio.Reader) ([]FileEdit, error) {
 		if err != nil {
 			return nil, err
 		}
-		switch rec.Type {
-		case RecordSessionStart:
-			var start SessionStart
-			if err := json.Unmarshal(rec.Payload, &start); err != nil {
-				return nil, err
-			}
-			sessionID, workspace = start.ID, start.Workspace
-		case RecordUsage:
-			var u Usage
-			if err := json.Unmarshal(rec.Payload, &u); err != nil {
-				return nil, err
-			}
-			for _, call := range awaiting {
-				call.target = u.Target
-			}
-			awaiting = nil
-		case RecordRoute:
-			var route Route
-			if err := json.Unmarshal(rec.Payload, &route); err != nil {
-				return nil, err
-			}
-			routes[route.TurnDepth] = route
-		case RecordMessage:
-			var m provider.Message
-			if err := json.Unmarshal(rec.Payload, &m); err != nil {
-				return nil, err
-			}
+		m, isMessage, err := conversationMessage(rec)
+		if err != nil {
+			return nil, err
+		}
+		if isMessage {
 			if OpensTurn(m) {
 				turn++
 				turnDepth = messages
-				prompt = strings.TrimSpace(m.Text())
+				prompt = strings.TrimSpace(m.AuthoredText())
 			}
 			messages++
 			if m.Role == provider.RoleAssistant {
@@ -202,6 +180,30 @@ func readFileEditRecords(r *bufio.Reader) ([]FileEdit, error) {
 					out = append(out, edit)
 				}
 			}
+			continue
+		}
+		switch rec.Type {
+		case RecordSessionStart:
+			var start SessionStart
+			if err := json.Unmarshal(rec.Payload, &start); err != nil {
+				return nil, err
+			}
+			sessionID, workspace = start.ID, start.Workspace
+		case RecordUsage:
+			var u Usage
+			if err := json.Unmarshal(rec.Payload, &u); err != nil {
+				return nil, err
+			}
+			for _, call := range awaiting {
+				call.target = u.Target
+			}
+			awaiting = nil
+		case RecordRoute:
+			var route Route
+			if err := json.Unmarshal(rec.Payload, &route); err != nil {
+				return nil, err
+			}
+			routes[route.TurnDepth] = route
 		}
 	}
 
@@ -255,7 +257,8 @@ func OpensTurn(m provider.Message) bool {
 		return false
 	}
 	for _, block := range m.Content {
-		if _, ok := block.(provider.ToolResult); ok {
+		switch block.(type) {
+		case provider.ToolResult, *provider.ToolResult:
 			return false
 		}
 	}

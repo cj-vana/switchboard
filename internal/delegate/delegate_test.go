@@ -3,12 +3,14 @@ package delegate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/execution"
 	"github.com/switchboard-code/switchboard/internal/permission"
@@ -34,6 +36,64 @@ func (p *oneTurnProvider) CountTokens(context.Context, provider.RouteTarget, pro
 }
 
 func (p *oneTurnProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{Reachable: true, ModelPresent: true}, nil
+}
+
+type streamErrorProvider struct{}
+
+func (*streamErrorProvider) Name() string { return "broken-stream" }
+
+func (*streamErrorProvider) Stream(context.Context, provider.RouteTarget, provider.Request) (provider.EventStream, error) {
+	return nil, errors.New("provider stream failed")
+}
+
+func (*streamErrorProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+
+func (*streamErrorProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{Reachable: true, ModelPresent: true}, nil
+}
+
+type twoRoundBlockingProvider struct {
+	secondStarted chan struct{}
+	releaseSecond chan struct{}
+	calls         int
+}
+
+func (p *twoRoundBlockingProvider) Name() string { return "scripted-live-usage" }
+
+func (p *twoRoundBlockingProvider) Stream(ctx context.Context, _ provider.RouteTarget, _ provider.Request) (provider.EventStream, error) {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return &oneTurnStream{events: []provider.Event{
+			{Type: provider.EventToolUse, Index: 0, ToolUse: &provider.ToolUse{
+				ID: "todo-1", Name: "todo", Input: json.RawMessage(`{"items":[]}`),
+			}},
+			{Type: provider.EventDone, StopReason: provider.StopToolUse, Usage: provider.Usage{InputTokens: 1_000, OutputTokens: 100}},
+		}}, nil
+	case 2:
+		close(p.secondStarted)
+		select {
+		case <-p.releaseSecond:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &oneTurnStream{events: []provider.Event{
+			{Type: provider.EventTextDelta, Index: 0, Text: "Finished after the tool round."},
+			{Type: provider.EventDone, StopReason: provider.StopEndTurn, Usage: provider.Usage{InputTokens: 1_000, OutputTokens: 100}},
+		}}, nil
+	default:
+		return nil, errors.New("unexpected provider call")
+	}
+}
+
+func (*twoRoundBlockingProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+
+func (*twoRoundBlockingProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
 	return provider.ProbeResult{Reachable: true, ModelPresent: true}, nil
 }
 
@@ -82,7 +142,7 @@ func testConfig(t *testing.T, answer string) Config {
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {
 			return store.Create(workspace, target, "test-revision")
 		},
-		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent) (*agent.Loop, error) {
+		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent, _ TaskRef) (*agent.Loop, error) {
 			registry, err := tools.NewRegistry(workspace, execution.Capability{})
 			if err != nil {
 				return nil, err
@@ -141,7 +201,7 @@ func TestPlanValidatesTaskAndTier(t *testing.T) {
 	if p.Request.Effect != permission.EffectRead {
 		t.Errorf("spawning carries effect %q, want read: each sub call is gated on its own", p.Request.Effect)
 	}
-	if !strings.HasPrefix(p.Request.Detail, "t1 → ") {
+	if !strings.Contains(p.Request.Detail, "] t1 → ") {
 		t.Errorf("Detail = %q, want the default bottom rung named", p.Request.Detail)
 	}
 }
@@ -168,9 +228,168 @@ func TestRunReturnsTheFinalAnswerWithATrailer(t *testing.T) {
 	}
 }
 
+func TestTaskUsageIsLiveBetweenProviderCallsAndFinishesExact(t *testing.T) {
+	cat, err := catalog.LoadBundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.RouteTarget{
+		Provider: "anthropic", Surface: "first-party", ModelID: "claude-haiku-4-5",
+	}
+	info, _, ok := cat.Lookup(target)
+	if !ok {
+		t.Fatalf("priced test target %s is missing from the bundled catalog", target.ID())
+	}
+	perCall, _, ok := info.Cost(provider.Usage{InputTokens: 1_000, OutputTokens: 100})
+	if !ok || perCall <= 0 {
+		t.Fatalf("priced test usage = %s, priced %v", perCall, ok)
+	}
+
+	manager := NewTaskManager(1)
+	blocked := &twoRoundBlockingProvider{
+		secondStarted: make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	c := testConfig(t, "unused")
+	c.Tiers = []config.Tier{{ID: "t1", Label: "priced", Target: target}}
+	c.Tasks = manager
+	c.ParentSession = func() string { return "primary-live" }
+	c.Probe = func(context.Context, string) (config.Tier, provider.Provider, string, error) {
+		return c.Tiers[0], blocked, "", nil
+	}
+	originalNewLoop := c.NewLoop
+	c.NewLoop = func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent, task TaskRef) (*agent.Loop, error) {
+		loop, err := originalNewLoop(tier, client, sess, obs, named, task)
+		if err != nil {
+			return nil, err
+		}
+		loop.Catalog = cat
+		return loop, nil
+	}
+
+	tool, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPlan := plan(t, tool, `{"task":"use a tool, then finish"}`)
+	type outcome struct {
+		result tools.Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := runPlan.Run(context.Background())
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case <-blocked.secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("delegate did not reach its second provider call")
+	}
+	live := manager.List()
+	if len(live) != 1 {
+		t.Fatalf("live task snapshot = %+v", live)
+	}
+	if live[0].Status != TaskRunning || live[0].Calls != 1 || live[0].CostMicroUSD != int64(perCall) {
+		t.Fatalf("live task metrics = %+v, want one durable call costing %s", live[0], perCall)
+	}
+
+	close(blocked.releaseSecond)
+	var finished outcome
+	select {
+	case finished = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delegate did not finish after the second call was released")
+	}
+	if finished.err != nil || finished.result.IsError {
+		t.Fatalf("delegate result = %+v, error %v", finished.result, finished.err)
+	}
+	final := manager.List()
+	if len(final) != 1 || final[0].Status != TaskSucceeded || final[0].Calls != 2 || final[0].CostMicroUSD != int64(perCall)*2 {
+		t.Fatalf("final task metrics = %+v, want two exact provider receipts", final)
+	}
+}
+
+func TestPartialAnswerRemainsUsableButTaskReportsFailure(t *testing.T) {
+	c := testConfig(t, "unused")
+	manager := NewTaskManager(1)
+	c.Tasks = manager
+	c.ParentSession = func() string { return "primary" }
+	c.Probe = func(_ context.Context, tierID string) (config.Tier, provider.Provider, string, error) {
+		for _, tier := range ladder() {
+			if tier.ID == tierID {
+				return tier, &streamErrorProvider{}, "", nil
+			}
+		}
+		return config.Tier{}, nil, "", errors.New("unknown tier")
+	}
+	originalNewLoop := c.NewLoop
+	c.NewLoop = func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent, task TaskRef) (*agent.Loop, error) {
+		if err := sess.AppendMessage(provider.UserText("earlier step")); err != nil {
+			return nil, err
+		}
+		if err := sess.AppendMessage(provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{
+			provider.Text{Text: "Useful findings collected before the retry."},
+		}}); err != nil {
+			return nil, err
+		}
+		return originalNewLoop(tier, client, sess, obs, named, task)
+	}
+
+	tool, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := plan(t, tool, `{"task":"finish the investigation"}`).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError || !strings.Contains(res.Content, "Useful findings") || !strings.Contains(res.Content, "stopped early") {
+		t.Fatalf("partial result should remain usable and disclose failure: %+v", res)
+	}
+	tasks := manager.List()
+	if len(tasks) != 1 || tasks[0].Status != TaskFailed || !strings.Contains(tasks[0].Error, "provider stream failed") {
+		t.Fatalf("partial task status = %+v, want failed with provider reason", tasks)
+	}
+}
+
+func TestAssemblyFailureStillClosesTaskAccounting(t *testing.T) {
+	c := testConfig(t, "unused")
+	manager := NewTaskManager(1)
+	c.Tasks = manager
+	c.ParentSession = func() string { return "primary" }
+	c.NewLoop = func(config.Tier, provider.Provider, *session.Session, agent.Observer, *Agent, TaskRef) (*agent.Loop, error) {
+		return nil, errors.New("broken assembly")
+	}
+	finished := 0
+	c.Finish = func(*session.Session) error {
+		finished++
+		return nil
+	}
+	tool, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := plan(t, tool, `{"task":"inspect"}`).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "broken assembly") {
+		t.Fatalf("result = %+v", res)
+	}
+	if finished != 1 {
+		t.Fatalf("Finish called %d times, want once", finished)
+	}
+	tasks := manager.List()
+	if len(tasks) != 1 || tasks[0].Status != TaskFailed || tasks[0].DelegateSessionID == "" {
+		t.Fatalf("failed task attribution = %+v", tasks)
+	}
+}
+
 func TestForwardingFiltersWhatWouldMislead(t *testing.T) {
 	rec := &recorder{}
-	f := &forwarding{parent: rec}
+	f := &forwarding{parent: rec, task: TaskRef{ID: "task-004", Name: "scan api"}}
 
 	f.TextDelta("streamed text")
 	f.ThinkingDelta("thoughts")
@@ -191,6 +410,26 @@ func TestForwardingFiltersWhatWouldMislead(t *testing.T) {
 	}
 	if len(rec.notices) != 1 {
 		t.Errorf("notices = %v, want the retry surfaced", rec.notices)
+	}
+	if len(rec.ids) != 1 || rec.ids[0] != "task-004/2" || !strings.Contains(rec.details[0], "task-004 scan api") {
+		t.Errorf("forwarded attribution ids=%v details=%v", rec.ids, rec.details)
+	}
+	if !strings.Contains(rec.notices[0], "task-004 scan api") {
+		t.Errorf("notice lost task attribution: %v", rec.notices)
+	}
+}
+
+func TestDelegateUsesAnExclusiveParallelBatchGroup(t *testing.T) {
+	tool, err := New(testConfig(t, "ok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.ParallelSafe() {
+		t.Fatal("delegate was marked generally parallel-safe despite opaque writes")
+	}
+	grouped, ok := tool.(tools.ParallelBatchTool)
+	if !ok || grouped.ParallelBatchKey() != "delegate" {
+		t.Fatalf("delegate parallel group = %T %#v", tool, grouped)
 	}
 }
 
@@ -256,17 +495,17 @@ func TestPlanResolvesTheAgentAndItsDefaultRung(t *testing.T) {
 	}
 
 	p := plan(t, tool, `{"task":"check the diff","agent":"reviewer"}`)
-	if !strings.HasPrefix(p.Request.Detail, "reviewer on t2 → ") {
+	if !strings.Contains(p.Request.Detail, "] reviewer on t2 → ") {
 		t.Errorf("Detail = %q, want the agent's default rung", p.Request.Detail)
 	}
 
 	p = plan(t, tool, `{"task":"check the diff","agent":"reviewer","tier":"t1"}`)
-	if !strings.HasPrefix(p.Request.Detail, "reviewer on t1 → ") {
+	if !strings.Contains(p.Request.Detail, "] reviewer on t1 → ") {
 		t.Errorf("Detail = %q, want the explicit tier to win", p.Request.Detail)
 	}
 
 	p = plan(t, tool, `{"task":"look around","agent":"scout"}`)
-	if !strings.HasPrefix(p.Request.Detail, "scout on t1 → ") {
+	if !strings.Contains(p.Request.Detail, "] scout on t1 → ") {
 		t.Errorf("Detail = %q, want a rungless agent on the bottom", p.Request.Detail)
 	}
 }
@@ -291,12 +530,15 @@ func TestRunNamesTheAgentInTheTrailer(t *testing.T) {
 
 type recorder struct {
 	starts, ends, notices []string
+	ids, details          []string
 }
 
 func (r *recorder) ThinkingDelta(string) {}
 func (r *recorder) TextDelta(string)     {}
-func (r *recorder) ToolStart(call provider.ToolUse, _ permission.Request) {
+func (r *recorder) ToolStart(call provider.ToolUse, req permission.Request) {
 	r.starts = append(r.starts, call.Name)
+	r.ids = append(r.ids, call.ID)
+	r.details = append(r.details, req.Detail)
 }
 func (r *recorder) ToolEnd(call provider.ToolUse, _ permission.Request, _ tools.Result, _ time.Duration) {
 	r.ends = append(r.ends, call.Name)

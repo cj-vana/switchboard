@@ -322,6 +322,39 @@ func TestToolResultsBecomeUserMessages(t *testing.T) {
 	}
 }
 
+func TestContinuityAndPromptRemainIsolatedTextBlocks(t *testing.T) {
+	body, err := New().buildRequest(Target("claude-haiku-4-5"), provider.Request{Messages: []provider.Message{{
+		Role: provider.RoleUser,
+		Content: []provider.Block{
+			provider.Text{Text: "[continuity capsule]\n\n"},
+			provider.Text{Text: "continue with the fix"},
+		},
+		ContinuityRef: "0123456789abcdef0123456789abcdef",
+	}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Messages []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Messages) != 1 || len(decoded.Messages[0].Content) != 2 ||
+		decoded.Messages[0].Content[0].Text != "[continuity capsule]\n\n" ||
+		decoded.Messages[0].Content[1].Text != "continue with the fix" {
+		t.Fatalf("Anthropic continuity blocks = %+v", decoded.Messages)
+	}
+	if strings.Contains(string(body), "continuity_ref") {
+		t.Fatal("session-only continuity metadata reached the Anthropic wire")
+	}
+}
+
 func TestSystemRoleInMessagesIsRefused(t *testing.T) {
 	_, err := New().buildRequest(Target("claude-haiku-4-5"), provider.Request{
 		Messages: []provider.Message{{Role: provider.RoleSystem, Content: []provider.Block{provider.Text{Text: "hi"}}}},

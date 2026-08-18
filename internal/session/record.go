@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,12 +10,13 @@ import (
 	"io"
 	"time"
 
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // The log is a header line followed by framed records:
 //
-//	switchboard-session 3\n
+//	switchboard-session 4\n
 //	<8-hex payload length> <8-hex crc32c> <compact json>\n
 //
 // Length and checksum together let replay tell a torn final write from a clean
@@ -24,7 +26,7 @@ import (
 // newline.
 const (
 	magic         = "switchboard-session"
-	SchemaVersion = 3
+	SchemaVersion = 4
 
 	frameHeaderLen = 18 // 8 hex + space + 8 hex + space
 )
@@ -52,8 +54,14 @@ const (
 	RecordBudgetTransfer RecordType = "budget_transfer"
 	RecordRaceBranch     RecordType = "race_branch"
 	RecordRuntimeBinding RecordType = "runtime_binding"
-	RecordPermission     RecordType = "permission"
-	RecordNote           RecordType = "note"
+	RecordContinuity     RecordType = "continuity"
+	// RecordMessageContinuity commits a successful todo-result message and the
+	// exact continuity state it produced in one checksummed WAL frame. Two
+	// separately synced records would leave a crash window where replay saw the
+	// successful tool result but restored the older task state.
+	RecordMessageContinuity RecordType = "message_continuity"
+	RecordPermission        RecordType = "permission"
+	RecordNote              RecordType = "note"
 
 	// RecordRoute carries §8.4's training signal: what a turn looked like, what
 	// was chosen, why, and how it ended. It is written from ordinary sessions
@@ -79,6 +87,85 @@ const (
 	// routing, because a learned router is gated on the eval that has not run.
 	RecordRace RecordType = "race"
 )
+
+type messageContinuity struct {
+	Message    provider.Message   `json:"message"`
+	Continuity continuity.Capsule `json:"continuity"`
+}
+
+type rawMessageContinuity struct {
+	Message    json.RawMessage `json:"message"`
+	Continuity json.RawMessage `json:"continuity"`
+}
+
+func decodeMessageContinuity(raw []byte) (provider.Message, continuity.Capsule, error) {
+	var payload rawMessageContinuity
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return provider.Message{}, continuity.Capsule{}, errors.New("message-continuity record is not an object")
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return provider.Message{}, continuity.Capsule{}, err
+		}
+		key, ok := keyToken.(string)
+		if !ok || seen[key] {
+			return provider.Message{}, continuity.Capsule{}, fmt.Errorf("message-continuity record has duplicate or invalid key %q", key)
+		}
+		seen[key] = true
+		switch key {
+		case "message":
+			err = decoder.Decode(&payload.Message)
+		case "continuity":
+			err = decoder.Decode(&payload.Continuity)
+		default:
+			return provider.Message{}, continuity.Capsule{}, fmt.Errorf("message-continuity record has unknown key %q", key)
+		}
+		if err != nil {
+			return provider.Message{}, continuity.Capsule{}, err
+		}
+	}
+	if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
+		return provider.Message{}, continuity.Capsule{}, errors.New("message-continuity record has an invalid object ending")
+	}
+	if token, err = decoder.Token(); !errors.Is(err, io.EOF) || token != nil {
+		return provider.Message{}, continuity.Capsule{}, errors.New("message-continuity record has trailing JSON")
+	}
+	if len(payload.Message) == 0 || len(payload.Continuity) == 0 {
+		return provider.Message{}, continuity.Capsule{}, errors.New("message-continuity record is incomplete")
+	}
+	var message provider.Message
+	if err := json.Unmarshal(payload.Message, &message); err != nil {
+		return provider.Message{}, continuity.Capsule{}, err
+	}
+	capsule, err := continuity.DecodeStored(payload.Continuity)
+	if err != nil {
+		return provider.Message{}, continuity.Capsule{}, err
+	}
+	return provider.CloneMessage(message), capsule, nil
+}
+
+// conversationMessage decodes either physical representation of one durable
+// conversation message. Read-only projections and forks use it so the atomic
+// todo record remains indistinguishable from an ordinary message in history.
+func conversationMessage(rec Record) (provider.Message, bool, error) {
+	switch rec.Type {
+	case RecordMessage:
+		var message provider.Message
+		if err := json.Unmarshal(rec.Payload, &message); err != nil {
+			return provider.Message{}, true, err
+		}
+		return provider.CloneMessage(message), true, nil
+	case RecordMessageContinuity:
+		message, _, err := decodeMessageContinuity(rec.Payload)
+		return message, true, err
+	default:
+		return provider.Message{}, false, nil
+	}
+}
 
 const (
 	RouteVerificationUnavailable = "unavailable"
@@ -242,6 +329,10 @@ type RuntimeBinding struct {
 	Target provider.RouteTargetID `json:"target"`
 	Pinned bool                   `json:"pinned"`
 }
+
+// Continuity aliases the package-owned value so session consumers can read
+// the durable state without a second, drifting record schema.
+type Continuity = continuity.Capsule
 
 // Usage records one model call. Attempts counts requests actually issued: a
 // retry after partial output is billed by most providers, so recording only the

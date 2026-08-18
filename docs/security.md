@@ -13,7 +13,7 @@ engine applies rules and the active mode to that effect.
 | `plan` | Allowed | Denied | Denied | Denied |
 | `default` | Allowed | Ask | Ask | Ask |
 | `acceptEdits` | Allowed | Allowed | Ask | Ask |
-| `auto` | Allowed | Allowed | Eligible non-Windows direct commands receive bounded model review; opaque interpreter, sensitive, and shared-host-loopback commands ask | Ask |
+| `auto` | Allowed | Allowed | Under active verified confinement, eligible direct commands receive bounded model review; host-direct, opaque interpreter, sensitive, and shared-loopback commands ask | Ask |
 | `yolo` | Allowed | Allowed | Allowed with full, unconfined host reach; sensitive commands ask | Ask |
 | `bypass` | Allowed | Allowed | Allowed only when verified confinement isolates host network and IPC; current production profiles ask | Ask |
 
@@ -23,22 +23,26 @@ approval even in bypass or yolo mode. A remembered approval lasts for the
 current session and is scoped to the permission identity, not to arbitrary new
 tools that happen to sanitize to the same display name.
 
-Auto mode sends eligible direct-command metadata to the `[slots] approver` when
-set; otherwise it tries reachable ladder tiers from the bottom. The packet
+Auto mode uses a model reviewer only while verified command confinement is
+active. With the sandbox off, or when an `auto` sandbox selection cannot apply a
+verified profile, every execute effect asks the user because a workspace build
+can run code. Eligible metadata goes to the `[slots] approver` when set;
+otherwise Switchboard tries reachable ladder tiers from the bottom. The packet
 contains the tool, path, argv, network request, effective reach, and retained
-host IPC or loopback authority. It
-excludes file contents, environment values, and external tool arguments. The
+host IPC or loopback authority. It excludes file contents, environment values,
+and external tool arguments. The
 reviewer can allow, deny, or escalate. Missing reviewers, errors, invalid
 decisions, and explicit escalation go to the user. A context with no listener
 denies an unresolved command. The review result is recorded with the
 permission event, and its model call is budgeted and tagged as approval work.
 Shell form and inline interpreter code such as `sh -c`, `python -c`, or
-`node -e` skip model review, as do sensitive commands and ordinary commands in
-a macOS Seatbelt sandbox. An explicit full-network request does not carry the
-shared-host-loopback posture and remains reviewable, with retained host IPC
-authority disclosed. Linux direct argv remains reviewable with its retained
-host IPC authority disclosed. Windows execution remains human-gated because
-descendant cleanup is not guaranteed.
+`node -e` skip model review, as do sensitive commands and commands with shared
+host loopback. An explicit full-network request under verified confinement can
+remain reviewable, with retained host IPC authority disclosed. Eligible Linux
+direct argv is reviewable only while verified bubblewrap confinement is active.
+Windows execution remains human-gated because no verified profile exists and
+descendant cleanup is not guaranteed. External tools always ask unless an
+explicit rule or remembered human answer covers them.
 
 Human approval views escape terminal controls. A very large command is visibly
 shortened while retaining its executable and early flags, its tail, and an
@@ -140,6 +144,11 @@ text read from applications is redacted before it enters the session. See
 [Computer use](computer.md).
 
 ## Configured processes
+
+Agent-requested exec commands, language-server and provider probe processes,
+and editor launches use the central scrubbed child environment. Explicit user
+`!` shell commands and custom commands intentionally retain the ambient
+environment: they are the user's own commands, not agent-requested execution.
 
 Legacy Switchboard MCP child processes inherit the ordinary environment after
 SSH-agent sockets and names associated with secrets, tokens, keys, passwords,

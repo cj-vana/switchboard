@@ -113,7 +113,12 @@ func liveServer(t *testing.T, binary string, args []string, files map[string]str
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{Argv: append([]string{path}, args...), Root: registry.Root()}
+	server := &Server{
+		Argv: append([]string{path}, args...), Root: registry.Root(),
+		// Pyright's live-tested numeric synchronization advertisement omits
+		// the open/close behavior the server requires for semantic answers.
+		OpenCloseSync: binary == "pyright-langserver",
+	}
 	t.Cleanup(server.Close)
 	return server, registry
 }

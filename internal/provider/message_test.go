@@ -33,6 +33,13 @@ func TestMessageRoundTrip(t *testing.T) {
 			Message{Role: RoleAssistant, Incomplete: true, Content: []Block{Text{Text: "partial"}}},
 		},
 		{
+			"continuity delivery metadata",
+			Message{
+				Role: RoleUser, Content: []Block{Text{Text: "continue"}},
+				ContinuityRef: "0123456789abcdef0123456789abcdef",
+			},
+		},
+		{
 			"binary blocks",
 			Message{Role: RoleUser, Content: []Block{
 				Image{MediaType: "image/png", Data: []byte{0x89, 0x50, 0x4e, 0x47}},
@@ -68,6 +75,57 @@ func TestUnknownBlockKindIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "hologram") {
 		t.Errorf("error should name the unknown kind, got: %v", err)
+	}
+}
+
+func TestAuthoredTextExcludesOnlyStampedContinuityBlock(t *testing.T) {
+	message := Message{
+		Role:          RoleUser,
+		ContinuityRef: strings.Repeat("a", 32),
+		Content: []Block{
+			Text{Text: "[continuity]\n\n"},
+			Text{Text: "user prompt"},
+			Image{MediaType: "image/png", Data: []byte("image")},
+			Text{Text: " and detail"},
+		},
+	}
+	if got := message.Text(); got != "[continuity]\n\nuser prompt and detail" {
+		t.Fatalf("wire text = %q", got)
+	}
+	if got := message.AuthoredText(); got != "user prompt and detail" {
+		t.Fatalf("authored text = %q", got)
+	}
+	message.ContinuityRef = ""
+	if got := message.AuthoredText(); got != message.Text() {
+		t.Fatalf("unstamped authored text = %q, wire = %q", got, message.Text())
+	}
+}
+
+func TestCloneMessageCanonicalizesPointersAndOwnsMutableBlocks(t *testing.T) {
+	input := json.RawMessage(`{"path":"main.go"}`)
+	image := []byte{1, 2, 3}
+	document := []byte{4, 5, 6}
+	message := Message{Role: RoleUser, Content: []Block{
+		&Text{Text: "prompt"},
+		&ToolUse{ID: "call", Name: "read", Input: input},
+		&Image{MediaType: "image/png", Data: image},
+		&Document{MediaType: "application/pdf", Data: document},
+	}}
+	cloned := CloneMessage(message)
+	for i, block := range cloned.Content {
+		if reflect.ValueOf(block).Kind() == reflect.Pointer {
+			t.Fatalf("block %d remained a pointer: %T", i, block)
+		}
+	}
+	input[0], image[0], document[0] = 'X', 9, 9
+	if got := string(cloned.Content[1].(ToolUse).Input); got != `{"path":"main.go"}` {
+		t.Fatalf("cloned tool input changed: %q", got)
+	}
+	if got := cloned.Content[2].(Image).Data[0]; got != 1 {
+		t.Fatalf("cloned image changed: %d", got)
+	}
+	if got := cloned.Content[3].(Document).Data[0]; got != 4 {
+		t.Fatalf("cloned document changed: %d", got)
 	}
 }
 

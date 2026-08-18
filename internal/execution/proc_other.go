@@ -17,6 +17,8 @@ func shellCommand(script string) (string, []string) {
 // runner cannot promise to clean up after a command it started (§19.3, §21.7).
 func setProcessGroup(*exec.Cmd) {}
 
+func processWaitDelay() time.Duration { return reapTimeout }
+
 func terminateGroup(cmd *exec.Cmd, _ time.Duration) {
 	if cmd.Process != nil {
 		cmd.Process.Kill()

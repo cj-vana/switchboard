@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/switchboard-code/switchboard/internal/provider"
@@ -33,7 +34,7 @@ func delegateBudgetSessions(t *testing.T) (*session.Session, *session.Session) {
 func TestDelegateReconcileAddsOnlyMissingActualCost(t *testing.T) {
 	primary, sub := delegateBudgetSessions(t)
 	var tracker delegateLedgerTracker
-	tracker.mark(primary, sub)
+	tracker.mark(sub)
 
 	if err := sub.AppendUsage(session.Usage{CostMicroUSD: 40_000}); err != nil {
 		t.Fatal(err)
@@ -42,7 +43,7 @@ func TestDelegateReconcileAddsOnlyMissingActualCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := primary.SettleBudgetAttempt(attempt, session.BudgetOutcomeSucceeded, 40_000); err != nil {
+	if err := tracker.settle(primary, sub, attempt, session.BudgetOutcomeSucceeded, 40_000); err != nil {
 		t.Fatal(err)
 	}
 	if err := tracker.reconcile(primary, sub); err != nil {
@@ -60,7 +61,7 @@ func TestDelegateReconcileAddsOnlyMissingActualCost(t *testing.T) {
 func TestDelegateReconcilePreservesPendingDebtAndActualCost(t *testing.T) {
 	primary, sub := delegateBudgetSessions(t)
 	var tracker delegateLedgerTracker
-	tracker.mark(primary, sub)
+	tracker.mark(sub)
 
 	if _, err := primary.BeginBudgetAttempt(100_000); err != nil {
 		t.Fatal(err)
@@ -74,5 +75,50 @@ func TestDelegateReconcilePreservesPendingDebtAndActualCost(t *testing.T) {
 	state := primary.State()
 	if state.ExternalCostMicroUSD != 25_000 || state.RetryReserveMicroUSD != 100_000 {
 		t.Fatalf("unsettled delegate accounting = %+v", state)
+	}
+}
+
+func TestConcurrentDelegateReconcileAttributesEachSubsession(t *testing.T) {
+	primary, first := delegateBudgetSessions(t)
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Create(t.TempDir(), provider.RouteTargetID("anthropic/first-party/second"), "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	var tracker delegateLedgerTracker
+	tracker.mark(first)
+	tracker.mark(second)
+	if err := first.AppendUsage(session.Usage{CostMicroUSD: 40_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AppendUsage(session.Usage{CostMicroUSD: 50_000}); err != nil {
+		t.Fatal(err)
+	}
+	// Neither ordinary settlement made it to the primary. Reconciling one
+	// task must not make the other's usage look paid.
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, sub := range []*session.Session{first, second} {
+		sub := sub
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- tracker.reconcile(primary, sub)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := primary.State().ExternalCostMicroUSD; got != 90_000 {
+		t.Fatalf("concurrent delegate reconciliation = %d, want 90000", got)
 	}
 }

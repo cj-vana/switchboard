@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/switchboard-code/switchboard/internal/agent"
@@ -45,34 +46,55 @@ func (d *delegateForward) get() agent.Observer {
 }
 
 var subagentForward = &delegateForward{}
+var subagentTasks = delegate.NewTaskManager(delegate.DefaultMaxParallel)
 
-// delegateLedgerTracker remembers how much external cost the primary held
-// when each sub-session started. Normal settlements charge each successful
-// call immediately; reconcile adds only the gap left when a settlement append
-// failed after Usage became durable in the sub-session.
+// delegateLedgerTracker records successful primary-ledger settlements per
+// sub-session. A shared primary-cost baseline cannot attribute overlapping
+// delegates: one task's charge would look like another task's settlement.
+// Reconcile adds only the task-local gap left when a settlement append failed
+// after Usage became durable in the sub-session.
 type delegateLedgerTracker struct {
-	mu       sync.Mutex
-	baseline map[string]int64
+	mu      sync.Mutex
+	settled map[string]int64
 }
 
-func (d *delegateLedgerTracker) mark(primary, sub *session.Session) {
+func (d *delegateLedgerTracker) mark(sub *session.Session) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.baseline == nil {
-		d.baseline = make(map[string]int64)
+	if d.settled == nil {
+		d.settled = make(map[string]int64)
 	}
-	d.baseline[sub.ID()] = primary.State().ExternalCostMicroUSD
+	d.settled[sub.ID()] = 0
+}
+
+func (d *delegateLedgerTracker) settle(primary, sub *session.Session, id, outcome string, charge catalog.Money) error {
+	if err := primary.SettleBudgetAttempt(id, outcome, int64(charge)); err != nil {
+		return err
+	}
+	if charge <= 0 {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	current, ok := d.settled[sub.ID()]
+	if !ok {
+		return fmt.Errorf("delegate %s has no budget ledger", sub.ID())
+	}
+	if int64(charge) > math.MaxInt64-current {
+		return fmt.Errorf("delegate %s budget accounting overflow", sub.ID())
+	}
+	d.settled[sub.ID()] = current + int64(charge)
+	return nil
 }
 
 func (d *delegateLedgerTracker) reconcile(primary, sub *session.Session) error {
 	d.mu.Lock()
-	baseline, ok := d.baseline[sub.ID()]
-	delete(d.baseline, sub.ID())
+	recorded, ok := d.settled[sub.ID()]
+	delete(d.settled, sub.ID())
 	d.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("delegate %s has no budget baseline", sub.ID())
+		return fmt.Errorf("delegate %s has no budget ledger", sub.ID())
 	}
-	recorded := primary.State().ExternalCostMicroUSD - baseline
 	missing := sub.State().CostMicroUSD - recorded
 	if missing <= 0 {
 		return nil
@@ -108,6 +130,10 @@ func registerDelegate(
 		return nil, nil, fmt.Errorf("delegate needs its session store: %w", err)
 	}
 	var ledger delegateLedgerTracker
+	var hookExecutionGate *agent.ExecutionGate
+	if !hookSet.Empty() {
+		hookExecutionGate = agent.NewExecutionGate()
+	}
 
 	// A definition naming a rung this ladder does not have still loads — it
 	// was probably written for a taller ladder — but runs on the default
@@ -128,6 +154,10 @@ func registerDelegate(
 	tool, err := delegate.New(delegate.Config{
 		Tiers:  cfg.Tiers,
 		Agents: agents,
+		Tasks:  subagentTasks,
+		ParentSession: func() string {
+			return primary.Session.ID()
+		},
 		Probe: func(ctx context.Context, tierID string) (config.Tier, provider.Provider, string, error) {
 			tier, ok := cfg.Tier(tierID)
 			if !ok {
@@ -140,10 +170,10 @@ func registerDelegate(
 			if err != nil {
 				return nil, err
 			}
-			ledger.mark(primary.Session, sess)
+			ledger.mark(sess)
 			return sess, nil
 		},
-		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *delegate.Agent) (*agent.Loop, error) {
+		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *delegate.Agent, task delegate.TaskRef) (*agent.Loop, error) {
 			subRegistry, err := tools.NewRegistryWithExecution(workspace, primary.Tools.Execution())
 			if err != nil {
 				return nil, err
@@ -189,18 +219,23 @@ func registerDelegate(
 				system = append(system, provider.Text{Text: named.Prompt})
 			}
 			sub := &agent.Loop{
-				Provider:      client,
-				Target:        tier.Target,
-				Tools:         subRegistry,
-				Perms:         primary.Perms,
-				Asker:         primary.Asker,
-				Session:       sess,
-				Catalog:       cat,
-				Cache:         cacheFor(tier.Target, cat),
-				System:        system,
-				Observer:      obs,
-				MaxToolRounds: delegate.MaxRounds,
-				Hooks:         hookSet,
+				Provider:          client,
+				Target:            tier.Target,
+				Tools:             subRegistry,
+				Perms:             primary.Perms,
+				Asker:             subagentTasks.AttributedAsker(task, primary.Asker),
+				Session:           sess,
+				Catalog:           cat,
+				Cache:             cacheFor(tier.Target, cat),
+				System:            system,
+				Observer:          obs,
+				MaxToolRounds:     delegate.MaxRounds,
+				Hooks:             hookSet,
+				ToolExecutionGate: hookExecutionGate,
+			}
+			if err := sub.BindSession(sess); err != nil {
+				_ = sess.Close()
+				return nil, fmt.Errorf("restore delegated session context: %w", err)
 			}
 			// The errand runs under the same ceiling as the session that
 			// spawned it, counting what both logs have priced so far. A
@@ -214,7 +249,7 @@ func registerDelegate(
 				func() catalog.Money { return catalog.Money(primary.Session.State().RetryReserveMicroUSD) },
 				func(amount catalog.Money) (string, error) { return primary.Session.BeginBudgetAttempt(int64(amount)) },
 				func(id, outcome string, charge catalog.Money) error {
-					return primary.Session.SettleBudgetAttempt(id, outcome, int64(charge))
+					return ledger.settle(primary.Session, sess, id, outcome, charge)
 				}, true))
 			return sub, nil
 		},

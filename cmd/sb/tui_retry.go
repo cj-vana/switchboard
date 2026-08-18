@@ -32,9 +32,9 @@ import (
 
 type retryStartMsg struct {
 	generation uint64
-	prompt     string
+	opening    provider.Message
+	prompt     string // display-only projection; replay always uses opening
 	tier       string // empty reruns on the sitting rung
-	images     []provider.Image
 }
 
 func cmdRetry(m *tuiModel, args string) tea.Cmd {
@@ -53,7 +53,8 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 	if last < 0 {
 		return noticeCmd("", "nothing to retry; the session has no completed turn")
 	}
-	prompt, images := openingParts(state.Messages[last])
+	opening := provider.CloneMessage(state.Messages[last])
+	prompt := opening.AuthoredText()
 	if prompt == "" {
 		return noticeCmd("error", "the last turn's opening carries no text to replay")
 	}
@@ -69,10 +70,39 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 	// stay, and the notice says which world the rerun starts in.
 	if rec := m.app.undo; rec != nil {
 		if turns := rec.Turns(); len(turns) > 0 && turns[len(turns)-1].Label == checkpointLabel(prompt) {
-			restored, removed, _, _, label, err := rec.Undo()
-			if err == nil {
-				m.app.loop.Tools.ForgetVersions(append(append([]string(nil), restored...), removed...))
+			if turns[len(turns)-1].Partial {
+				var skipped []string
+				if details := rec.Details(); len(details) > 0 && details[len(details)-1].Label == turns[len(turns)-1].Label {
+					skipped = details[len(details)-1].Skipped
+				}
+				text := "retry stopped before changing files or running another model: the turn's checkpoint is partial"
+				if len(skipped) > 0 {
+					text += "; not checkpointed: " + boundedRetryPaths(skipped)
+				}
+				text += "; use /undo to review and explicitly consume that partial restore"
+				_ = m.app.loop.Session.AppendNote("warn", text)
+				return func() tea.Msg {
+					return noticeMsg{level: "error", text: text, operation: generation, sourceID: sourceID}
+				}
+			}
+			restored, removed, skipped, failed, label, undoErr := rec.Undo()
+			changed := append(append([]string(nil), restored...), removed...)
+			if len(changed) > 0 {
+				m.app.loop.Tools.ForgetVersions(changed)
+				invalidateRestoredWorkspace(m)
 				m.app.loop.Session.AppendNote("info", fmt.Sprintf("retry: took back the files of %q (%d restored, %d removed)", label, len(restored), len(removed)))
+			}
+			if undoErr != nil || len(skipped) > 0 || len(failed) > 0 {
+				if len(changed) > 0 {
+					m.addInfo(fmt.Sprintf("  took back part of the turn's file changes (%d restored, %d removed); what commands did stays done", len(restored), len(removed)))
+				}
+				text := retryUndoRefusal(len(restored), len(removed), skipped, failed, undoErr)
+				_ = m.app.loop.Session.AppendNote("warn", text)
+				return func() tea.Msg {
+					return noticeMsg{level: "error", text: text, operation: generation, sourceID: sourceID}
+				}
+			}
+			if len(changed) > 0 {
 				m.addInfo(fmt.Sprintf("  took back the turn's file changes (%d restored, %d removed); what commands did stays done", len(restored), len(removed)))
 			}
 		} else {
@@ -90,7 +120,7 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 	id := sess.ID()
 	app := m.app
 	start := func() tea.Msg {
-		return retryStartMsg{prompt: prompt, tier: dest.ID, images: images}
+		return retryStartMsg{opening: provider.CloneMessage(opening), prompt: prompt, tier: dest.ID}
 	}
 	return func() tea.Msg {
 		release, err := pauseAdvisorLedger(ctx, app)
@@ -127,21 +157,30 @@ func (m *tuiModel) retryStart(msg retryStartMsg) tea.Cmd {
 	if msg.generation != m.turnGeneration || !m.turnPlanning || m.turnCtx == nil {
 		return nil
 	}
-	m.addUser(msg.prompt)
+	refuse := func(text string) tea.Cmd {
+		m.finishPlanning()
+		m.addNotice("error", text)
+		return m.nextQueuedTurn()
+	}
+	opening, err := stampRecordedTurnOpening(m.app.loop.Session, msg.opening)
+	if err != nil {
+		return refuse("retry refused: " + err.Error())
+	}
+	prompt := opening.AuthoredText()
+	if prompt == "" {
+		return refuse("retry refused: the recorded opening carries no authored text")
+	}
+	m.addUser(prompt)
 	if msg.tier != "" && msg.tier != m.app.tier.ID {
 		tier, ok := m.app.config.Tier(msg.tier)
 		if !ok {
-			return noticeCmd("error", "no tier "+msg.tier+" is configured; try /tiers")
+			return refuse("no tier " + msg.tier + " is configured; try /tiers")
 		}
 		app := m.app
 		ctx, generation := m.turnCtx, msg.generation
 		sticky := app.sticky
 		return func() tea.Msg {
-			result := overrideProbeMsg{generation: generation, prompt: msg.prompt, images: msg.images}
-			opening := provider.UserText(msg.prompt)
-			for _, image := range msg.images {
-				opening.Content = append(opening.Content, image)
-			}
+			result := overrideProbeMsg{generation: generation, opening: opening, prompt: prompt}
 			plan := prospectiveTurnPlan(app.loop, sticky, opening, app.workspace)
 			result.plan = plan
 			rank := app.rankOf(tier)
@@ -167,8 +206,8 @@ func (m *tuiModel) retryStart(msg retryStartMsg) tea.Cmd {
 		}
 	}
 	m.turnPlanning = false
-	m.beginTurn(msg.prompt)
-	m.launchModelTurn(msg.prompt, msg.images)
+	m.beginTurn(prompt)
+	m.launchModelTurn(opening)
 	return m.spin.Tick
 }
 
@@ -202,26 +241,35 @@ func lastTurnOpening(messages []provider.Message) int {
 // marker — is misread as an injection. That corner falls back to an earlier
 // opening, and the source session /retry never writes is the recovery.
 func injectionShaped(msg provider.Message) bool {
-	text := msg.Text()
+	text := msg.AuthoredText()
 	return strings.HasPrefix(text, "[advisor]") || strings.HasPrefix(text, "[watch]")
 }
 
-// openingParts pulls the replayable content out of a recorded opening: the
-// expanded prompt as it was sent, and any images that rode with it.
-func openingParts(msg provider.Message) (string, []provider.Image) {
-	var prompt string
-	var images []provider.Image
-	for _, b := range msg.Content {
-		switch blk := b.(type) {
-		case provider.Text:
-			if prompt == "" {
-				prompt = blk.Text
-			}
-		case provider.Image:
-			images = append(images, blk)
-		}
+func retryUndoRefusal(restored, removed int, skipped, failed []string, undoErr error) string {
+	parts := []string{fmt.Sprintf("retry stopped before another model ran: file restore was incomplete (%d restored, %d removed)", restored, removed)}
+	if undoErr != nil {
+		parts = append(parts, "undo error: "+undoErr.Error())
 	}
-	return prompt, images
+	if len(skipped) > 0 {
+		parts = append(parts, "not checkpointed: "+boundedRetryPaths(skipped))
+	}
+	if len(failed) > 0 {
+		parts = append(parts, "not restored or not fully verified: "+boundedRetryPaths(failed))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func boundedRetryPaths(paths []string) string {
+	const limit = 4
+	shown := paths
+	if len(shown) > limit {
+		shown = shown[:limit]
+	}
+	text := strings.Join(shown, ", ")
+	if hidden := len(paths) - len(shown); hidden > 0 {
+		text += fmt.Sprintf(" (+%d more)", hidden)
+	}
+	return text
 }
 
 // checkpointLabel mirrors what the recorder files a turn under, so the

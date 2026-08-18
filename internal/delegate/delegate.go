@@ -63,7 +63,7 @@ type Config struct {
 	// delegate, the shared permission engine and asker, the parent's hooks.
 	// A non-nil named agent carries the definition's prompt and tool grant
 	// for the assembly to apply.
-	NewLoop func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent) (*agent.Loop, error)
+	NewLoop func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent, task TaskRef) (*agent.Loop, error)
 
 	// Finish runs after the subagent loop stops and before its result returns to
 	// the primary. Surfaces use it to reconcile the sub-session's priced calls
@@ -79,6 +79,15 @@ type Config struct {
 	// same schema, same description — so a session with no definitions
 	// renders byte-identical requests.
 	Agents []Agent
+
+	// Tasks owns bounded parallelism, task-local cancellation, status, and
+	// approval serialization. Nil gets a private manager with the default
+	// bound; product assembly supplies the manager its /tasks surface reads.
+	Tasks *TaskManager
+
+	// ParentSession returns the primary session owning a task. It is read at
+	// Plan time, when provider call order also allocates task identity.
+	ParentSession func() string
 }
 
 func (c Config) defaultTier() string {
@@ -97,10 +106,17 @@ func New(c Config) (tools.Tool, error) {
 	if c.Probe == nil || c.NewSession == nil || c.NewLoop == nil {
 		return nil, fmt.Errorf("delegate is missing assembly wiring")
 	}
-	return &delegateTool{c: c}, nil
+	manager := c.Tasks
+	if manager == nil {
+		manager = NewTaskManager(DefaultMaxParallel)
+	}
+	return &delegateTool{c: c, tasks: manager}, nil
 }
 
-type delegateTool struct{ c Config }
+type delegateTool struct {
+	c     Config
+	tasks *TaskManager
+}
 
 func (t *delegateTool) Name() string { return "delegate" }
 
@@ -110,12 +126,12 @@ func (t *delegateTool) Description() string {
 		ids = append(ids, tier.ID)
 	}
 	desc := fmt.Sprintf("Hand a self-contained task to a subagent with a fresh context and return "+
-		"its final answer. The subagent has the core tools but cannot delegate further, "+
-		"and it starts with no knowledge of this conversation, so the task must carry "+
+		"its final answer. Independent delegate calls in one response can overlap (at most %d active) while results return in call order. "+
+		"Each subagent has the core tools but cannot delegate further and starts with no knowledge of this conversation, so the task must carry "+
 		"everything it needs: file paths, constraints, what to return. tier picks the "+
 		"ladder rung it runs on (%s); the default %s is the cheap rung, right for "+
 		"searches, surveys, and mechanical work. Use a higher tier only when the "+
-		"subtask itself is hard.", strings.Join(ids, ", "), t.c.defaultTier())
+		"subtask itself is hard.", t.tasks.MaxParallel(), strings.Join(ids, ", "), t.c.defaultTier())
 	if len(t.c.Agents) == 0 {
 		return desc
 	}
@@ -135,10 +151,12 @@ func (t *delegateTool) Description() string {
 	return b.String()
 }
 
-// ParallelSafe is false: subagents share the permission engine and the
-// observer, and two of them interleaving prompts and rails would be
-// unattributable noise.
+// ParallelSafe remains false because a delegated loop may write. The agent
+// scheduler uses ParallelBatchKey to overlap only delegate-with-delegate
+// batches; mixed read/delegate batches retain provider call order.
 func (t *delegateTool) ParallelSafe() bool { return false }
+
+func (t *delegateTool) ParallelBatchKey() string { return "delegate" }
 
 func (t *delegateTool) Schema() json.RawMessage {
 	if len(t.c.Agents) == 0 {
@@ -212,13 +230,18 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 	if !found {
 		return tools.Plan{}, fmt.Errorf("delegate: no tier %q in the ladder", in.Tier)
 	}
+	parentSessionID := ""
+	if t.c.ParentSession != nil {
+		parentSessionID = t.c.ParentSession()
+	}
+	task := t.tasks.Reserve("", in.Task, in.Tier, parentSessionID)
 
 	// Spawning is free and touches nothing; every call the subagent then
 	// makes goes through the shared permission engine on its own merits, so
 	// the spawn itself carries the read effect.
 	summary := in.Task
-	if len(summary) > 80 {
-		summary = summary[:80] + "…"
+	if runes := []rune(summary); len(runes) > 80 {
+		summary = string(runes[:80]) + "…"
 	}
 	who := in.Tier
 	if named != nil {
@@ -228,32 +251,54 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 		Request: permission.Request{
 			Tool:   t.Name(),
 			Effect: permission.EffectRead,
-			Detail: fmt.Sprintf("%s → %s", who, summary),
+			Detail: fmt.Sprintf("[%s] %s → %s", task.Label(), who, summary),
 		},
 		Run: func(ctx context.Context) (tools.Result, error) {
-			return t.run(ctx, in, named)
+			return t.tasks.Execute(ctx, task, func(taskCtx context.Context, handle *TaskHandle) (tools.Result, error) {
+				return t.run(taskCtx, in, named, task, handle)
+			})
 		},
 	}, nil
 }
 
-func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) (tools.Result, error) {
+func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent, task TaskRef, handle *TaskHandle) (result tools.Result, retErr error) {
 	tier, client, note, err := t.c.Probe(ctx, in.Tier)
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("tier %s cannot be served: %v", in.Tier, err), IsError: true}, nil
 	}
+	handle.RecordTier(tier.ID)
 
 	sess, err := t.c.NewSession(tier.Target.ID())
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("could not record a delegate session: %v", err), IsError: true}, nil
 	}
 	defer sess.Close()
+	handle.AttachSession(sess.ID())
+	// NewSession also opens the task's budget ledger. Always reconcile and
+	// close that entry, including assembly failures and cancellation before the
+	// first provider call, or a failed errand would leak accounting state.
+	defer func() {
+		state := sess.State()
+		handle.RecordUsage(state.Calls, state.CostMicroUSD)
+		if t.c.Finish != nil {
+			if err := t.c.Finish(sess); err != nil {
+				result = tools.Result{Content: fmt.Sprintf("the subagent's budget accounting could not be recorded: %v", err), IsError: true}
+				retErr = nil
+			}
+		}
+	}()
 
-	var obs agent.Observer = agent.NopObserver{}
+	var parent agent.Observer = agent.NopObserver{}
 	if t.c.Forward != nil {
 		if fwd := t.c.Forward(); fwd != nil {
-			obs = &forwarding{parent: fwd}
+			parent = fwd
 		}
 	}
+	// Every delegate keeps this observer, even when no surface forwards its
+	// rails. TurnUsage is the durable per-call seam that keeps /tasks live;
+	// the final snapshot below remains the backstop for failures before that
+	// callback or during budget settlement.
+	obs := &forwarding{parent: parent, task: task, handle: handle}
 	// The substitution is visible before the errand's content goes out, and
 	// the errand's own log records it (§5.4).
 	if note != "" {
@@ -263,7 +308,7 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) 
 		}
 	}
 
-	loop, err := t.c.NewLoop(tier, client, sess, obs, named)
+	loop, err := t.c.NewLoop(tier, client, sess, obs, named, task)
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("could not assemble the subagent: %v", err), IsError: true}, nil
 	}
@@ -272,11 +317,6 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) 
 	turnErr := loop.Turn(ctx, in.Task)
 	state := sess.State()
 	answer := finalText(state)
-	if t.c.Finish != nil {
-		if err := t.c.Finish(sess); err != nil {
-			return tools.Result{Content: fmt.Sprintf("the subagent's budget accounting could not be recorded: %v", err), IsError: true}, nil
-		}
-	}
 
 	who := "on " + tier.ID
 	if named != nil {
@@ -284,6 +324,7 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) 
 	}
 	trailer := fmt.Sprintf("[delegate %s: %d model calls, %s]",
 		who, state.Calls, time.Since(started).Round(time.Second))
+	trailer = strings.TrimSuffix(trailer, "]") + "; task " + task.Label() + "]"
 
 	switch {
 	case ctx.Err() != nil:
@@ -292,6 +333,7 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) 
 		return tools.Result{Content: fmt.Sprintf("the subagent failed: %v\n%s", turnErr, trailer), IsError: true}, nil
 	case turnErr != nil:
 		// A partial answer with a named failure beats discarding the work.
+		handle.RecordFailure("subagent stopped early: " + turnErr.Error())
 		return tools.Result{Content: fmt.Sprintf("%s\n\n[the subagent stopped early: %v]\n%s", answer, turnErr, trailer)}, nil
 	case answer == "":
 		return tools.Result{Content: "the subagent finished without a final answer\n" + trailer, IsError: true}, nil
@@ -321,7 +363,11 @@ func finalText(state session.State) string {
 // todo list would collide with the primary's in any surface that renders
 // registry state.
 type forwarding struct {
-	parent agent.Observer
+	parent       agent.Observer
+	task         TaskRef
+	handle       *TaskHandle
+	calls        int
+	costMicroUSD int64
 }
 
 func (f *forwarding) ThinkingDelta(string) {}
@@ -331,6 +377,8 @@ func (f *forwarding) ToolStart(call provider.ToolUse, req permission.Request) {
 	if call.Name == "todo" {
 		return
 	}
+	call.ID = f.task.ID + "/" + call.ID
+	req = attributeRequest(f.task, req)
 	f.parent.ToolStart(call, req)
 }
 
@@ -338,10 +386,25 @@ func (f *forwarding) ToolEnd(call provider.ToolUse, req permission.Request, res 
 	if call.Name == "todo" {
 		return
 	}
+	call.ID = f.task.ID + "/" + call.ID
+	req = attributeRequest(f.task, req)
 	f.parent.ToolEnd(call, req, res, took)
 }
 
 func (f *forwarding) ToolBatchEnd(ctx context.Context) { f.parent.ToolBatchEnd(ctx) }
 
-func (f *forwarding) Notice(level, text string) { f.parent.Notice(level, text) }
-func (f *forwarding) TurnUsage(session.Usage)   {}
+func (f *forwarding) Notice(level, text string) {
+	f.parent.Notice(level, "["+f.task.Label()+"] "+text)
+}
+func (f *forwarding) TurnUsage(usage session.Usage) {
+	if f.handle == nil {
+		return
+	}
+	// The loop emits TurnUsage only after this provider receipt is durable and
+	// its budget attempt has settled. Callbacks are ordered on the delegated
+	// loop's goroutine, so these totals mirror the fresh sub-session without
+	// repeatedly cloning its growing conversation state.
+	f.calls++
+	f.costMicroUSD += usage.CostMicroUSD
+	f.handle.RecordUsage(f.calls, f.costMicroUSD)
+}

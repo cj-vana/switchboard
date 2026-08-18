@@ -245,10 +245,7 @@ func (m *tuiModel) onRaceProbe(msg raceProbeMsg) tea.Cmd {
 // advisor barrier may wait for an inflight provider call, so every setup step
 // runs as a cancellable command rather than blocking Bubble Tea's Update.
 func (m *tuiModel) startRaceArms(msg raceProbeMsg, prompt string, images []provider.Image) tea.Cmd {
-	opening := provider.UserText(prompt)
-	for _, img := range images {
-		opening.Content = append(opening.Content, img)
-	}
+	unstamped := turnOpening(prompt, images)
 	if !m.operationMatches(msg.operation, msg.sourceID) {
 		return nil
 	}
@@ -260,13 +257,19 @@ func (m *tuiModel) startRaceArms(msg raceProbeMsg, prompt string, images []provi
 	m.operationName = "race setup"
 	app := m.app
 	return func() tea.Msg {
-		result := raceSetupMsg{operation: generation, sourceID: sourceID, probe: msg, prompt: prompt, opening: opening}
+		result := raceSetupMsg{operation: generation, sourceID: sourceID, probe: msg, prompt: prompt}
 		releaseAdvisor, err := pauseAdvisorLedger(ctx, app)
 		if err != nil {
 			result.err = fmt.Errorf("race could not stabilize the session ledger: %w", err)
 			return result
 		}
 		result.release = releaseAdvisor
+		opening, err := stampTurnOpening(app.loop.Session, unstamped)
+		if err != nil {
+			result.err = err
+			return result
+		}
+		result.opening = opening
 		result.before = app.loop.Session.State()
 		if reason, blocked := racePreflight(app.budget, app.catalog, result.before,
 			app.loop.System, app.loop.Tools.Definitions(), opening, msg.a, msg.b); blocked {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
@@ -26,10 +27,10 @@ type TodoItem struct {
 	Status TodoStatus `json:"status"`
 }
 
-// todoState is session-scoped and deliberately not persisted. On resume the
-// context that produced the plan is gone, so a replayed list would assert
-// intent the new context never formed; the model rebuilds it the same way it
-// re-reads files (the fileVersions rule, for plans).
+// todoState is the live, session-scoped mirror used by tools and the UI. The
+// agent persists a bounded advisory copy only after the matching tool-result
+// batch is durable, and explicitly hydrates or clears this mirror when it
+// binds another session.
 type todoState struct {
 	mu    sync.Mutex
 	items []TodoItem
@@ -38,7 +39,7 @@ type todoState struct {
 func (s *todoState) set(items []TodoItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.items = items
+	s.items = append([]TodoItem(nil), items...)
 }
 
 // Todos returns a snapshot of the current task list. It is safe to call from
@@ -48,6 +49,19 @@ func (r *Registry) Todos() []TodoItem {
 	r.todos.mu.Lock()
 	defer r.todos.mu.Unlock()
 	return append([]TodoItem(nil), r.todos.items...)
+}
+
+// RestoreTodos hydrates the registry from a validated durable continuity
+// capsule. Passing nil explicitly clears the old session's in-memory list,
+// which is as important as restoring a present one during an in-process
+// session swap.
+func (r *Registry) RestoreTodos(items []TodoItem) error {
+	prepared, err := prepareTodoItems(items)
+	if err != nil {
+		return err
+	}
+	r.todos.set(prepared)
+	return nil
 }
 
 const maxTodoItems = 50
@@ -98,25 +112,11 @@ func (t *todoTool) Plan(input json.RawMessage) (Plan, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return Plan{}, fmt.Errorf("todo: %w", err)
 	}
-	if len(in.Items) > maxTodoItems {
-		return Plan{}, fmt.Errorf("todo: %d items; a list this long is a plan document, not a task list. Keep it under %d", len(in.Items), maxTodoItems)
+	prepared, err := prepareTodoItems(in.Items)
+	if err != nil {
+		return Plan{}, err
 	}
-	active := 0
-	for i, item := range in.Items {
-		if strings.TrimSpace(item.Text) == "" {
-			return Plan{}, fmt.Errorf("todo: item %d has no text", i+1)
-		}
-		switch item.Status {
-		case TodoPending, TodoDone:
-		case TodoActive:
-			active++
-		default:
-			return Plan{}, fmt.Errorf("todo: item %d has status %q; use pending, active, or done", i+1, item.Status)
-		}
-	}
-	if active > 1 {
-		return Plan{}, fmt.Errorf("todo: %d items are active; work on one thing at a time", active)
-	}
+	in.Items = prepared
 
 	// The list is session state, not an effect on the world, so it carries the
 	// read effect: allowed in every mode, plan mode included, because planning
@@ -128,6 +128,39 @@ func (t *todoTool) Plan(input json.RawMessage) (Plan, error) {
 			return Result{Content: renderTodos(in.Items)}, nil
 		},
 	}, nil
+}
+
+func prepareTodoItems(items []TodoItem) ([]TodoItem, error) {
+	if len(items) > maxTodoItems {
+		return nil, fmt.Errorf("todo: %d items; a list this long is a plan document, not a task list. Keep it under %d", len(items), maxTodoItems)
+	}
+	active := 0
+	tasks := make([]continuity.Task, len(items))
+	for i, item := range items {
+		if strings.TrimSpace(item.Text) == "" {
+			return nil, fmt.Errorf("todo: item %d has no text", i+1)
+		}
+		switch item.Status {
+		case TodoPending, TodoDone:
+		case TodoActive:
+			active++
+		default:
+			return nil, fmt.Errorf("todo: item %d has status %q; use pending, active, or done", i+1, item.Status)
+		}
+		tasks[i] = continuity.Task{Text: item.Text, Status: continuity.TaskStatus(item.Status)}
+	}
+	if active > 1 {
+		return nil, fmt.Errorf("todo: %d items are active; work on one thing at a time", active)
+	}
+	prepared, err := continuity.PrepareTasks(tasks)
+	if err != nil {
+		return nil, fmt.Errorf("todo: %w", err)
+	}
+	out := make([]TodoItem, len(prepared))
+	for i, item := range prepared {
+		out[i] = TodoItem{Text: item.Text, Status: TodoStatus(item.Status)}
+	}
+	return out, nil
 }
 
 // renderTodos is the model-facing rendering. Plain markers, one line per

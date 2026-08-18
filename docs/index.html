@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Switchboard: Terminal Coding Agent with a Model Ladder</title>
-<meta name="description" content="A terminal coding agent that routes each turn across your model ladder, moves upward on evidence, and keeps the receipts on cost and code.">
+<title>Switchboard: Model-Ladder Terminal Coding Workbench</title>
+<meta name="description" content="A terminal coding workbench that routes each turn across your model ladder, searches and reviews the workspace, and keeps the receipts on cost and code.">
 <link rel="canonical" href="https://switchboard-code.dev/">
 <meta name="robots" content="index, follow">
 <meta name="theme-color" content="#101114">
@@ -14,16 +14,16 @@
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Switchboard">
-<meta property="og:title" content="Switchboard: a terminal coding agent where the model is a slot">
-<meta property="og:description" content="Route each turn to the lowest suitable feasible rung, move upward on evidence, and keep the receipts on cost and code.">
+<meta property="og:title" content="Switchboard: a terminal coding workbench where the model is a slot">
+<meta property="og:description" content="Route each turn across your model ladder, search and review the workspace, and keep the receipts on cost and code.">
 <meta property="og:url" content="https://switchboard-code.dev/">
 <meta property="og:image" content="https://switchboard-code.dev/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Switchboard model ladder and patch-panel illustration">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Switchboard: a terminal coding agent where the model is a slot">
-<meta name="twitter:description" content="Route each turn to the lowest suitable feasible rung, move upward on evidence, and keep the receipts on cost and code.">
+<meta name="twitter:title" content="Switchboard: a terminal coding workbench where the model is a slot">
+<meta name="twitter:description" content="Route each turn across your model ladder, search and review the workspace, and keep the receipts on cost and code.">
 <meta name="twitter:image" content="https://switchboard-code.dev/assets/og.png">
 <meta name="twitter:image:alt" content="Switchboard model ladder and patch-panel illustration">
 
@@ -32,10 +32,10 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "Switchboard",
-  "softwareVersion": "1.1.0",
+  "softwareVersion": "1.2.0",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux",
-  "description": "A terminal coding agent that routes each turn across a model ladder, moves upward on evidence, and records the cost.",
+  "description": "A terminal coding workbench that routes each turn across a model ladder, searches and reviews the workspace, and records the cost.",
   "url": "https://switchboard-code.dev/",
   "codeRepository": "https://github.com/switchboard-code/switchboard",
   "license": "https://opensource.org/license/mit",
@@ -168,15 +168,16 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 2rem;
+    gap: 1.25rem;
     border-top: 2px solid var(--paper);
     border-bottom: 1px solid var(--hero-rule);
     padding: 0.55rem 0;
     color: var(--hero-dim);
   }
-  .hero-fields { display: flex; gap: 2.5rem; flex-wrap: wrap; }
+  .hero-fields { display: flex; flex: 1 1 auto; min-width: 0; justify-content: flex-end; gap: 0.45rem 1.5rem; flex-wrap: wrap; }
+  .hero-fields > span { white-space: nowrap; }
   .hero-fields .v { color: var(--paper); }
-  .hero-brand { display: flex; align-items: center; gap: 0.6rem; }
+  .hero-brand { display: flex; flex: 0 0 auto; align-items: center; gap: 0.6rem; white-space: nowrap; }
   .hero-brand img { display: block; }
   .hero a { color: var(--paper); }
   .hero a:hover { color: var(--t4d); }
@@ -388,7 +389,7 @@
   .cmd-index { border-top: 1px solid var(--ink); }
   .cmd-row {
     display: grid;
-    grid-template-columns: 13ch minmax(0, 1fr);
+    grid-template-columns: 25ch minmax(0, 1fr);
     gap: 2rem;
     padding: 0.9rem 0;
     border-bottom: 1px solid var(--rule);
@@ -473,9 +474,9 @@
 <header class="hero">
   <div class="sheet">
     <div class="hero-top mono">
-      <span class="hero-brand"><img src="assets/logo-dark.svg" alt="" width="14" height="14">Terminal coding agent</span>
+      <span class="hero-brand"><img src="assets/logo-dark.svg" alt="" width="14" height="14">Terminal coding workbench</span>
       <div class="hero-fields">
-        <span>Version&nbsp;<span class="v">1.1.0</span></span>
+        <span>Version&nbsp;<span class="v">1.2.0</span></span>
         <span>Platforms&nbsp;<span class="v">macOS, Linux</span></span>
         <span>License&nbsp;<span class="v">MIT</span></span>
         <span>Source&nbsp;<span class="v"><a href="https://github.com/switchboard-code/switchboard">switchboard-code/switchboard</a></span></span>
@@ -486,7 +487,7 @@
 
     <div class="hero-grid">
       <div>
-        <p class="pitch">One coding agent, every model you have. It picks the lowest suitable feasible rung for each turn and moves up when the work proves it needs more.</p>
+        <p class="pitch">One coding workbench, every model you have. It picks the lowest suitable feasible rung for each turn and moves up when the work proves it needs more.</p>
         <p class="sub">Line up your models, cheapest at the bottom: a small local one, a bigger one, a paid API, your subscription. Before each turn, the router checks the request, capabilities, context, availability, cache, and budget. During the work it watches for trouble, and every move shows its reason. Afterwards the session answers the questions a transcript can&rsquo;t: what it cost, what it wrote, what broke.</p>
       </div>
       <figure class="hero-art">
@@ -527,8 +528,8 @@
     <div class="sec-no"><span class="n">01</span><span class="mono">The ladder</span></div>
     <div class="body-col">
       <h2>Route low when the turn fits. Climb when the evidence says so.</h2>
-      <p>Most agents call the same model for everything, so easy tasks overpay and hard tasks run underpowered. Switchboard treats the model as a slot, not a fixed property of the tool, and your ladder fills it.</p>
-      <p>The idle process boots on the first reachable rung. Before each actual user turn, the router assembles the request and chooses the lowest suitable feasible rung. During the turn it watches for four signs of a model in trouble: the same tool call repeated, tool errors spiking, a new test-failure signature, hedging in the answer. When they fire, the session moves up and the transcript shows the reason in the rung&rsquo;s own color. <code>/t3</code> switches by hand; <code>/t3 fix the flaky test</code> borrows a rung for one prompt and comes back.</p>
+      <p>When one selected model handles the whole session, easy tasks can overpay and hard tasks can run underpowered. Switchboard treats the model as a slot, not a fixed property of the tool, and your ladder fills it.</p>
+      <p>The idle process boots on the first reachable rung. Before each actual user turn, the router assembles the request and chooses the lowest suitable feasible rung. During the turn it watches for repeated tool calls, tool-error spikes, new test-failure signatures, and hedging. Those signals can propose a move. Rungs change only between completed rounds, and dwell, feasibility, and budget gates may keep the session where it is. When it moves, the transcript shows the reason in the rung&rsquo;s own color. <code>/t3</code> switches by hand; <code>/t3 fix the flaky test</code> borrows a rung for one prompt and comes back.</p>
 
       <table class="rung-table">
         <thead>
@@ -562,15 +563,34 @@
     </div>
   </section>
 
+  <section id="workbench">
+    <div class="sec-no"><span class="n">02</span><span class="mono">The workbench</span></div>
+    <div class="body-col">
+      <h2>Find the code, inspect the evidence, then make the edit.</h2>
+      <p>The TUI handles the small navigation work that otherwise sends a terminal session back to an editor. File and literal-search results carry revisions, so a source view that changed under you is refused instead of opened as if it were current.</p>
+      <div class="cmd-index">
+        <div class="cmd-row"><span class="cmd">Ctrl+P</span><p>Search the command palette by name or purpose.</p></div>
+        <div class="cmd-row"><span class="cmd">/files + /search</span><p>Quick-open files or search literal text with revision checks and explicit partial-coverage labels.</p></div>
+        <div class="cmd-row"><span class="cmd">/diff</span><p>Read staged, unstaged, and untracked work against HEAD; truncation includes a bounded omitted-path inventory.</p></div>
+        <div class="cmd-row"><span class="cmd">/review [turn]</span><p>Inspect one agent turn&rsquo;s recorded write/edit mutations. Stale or redirected current bytes are refused, and the panel has no action that changes files.</p></div>
+        <div class="cmd-row"><span class="cmd">/outline + /symbols</span><p>Browse declarations from a trusted installed language server that starts only when a semantic query needs it.</p></div>
+        <div class="cmd-row"><span class="cmd">/definition + /references</span><p>Move through semantic locations inside the workspace; external locations stay copy-only.</p></div>
+        <div class="cmd-row"><span class="cmd">/problems</span><p>See published diagnostics with freshness and partial-coverage labels. An empty panel never calls the project clean.</p></div>
+        <div class="cmd-row"><span class="cmd">/tasks</span><p>Inspect live calls and observed cost, or cancel one delegate. Calls emitted together can overlap, up to four; results rejoin in order.</p></div>
+      </div>
+      <p>Writes publish complete files atomically. Edit and undo compare the expected file state immediately before publication and refuse a mismatch already present. The check and final rename cannot be one portable filesystem operation, so a simultaneous external replacement is outside the guarantee. The full workbench lives in the TUI; the line-oriented REPL and headless mode remain deliberately smaller.</p>
+    </div>
+  </section>
+
   <section id="receipts">
-    <div class="sec-no"><span class="n">02</span><span class="mono">The receipts</span></div>
+    <div class="sec-no"><span class="n">03</span><span class="mono">The receipts</span></div>
     <div class="body-col">
       <h2>Every session is a record. The tool reads it back.</h2>
-      <p>Everything is appended to a session log, which is what lets Switchboard answer questions no chat history can.</p>
+      <p>Everything is appended to a session log, which is what lets Switchboard answer questions no chat history can. A bounded, redacted continuity capsule carries recorded todo state and the next action once after a process or session boundary, or into a compaction seed, without changing the prompt you wrote or granting old file-read authority.</p>
       <div class="cmd-index">
         <div class="cmd-row"><span class="cmd">/why</span><p>Why this model, what was ruled out, and what the session would have cost on every other rung.</p></div>
         <div class="cmd-row"><span class="cmd">/estimate</span><p>Price a prompt on every rung before you send it.</p></div>
-        <div class="cmd-row"><span class="cmd">/cost</span><p>The bill per turn, and the whole session repriced on each rung of today&rsquo;s ladder.</p></div>
+        <div class="cmd-row"><span class="cmd">/cost</span><p>The current session summary. <code>/cost turns</code> orders recorded work by bill; <code>/cost rungs</code> reprices it cold on every tier.</p></div>
         <div class="cmd-row"><span class="cmd">/race</span><p>One prompt on two rungs at once, side by side. You keep the winner; a tie means the cheap one was enough.</p></div>
         <div class="cmd-row"><span class="cmd">/blame</span><p>Which turn wrote this line, replayed from the logs. Lines the record can&rsquo;t explain say so; nothing is guessed.</p></div>
         <div class="cmd-row"><span class="cmd">/bisect</span><p>Tests are red and you don&rsquo;t know since when: binary-search the session&rsquo;s turns and name the culprit.</p></div>
@@ -581,7 +601,7 @@
   </section>
 
   <section id="proof">
-    <div class="sec-no"><span class="n">03</span><span class="mono">The proof</span></div>
+    <div class="sec-no"><span class="n">04</span><span class="mono">The proof</span></div>
     <div class="body-col">
       <h2>Measured, not assumed.</h2>
       <div class="figures">
@@ -602,17 +622,17 @@
   </section>
 
   <section id="reach">
-    <div class="sec-no"><span class="n">04</span><span class="mono">Reach is explicit</span></div>
+    <div class="sec-no"><span class="n">05</span><span class="mono">Reach is explicit</span></div>
     <div class="body-col">
       <h2>Host-direct by default. Guarded when you want it.</h2>
-      <p>Approved commands run with full host filesystem and network reach by default, and the approval screen says so. <code>auto</code> sends eligible ordinary commands to a configured low-cost reviewer; shell, interpreter, sensitive, external, and Windows commands stay with you. <code>yolo</code> runs ordinary edits and commands without prompts, while sensitive and external actions remain gated.</p>
+      <p>Approved commands run with full host filesystem and network reach by default, and the approval screen says so. <code>auto</code> uses a low-cost reviewer only under active verified confinement; host-direct execution asks you because workspace builds can run code. A confined explicit full-network request can remain reviewable, while shared loopback, opaque, sensitive, external, and Windows commands stay with you. <code>yolo</code> remains the explicit full-host mode; sensitive and external actions stay gated.</p>
       <p>Use <code>-sandbox</code> or <code>/sandbox on</code> to request verified Seatbelt on macOS or bubblewrap on Linux. Confinement limits writes to the workspace, temporary files, and build caches, but broad outside-home reads and host IPC remain; Seatbelt also shares host loopback. Switchboard reports those boundaries instead of calling them isolation.</p>
-      <p>Credentials can come from environment variables, helpers, OAuth, or the OS keychain. Provider credentials are stripped from child environments, known secrets are redacted, and outbound prompts are scanned before they leave the machine. Native Claude and Codex skills, plugins, and MCP definitions are discovered as inventory; executable pieces still require explicit activation, policy approval, and trust.</p>
+      <p>Credentials can come from environment variables, helpers, OAuth, or the OS keychain. Agent exec, LSP and probe processes, and editor launches use a central scrubbed environment; explicit user shell and custom commands retain the ambient environment. Known secrets are redacted, and outbound prompts are scanned before they leave the machine. Native Claude and Codex extensions still require activation, policy approval, and trust.</p>
     </div>
   </section>
 
   <section id="install">
-    <div class="sec-no"><span class="n">05</span><span class="mono">Get it</span></div>
+    <div class="sec-no"><span class="n">06</span><span class="mono">Get it</span></div>
     <div class="body-col">
       <h2>One script, checksums verified.</h2>
       <div class="term">
@@ -637,6 +657,7 @@
     <nav>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/eval.md">Eval</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/comparison.md">Comparison</a>
+      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/release-1.2.md">1.2 notes</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/head-to-head-2026-08-16.md">Head-to-head</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/estimator.md">Estimator</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/sandbox.md">Sandbox</a>

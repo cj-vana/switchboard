@@ -106,6 +106,13 @@ type Message struct {
 	// it exists so a reader of the log can tell a turn's opening from what
 	// rode in mid-turn, which /retry has to get right.
 	Injected bool `json:"injected,omitempty"`
+
+	// ContinuityRef names the durable continuity capsule folded into this
+	// message by the harness. Like Injected, it is session metadata rather than
+	// provider wire data: adapters render only role and content. Recording the
+	// reference lets replay prove a capsule was already delivered without
+	// parsing user-visible text or injecting it twice after another resume.
+	ContinuityRef string `json:"continuity_ref,omitempty"`
 }
 
 // UserText is a shorthand for the overwhelmingly common single-text-block case.
@@ -123,12 +130,113 @@ func (m Message) Text() string {
 	return out
 }
 
+// AuthoredText returns the text the user supplied, excluding the dedicated
+// first block carrying a validated continuity capsule. Text deliberately
+// remains the exact provider-visible wire text for request assembly, routing,
+// and token estimation. Session append/replay is what validates the metadata
+// contract before durable consumers rely on this projection.
+func (m Message) AuthoredText() string {
+	start := 0
+	if m.ContinuityRef != "" && len(m.Content) > 0 {
+		switch m.Content[0].(type) {
+		case Text, *Text:
+			start = 1
+		}
+	}
+	var out string
+	for _, block := range m.Content[start:] {
+		switch text := block.(type) {
+		case Text:
+			out += text.Text
+		case *Text:
+			if text != nil {
+				out += text.Text
+			}
+		}
+	}
+	return out
+}
+
 func (m Message) ToolUses() []ToolUse {
 	var out []ToolUse
 	for _, b := range m.Content {
 		if t, ok := b.(ToolUse); ok {
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+// CloneMessage returns an ownership-isolated canonical message. Interfaces
+// hide the mutable byte slices carried by tool arguments and attachments, so
+// copying only Message.Content would still let a caller change durable state
+// after append or mutate a State snapshot behind the session lock.
+func CloneMessage(in Message) Message {
+	out := in
+	if in.Content == nil {
+		return out
+	}
+	out.Content = make([]Block, len(in.Content))
+	for i, block := range in.Content {
+		switch value := block.(type) {
+		case Text, Thinking, ToolResult:
+			out.Content[i] = value
+		case ToolUse:
+			value.Input = append(json.RawMessage(nil), value.Input...)
+			out.Content[i] = value
+		case Image:
+			value.Data = append([]byte(nil), value.Data...)
+			out.Content[i] = value
+		case Document:
+			value.Data = append([]byte(nil), value.Data...)
+			out.Content[i] = value
+		case *Text:
+			if value != nil {
+				out.Content[i] = *value
+			}
+		case *Thinking:
+			if value != nil {
+				out.Content[i] = *value
+			}
+		case *ToolResult:
+			if value != nil {
+				out.Content[i] = *value
+			}
+		case *ToolUse:
+			if value != nil {
+				copy := *value
+				copy.Input = append(json.RawMessage(nil), value.Input...)
+				out.Content[i] = copy
+			}
+		case *Image:
+			if value != nil {
+				copy := *value
+				copy.Data = append([]byte(nil), value.Data...)
+				out.Content[i] = copy
+			}
+		case *Document:
+			if value != nil {
+				copy := *value
+				copy.Data = append([]byte(nil), value.Data...)
+				out.Content[i] = copy
+			}
+		default:
+			// MarshalJSON/replay remains the authority on unsupported block
+			// kinds. Preserve an extension block rather than silently dropping
+			// it; canonical built-ins above receive full ownership isolation.
+			out.Content[i] = block
+		}
+	}
+	return out
+}
+
+func CloneMessages(in []Message) []Message {
+	if in == nil {
+		return nil
+	}
+	out := make([]Message, len(in))
+	for i := range in {
+		out[i] = CloneMessage(in[i])
 	}
 	return out
 }
@@ -143,14 +251,18 @@ type blockEnvelope struct {
 }
 
 type messageJSON struct {
-	Role       Role            `json:"role"`
-	Content    []blockEnvelope `json:"content"`
-	Incomplete bool            `json:"incomplete,omitempty"`
-	Injected   bool            `json:"injected,omitempty"`
+	Role          Role            `json:"role"`
+	Content       []blockEnvelope `json:"content"`
+	Incomplete    bool            `json:"incomplete,omitempty"`
+	Injected      bool            `json:"injected,omitempty"`
+	ContinuityRef string          `json:"continuity_ref,omitempty"`
 }
 
 func (m Message) MarshalJSON() ([]byte, error) {
-	out := messageJSON{Role: m.Role, Incomplete: m.Incomplete, Injected: m.Injected}
+	out := messageJSON{
+		Role: m.Role, Incomplete: m.Incomplete, Injected: m.Injected,
+		ContinuityRef: m.ContinuityRef,
+	}
 	for _, b := range m.Content {
 		data, err := json.Marshal(b)
 		if err != nil {
@@ -169,6 +281,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.Role = in.Role
 	m.Incomplete = in.Incomplete
 	m.Injected = in.Injected
+	m.ContinuityRef = in.ContinuityRef
 	m.Content = nil
 	for _, env := range in.Content {
 		b, err := decodeBlock(env)

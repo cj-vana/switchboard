@@ -206,7 +206,7 @@ func (m *tuiModel) setMode(mode permission.Mode) tea.Cmd {
 		m.addNotice("warn", warning)
 	}
 	if mode == permission.ModeAuto {
-		m.addNotice("", "auto applies ordinary workspace edits and sends ordinary non-sensitive commands to the configured cheap approver; external, sensitive, uncertain, and host-loopback-sandbox actions ask you")
+		m.addNotice("", "auto applies ordinary workspace edits; with an active verified sandbox, ordinary non-sensitive commands go to the configured cheap approver; host-direct, external, sensitive, uncertain, and host-loopback-sandbox actions ask you")
 	}
 	if mode == permission.ModeBypass && !m.app.loop.Perms.Execution().SandboxActive() {
 		// Saying this once, plainly, beats letting the user discover it by

@@ -45,8 +45,9 @@ type repl struct {
 
 	// budget is the shared ceiling the loop's gate reads; the REPL checks it
 	// before an escalation the same way the TUI does.
-	budget *budgetState
-	caches *cacheSet
+	budget       *budgetState
+	caches       *cacheSet
+	startupNotes startupNoteReport
 }
 
 // moveTo rebinds the loop after the escalation policy changed the primary.
@@ -241,6 +242,17 @@ func (r *repl) turn(ctx context.Context, input string) error {
 }
 
 func (r *repl) turnPrepared(ctx context.Context, input string, images []provider.Image, fixedTier bool) error {
+	opening, err := stampTurnOpening(r.loop.Session, turnOpening(input, images))
+	if err != nil {
+		return err
+	}
+	return r.turnPreparedMessage(ctx, opening, fixedTier)
+}
+
+// turnPreparedMessage runs an already-stamped opening. The exact message that
+// routing and feasibility inspect is the one later appended and sent; in
+// particular, image blocks and continuity metadata are never reconstructed.
+func (r *repl) turnPreparedMessage(ctx context.Context, opening provider.Message, fixedTier bool) error {
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -258,10 +270,6 @@ func (r *repl) turnPrepared(ctx context.Context, input string, images []provider
 		}
 	}()
 
-	opening := provider.UserText(input)
-	for _, image := range images {
-		opening.Content = append(opening.Content, image)
-	}
 	if _, onLadder := r.config.Tier(r.tier.ID); onLadder && !fixedTier {
 		binding := r.loop.Binding()
 		tier, client, note, plan, err := resolveUserTurn(turnCtx, r.loop, r.config, r.catalog, r.providers,
@@ -307,7 +315,7 @@ func (r *repl) turnPrepared(ctx context.Context, input string, images []provider
 
 	err := r.loop.TurnMessage(turnCtx, opening)
 	r.out.endTurn()
-	r.recordRoute(input, startedOn, before, usageWindow, started, err)
+	r.recordRoute(opening.AuthoredText(), startedOn, before, usageWindow, started, err)
 	r.route = nil
 	return err
 }
@@ -503,6 +511,7 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		r.out.line("  /cost                                     tokens and cost for this session")
 		r.out.line("  /session                                  session id, target, and message count")
 		r.out.line("  /sandbox [off|on|auto]                    show or change command confinement")
+		r.out.line("  /doctor extensions                       every startup extension diagnostic")
 		r.out.line("  /exit                                     leave")
 
 	case "tier":
@@ -556,7 +565,7 @@ func (r *repl) command(ctx context.Context, input string) bool {
 			r.out.Notice("warn", warning)
 		}
 		if mode == permission.ModeAuto {
-			r.out.line(r.out.style(dim, "  ordinary workspace edits apply; ordinary non-sensitive commands go to the cheap approver; external, sensitive, uncertain, and host-loopback-sandbox actions ask you"))
+			r.out.line(r.out.style(dim, "  ordinary workspace edits apply; with an active verified sandbox, ordinary non-sensitive commands go to the cheap approver; host-direct, external, sensitive, uncertain, and host-loopback-sandbox actions ask you"))
 		}
 		if mode == permission.ModeBypass && !r.loop.Perms.Execution().SandboxActive() {
 			// Saying this once, plainly, beats letting the user discover it by
@@ -608,6 +617,13 @@ func (r *repl) command(ctx context.Context, input string) bool {
 			r.out.Notice("warn", "sandbox changed for this process, but the config was not saved: "+err.Error())
 		}
 
+	case "doctor":
+		if rest != "extensions" {
+			r.out.Notice("error", "usage: /doctor extensions")
+			break
+		}
+		writeStartupNoteDetails(r.out, r.startupNotes)
+
 	default:
 		r.out.Notice("error", "unknown command "+name+"; try /help")
 	}
@@ -621,9 +637,9 @@ func (r *repl) turnOnTier(ctx context.Context, id, prompt string, images []provi
 	if !ok {
 		return fmt.Errorf("no tier %s is configured; try /tiers", id)
 	}
-	opening := provider.UserText(prompt)
-	for _, image := range images {
-		opening.Content = append(opening.Content, image)
+	opening, err := stampTurnOpening(r.loop.Session, turnOpening(prompt, images))
+	if err != nil {
+		return err
 	}
 	plan := prospectiveTurnPlan(r.loop, r.sticky, opening, r.workspace)
 	rank := slices.IndexFunc(r.config.Tiers, func(candidate config.Tier) bool { return candidate.ID == requested.ID })
@@ -666,7 +682,7 @@ func (r *repl) turnOnTier(ctx context.Context, id, prompt string, images []provi
 	}
 	r.routeFeatures = plan.Features
 	r.out.line(r.out.style(dim, "  running this turn on "+r.tierLine()))
-	return r.turnPrepared(ctx, prompt, images, true)
+	return r.turnPreparedMessage(ctx, opening, true)
 }
 
 func (r *repl) switchTier(ctx context.Context, id string) {

@@ -66,16 +66,26 @@ func commands() []commandItem {
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},
 		{name: "session", desc: "session id, target, and message count", busySafe: true, run: cmdSession},
 		{name: "sandbox", usage: "[off|on|auto]", desc: "show or change command confinement", run: cmdSandbox},
-		{name: "doctor", desc: "probe every gate a session depends on, from inside the session", run: cmdDoctor},
+		{name: "doctor", usage: "[extensions]", desc: "probe session gates, or inspect every startup extension diagnostic", run: cmdDoctor},
 		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
 		{name: "mcp", usage: "[list|inspect|enable|disable] [server]", desc: "connected servers or native MCP activation", busySafe: true, run: cmdMCP},
 		{name: "plugins", usage: "[list|inspect|install|enable|disable|trust|untrust] [plugin]", desc: "native plugin inventory and Switchboard activation", run: cmdPlugins},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
+		{name: "tasks", usage: "[cancel <id>]", desc: "running and completed delegate tasks; cancel one without stopping the rest", busySafe: true, run: cmdTasks},
 		{name: "agents", desc: "named subagents the model can delegate to", busySafe: true, run: cmdAgents},
 		{name: "skills", desc: "discovered instruction packs, origins, and invocation status", busySafe: true, run: cmdSkills},
 		{name: "skill", usage: "<canonical-selector> [args]", desc: "invoke one instruction pack explicitly", run: cmdSkill},
 		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
+		{name: "files", usage: "[query]", desc: "quick-open workspace files with a revision-aware source lens", busySafe: true, run: cmdFiles},
+		{name: "search", usage: "<literal>", desc: "search workspace text and inspect exact source locations", busySafe: true, run: cmdWorkspaceSearch},
+		{name: "lsp", desc: "language-server state and advertised capabilities (never starts it)", busySafe: true, run: cmdLSP},
+		{name: "outline", usage: "<path>", desc: "semantic declarations in one source file", busySafe: true, run: cmdOutline},
+		{name: "symbols", usage: "<query>", desc: "search workspace declarations by semantic name", busySafe: true, run: cmdSymbols},
+		{name: "problems", usage: "[path]", desc: "published diagnostics with explicit freshness and coverage", busySafe: true, run: cmdProblems},
+		{name: "definition", usage: "<path>:<line> <symbol>", desc: "open where a symbol is defined", busySafe: true, run: cmdDefinition},
+		{name: "references", usage: "<path>:<line> <symbol>", desc: "browse every semantic reference to a symbol", busySafe: true, run: cmdReferences},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
+		{name: "review", usage: "[turn]", desc: "review one turn's recorded mutations", busySafe: false, run: cmdReview},
 		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
 		{name: "blame", usage: "[path[:line]]", desc: "which recorded turn wrote each line, on which rung and model; bare, the workspace's yield", busySafe: true, run: cmdBlame},
 		{name: "mistakes", desc: "the failures more than one session met, from the workspace's own record", busySafe: true, run: cmdMistakes},
@@ -130,8 +140,9 @@ var helpGroups = []struct {
 }{
 	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
-	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
-	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "agents", "skills", "login", "logout"}},
+	{"files and work", []string{"files", "search", "diff", "review", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
+	{"language intelligence", []string{"lsp", "outline", "symbols", "problems", "definition", "references"}},
+	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }
 
@@ -355,7 +366,7 @@ func cmdMode(m *tuiModel, args string) tea.Cmd {
 		permission.ModePlan:        "read-only: no writes, no commands",
 		permission.ModeDefault:     "writes and commands ask first",
 		permission.ModeAcceptEdits: "edits apply, commands ask first",
-		permission.ModeAuto:        "edits apply; a cheap model reviews ordinary non-sensitive commands",
+		permission.ModeAuto:        "edits apply; a cheap model reviews confined commands, while host-direct commands ask you",
 		permission.ModeYOLO:        "FULL HOST ACCESS: ordinary edits and non-sensitive commands skip prompts",
 		permission.ModeBypass:      "promptless only with verified confinement that isolates host network and IPC",
 	}
@@ -513,7 +524,16 @@ func cmdSandbox(m *tuiModel, args string) tea.Cmd {
 }
 
 func cmdDiff(m *tuiModel, _ string) tea.Cmd {
-	return openDiff(m.app.workspace, m.th.dark)
+	m.workspaceGeneration++
+	generation := m.workspaceGeneration
+	sessionID := currentSessionID(m)
+	load := openDiff(m.app.workspace, m.th.dark)
+	return func() tea.Msg {
+		msg := load().(diffLoadedMsg)
+		msg.sessionID = sessionID
+		msg.generation = generation
+		return msg
+	}
 }
 
 // cmdMCP reports the session's external tooling: which servers connected,
@@ -569,6 +589,15 @@ func cmdPlugins(m *tuiModel, args string) tea.Cmd {
 	})
 }
 
+func invalidateRestoredWorkspace(m *tuiModel) {
+	if m.workspaceRuntime != nil {
+		m.workspaceRuntime.invalidate()
+	}
+	if view, ok := m.full.(*lspView); ok {
+		view.stale = true
+	}
+}
+
 // cmdUndo takes back the most recent turn's write and edit effects. It is
 // not busy-safe on purpose: undoing under a turn still capturing into its
 // own scope would restore a state the model is mid-way through changing.
@@ -611,17 +640,30 @@ func cmdUndo(m *tuiModel, args string) tea.Cmd {
 		if abs == "" {
 			return noticeCmd("error", "no turn captured "+arg+"; /changes lists what write and edit touched")
 		}
-		fileRemoved, label, err := rec.UndoFile(abs)
-		if err != nil {
+		outcome, label, err := rec.UndoFile(abs)
+		if !outcome.Published {
+			if err == nil {
+				err = fmt.Errorf("undo did not publish a file change")
+			}
 			return noticeCmd("error", err.Error())
 		}
+		// Publication invalidates the model's read authority even when a later
+		// durability or final-state check reports a warning.
 		m.app.loop.Tools.ForgetVersions([]string{abs})
+		invalidateRestoredWorkspace(m)
 		verb := "restored"
-		if fileRemoved {
+		if outcome.Removed {
 			verb = "removed"
 		}
-		m.app.loop.Session.AppendNote("info", fmt.Sprintf("undo: %s %s from %q", verb, m.app.displayPath(abs), label))
+		if err != nil {
+			m.app.loop.Session.AppendNote("warn", fmt.Sprintf("undo: %s %s from %q; %v", verb, m.app.displayPath(abs), label, err))
+		} else {
+			m.app.loop.Session.AppendNote("info", fmt.Sprintf("undo: %s %s from %q", verb, m.app.displayPath(abs), label))
+		}
 		m.addInfo(fmt.Sprintf("  %s %s, from before %q; the turn's other files stand", verb, m.app.displayPath(abs), truncate(firstLine(label), 50)))
+		if err != nil {
+			return noticeCmd("warn", err.Error())
+		}
 		return nil
 	}
 
@@ -631,7 +673,11 @@ func cmdUndo(m *tuiModel, args string) tea.Cmd {
 	}
 	// Restored files changed under the model's feet; the stale check must
 	// force a re-read before the next write.
-	m.app.loop.Tools.ForgetVersions(append(append([]string(nil), restored...), removed...))
+	changed := append(append([]string(nil), restored...), removed...)
+	m.app.loop.Tools.ForgetVersions(changed)
+	if len(changed) > 0 {
+		invalidateRestoredWorkspace(m)
+	}
 	m.app.loop.Session.AppendNote("info", fmt.Sprintf("undo: reverted %q (%d restored, %d removed)", label, len(restored), len(removed)))
 
 	var b strings.Builder
@@ -646,11 +692,11 @@ func cmdUndo(m *tuiModel, args string) tea.Cmd {
 		fmt.Fprintf(&b, "  not covered (over the snapshot cap): %s\n", m.app.displayPath(p))
 	}
 	for _, f := range failed {
-		fmt.Fprintf(&b, "  failed: %s\n", f)
+		fmt.Fprintf(&b, "  restore issue: %s\n", f)
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	if len(failed) > 0 {
-		return noticeCmd("warn", "some files could not be restored; see above")
+		return noticeCmd("warn", "some files were not restored or could not be fully verified; see above")
 	}
 	return nil
 }
@@ -754,7 +800,7 @@ func trustDeclarations(m *tuiModel) []string {
 		}
 	}
 	if argv, marker, ok := lspCandidate(ws); ok {
-		lines = append(lines, fmt.Sprintf("  language server %s over this workspace (%s present)", filepath.Base(argv[0]), marker))
+		lines = append(lines, fmt.Sprintf("  language server candidate %s for this workspace (%s present; verified only after trust)", filepath.Base(argv[0]), marker))
 	}
 	return lines
 }
@@ -976,7 +1022,17 @@ func cmdRaces(m *tuiModel, args string) tea.Cmd {
 // as one entry; the MCP section is the one deliberate difference, stated in
 // the output, since probing would spawn each declared server a second time
 // beside this session's own.
-func cmdDoctor(m *tuiModel, _ string) tea.Cmd {
+func cmdDoctor(m *tuiModel, args string) tea.Cmd {
+	switch strings.TrimSpace(args) {
+	case "extensions":
+		m.closeFullscreen()
+		m.full = newStartupNotesView(m.app.startupNotes)
+		return nil
+	case "":
+		// Continue with the live gate probes below.
+	default:
+		return noticeCmd("error", "usage: /doctor [extensions]")
+	}
 	if m.app.providers == nil {
 		return noticeCmd("error", "doctor needs the provider registry; run sb doctor from a shell")
 	}

@@ -83,20 +83,24 @@ func TestCallRoutesResponsesById(t *testing.T) {
 		t.Errorf("wire line = %v, want the 1-based input made 0-based", pos["line"])
 	}
 
-	// Interleave a server-initiated request; the client must answer it
-	// rather than leave the server hanging, and must not confuse it with
-	// the pending call.
+	// Interleave a server-initiated request; the client must answer it with
+	// one default value per requested configuration item, rather than leave
+	// the server hanging or confuse it with the pending call.
 	s.send(t, map[string]any{"jsonrpc": "2.0", "id": 999, "method": "workspace/configuration",
-		"params": map[string]any{}})
+		"params": map[string]any{"items": []map[string]any{{"section": "one"}, {"section": "two"}}}})
 	reply := s.recv(t)
-	if reply["id"].(float64) != 999 || reply["result"] != nil {
-		t.Fatalf("server request got reply %v, want null result for id 999", reply)
+	values, ok := reply["result"].([]any)
+	if reply["id"].(float64) != 999 || !ok || len(values) != 2 || values[0] != nil || values[1] != nil {
+		t.Fatalf("server request got reply %v, want two default values for id 999", reply)
 	}
 
 	s.send(t, map[string]any{"jsonrpc": "2.0", "id": req["id"],
 		"result": []map[string]any{{
-			"uri":   "file:///ws/b.go",
-			"range": map[string]any{"start": map[string]any{"line": 9}},
+			"uri": "file:///ws/b.go",
+			"range": map[string]any{
+				"start": map[string]any{"line": 9},
+				"end":   map[string]any{"line": 9, "character": 1},
+			},
 		}}})
 
 	select {

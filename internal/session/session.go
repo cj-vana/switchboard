@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
@@ -106,6 +107,13 @@ type State struct {
 	// Pins are the named points /fork can cut back to, in the order set,
 	// with a re-used name moving its pin rather than stacking a second.
 	Pins []Pin
+
+	// Continuity is the latest bounded task-state record, including a cleared
+	// tombstone. ContinuityRef is the newest capsule an appended message says
+	// was made model-visible; comparing their IDs prevents reinjection after a
+	// process resume without parsing prompt prose.
+	Continuity    *continuity.Capsule
+	ContinuityRef string
 
 	// CatalogRevision is the revision the session started against.
 	CatalogRevision string
@@ -481,11 +489,11 @@ func openPath(path string) (*Session, error) {
 
 // migrateForAppend upgrades old readable logs before this process is allowed
 // to append records whose execution semantics older binaries cannot preserve.
-// Schema 1, 2, and 3 have same-width
-// headers, so the version byte can be replaced in place while the file is
-// exclusively locked. This works on Windows too, where replacing the path of
-// an open, non-share-delete file is not permitted. Sync completes the upgrade
-// before any schema-3 record may be appended.
+// Schemas 1 through 4 have same-width headers, so the version byte can be
+// replaced in place while the file is exclusively locked. This works on
+// Windows too, where replacing the path of an open, non-share-delete file is
+// not permitted. Sync completes the upgrade
+// before any schema-4 record may be appended.
 func migrateForAppend(old *os.File, path string) (*os.File, error) {
 	if _, err := old.Seek(0, io.SeekStart); err != nil {
 		return old, err
@@ -506,7 +514,7 @@ func migrateForAppend(old *os.File, path string) (*os.File, error) {
 	if version == SchemaVersion {
 		return old, nil
 	}
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return old, fmt.Errorf("cannot migrate session schema %d to %d", version, SchemaVersion)
 	}
 	oldHeader := []byte(header)
@@ -600,7 +608,41 @@ func (s *Session) apply(rec Record) error {
 		if err := json.Unmarshal(rec.Payload, &m); err != nil {
 			return err
 		}
+		m = provider.CloneMessage(m)
+		if m.ContinuityRef != "" {
+			if err := validateContinuityDelivery(s.state, m); err != nil {
+				return fmt.Errorf("message in record %d: %w", rec.Seq, err)
+			}
+			s.state.ContinuityRef = m.ContinuityRef
+		}
 		s.state.Messages = append(s.state.Messages, m)
+	case RecordMessageContinuity:
+		m, capsule, err := decodeMessageContinuity(rec.Payload)
+		if err != nil {
+			return fmt.Errorf("message-continuity in record %d: %w", rec.Seq, err)
+		}
+		if m.Role != provider.RoleTool || !hasSuccessfulTodoResult(m) {
+			return fmt.Errorf("message-continuity in record %d does not hold a successful todo result", rec.Seq)
+		}
+		if m.ContinuityRef != "" {
+			if err := validateContinuityDelivery(s.state, m); err != nil {
+				return fmt.Errorf("message in record %d: %w", rec.Seq, err)
+			}
+		}
+		if capsule.Source != continuity.SourceTodo || capsule.Cleared {
+			return fmt.Errorf("message-continuity in record %d does not hold live todo state", rec.Seq)
+		}
+		if capsule.BasisMessages != len(s.state.Messages)+1 {
+			return fmt.Errorf("continuity in record %d is based on %d messages, but the atomic result makes %d", rec.Seq, capsule.BasisMessages, len(s.state.Messages)+1)
+		}
+		// All validation precedes either state change: a malformed compound
+		// frame cannot publish its message without its matching capsule.
+		s.state.Messages = append(s.state.Messages, m)
+		if m.ContinuityRef != "" {
+			s.state.ContinuityRef = m.ContinuityRef
+		}
+		cloned := continuity.Clone(capsule)
+		s.state.Continuity = &cloned
 	case RecordUsage:
 		var p Usage
 		if err := json.Unmarshal(rec.Payload, &p); err != nil {
@@ -677,6 +719,16 @@ func (s *Session) apply(rec Record) error {
 			return fmt.Errorf("runtime binding in record %d has an empty tier or target", rec.Seq)
 		}
 		s.state.RuntimeBinding = p
+	case RecordContinuity:
+		p, err := continuity.DecodeStored(rec.Payload)
+		if err != nil {
+			return fmt.Errorf("continuity in record %d: %w", rec.Seq, err)
+		}
+		if p.BasisMessages != len(s.state.Messages) {
+			return fmt.Errorf("continuity in record %d is based on %d messages, but the log held %d", rec.Seq, p.BasisMessages, len(s.state.Messages))
+		}
+		cloned := continuity.Clone(p)
+		s.state.Continuity = &cloned
 	case RecordPin:
 		var p Pin
 		if err := json.Unmarshal(rec.Payload, &p); err != nil {
@@ -738,11 +790,207 @@ func (s *Session) writeFrame(frame []byte) error {
 func (s *Session) AppendMessage(m provider.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	m = provider.CloneMessage(m)
+	if m.ContinuityRef != "" {
+		if err := validateContinuityDelivery(s.state, m); err != nil {
+			return err
+		}
+	}
 	if err := s.append(RecordMessage, m); err != nil {
 		return err
 	}
 	s.state.Messages = append(s.state.Messages, m)
+	if m.ContinuityRef != "" {
+		s.state.ContinuityRef = m.ContinuityRef
+	}
 	return nil
+}
+
+// AppendToolResultsWithTasks commits one successful tool-result message and
+// the exact todo continuity it produced in one checksummed, synced WAL frame.
+// A torn frame replays neither half; a complete frame replays both.
+func (s *Session) AppendToolResultsWithTasks(m provider.Message, tasks []continuity.Task) (continuity.Capsule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m = provider.CloneMessage(m)
+	if m.Role != provider.RoleTool || !hasSuccessfulTodoResult(m) {
+		return continuity.Capsule{}, fmt.Errorf("atomic todo result requires a tool message with a successful todo result")
+	}
+	if m.ContinuityRef != "" {
+		return continuity.Capsule{}, fmt.Errorf("tool-result message cannot carry a continuity reference")
+	}
+	var current *continuity.Capsule
+	if s.state.Continuity != nil {
+		cloned := continuity.Clone(*s.state.Continuity)
+		current = &cloned
+	}
+	next := continuity.WithTasks(current, tasks)
+	next.BasisMessages = len(s.state.Messages) + 1
+	prepared, err := continuity.Prepare(next)
+	if err != nil {
+		return continuity.Capsule{}, err
+	}
+	payload := messageContinuity{Message: m, Continuity: prepared}
+	if err := s.append(RecordMessageContinuity, payload); err != nil {
+		return continuity.Capsule{}, err
+	}
+	s.state.Messages = append(s.state.Messages, m)
+	cloned := continuity.Clone(prepared)
+	s.state.Continuity = &cloned
+	return continuity.Clone(prepared), nil
+}
+
+func hasSuccessfulTodoResult(message provider.Message) bool {
+	for _, block := range message.Content {
+		result, ok := block.(provider.ToolResult)
+		if ok && result.Name == "todo" && !result.IsError {
+			return true
+		}
+	}
+	return false
+}
+
+// StampContinuityOpening folds the one pending capsule into a complete user
+// opening before routing or token estimation. The dedicated first text block
+// and reference are an atomic delivery stamp: AppendMessage and replay accept
+// the reference only while that exact capsule is current, undelivered, and
+// rendered byte-for-byte in this message.
+func (s *Session) StampContinuityOpening(opening provider.Message) (provider.Message, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	opening = provider.CloneMessage(opening)
+	if !continuityOpening(opening) {
+		return provider.Message{}, false, fmt.Errorf("continuity can only be stamped on a complete, non-injected user opening")
+	}
+	if opening.ContinuityRef != "" {
+		if err := validateContinuityDelivery(s.state, opening); err != nil {
+			return provider.Message{}, false, err
+		}
+		return opening, true, nil
+	}
+	current := s.state.Continuity
+	if current == nil || current.Cleared || current.ID == s.state.ContinuityRef {
+		return opening, false, nil
+	}
+	rendered, err := continuityDeliveryText(*current)
+	if err != nil {
+		return provider.Message{}, false, fmt.Errorf("render continuity opening: %w", err)
+	}
+	stamped := opening
+	stamped.Content = make([]provider.Block, 0, len(opening.Content)+1)
+	stamped.Content = append(stamped.Content, provider.Text{Text: rendered})
+	stamped.Content = append(stamped.Content, opening.Content...)
+	stamped.ContinuityRef = current.ID
+	return stamped, true, nil
+}
+
+func validateContinuityDelivery(state State, message provider.Message) error {
+	if !continuity.ValidID(message.ContinuityRef) {
+		return fmt.Errorf("message has an invalid continuity reference")
+	}
+	if !continuityOpening(message) {
+		return fmt.Errorf("continuity reference requires a complete, non-injected user opening")
+	}
+	if state.Continuity == nil || state.Continuity.Cleared || state.Continuity.ID != message.ContinuityRef {
+		return fmt.Errorf("message refers to a continuity capsule that is not current")
+	}
+	if state.ContinuityRef == message.ContinuityRef {
+		return fmt.Errorf("continuity capsule %s was already delivered", message.ContinuityRef)
+	}
+	rendered, err := continuityDeliveryText(*state.Continuity)
+	if err != nil {
+		return fmt.Errorf("render continuity delivery: %w", err)
+	}
+	if len(message.Content) == 0 {
+		return fmt.Errorf("continuity reference has no rendered capsule block")
+	}
+	first, ok := message.Content[0].(provider.Text)
+	if !ok || first.Text != rendered {
+		return fmt.Errorf("continuity reference does not match the first rendered capsule block")
+	}
+	for _, block := range message.Content[1:] {
+		if text, ok := block.(provider.Text); ok && text.Text == rendered {
+			return fmt.Errorf("continuity reference duplicates the rendered capsule block")
+		}
+	}
+	return nil
+}
+
+func continuityDeliveryText(c continuity.Capsule) (string, error) {
+	rendered, err := continuity.Render(c)
+	if err != nil {
+		return "", err
+	}
+	// Ollama and chat-completions adapters flatten adjacent text blocks with
+	// no delimiter. Carry the boundary inside the stamped block so both those
+	// wires and block-preserving APIs keep capsule and prompt separated.
+	return rendered + "\n\n", nil
+}
+
+func continuityOpening(message provider.Message) bool {
+	return !message.Incomplete && OpensTurn(message)
+}
+
+// AppendContinuity redacts, bounds, identities, and durably appends the latest
+// working-state capsule at the exact current conversation boundary. The caller
+// receives the canonical stored value; it must not retain its pre-redaction
+// input as though that were what replay will recover.
+func (s *Session) AppendContinuity(c continuity.Capsule) (continuity.Capsule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c.BasisMessages = len(s.state.Messages)
+	return s.appendContinuityLocked(c)
+}
+
+// AppendTasksContinuity atomically derives the todo-owned fields from the
+// latest capsule and appends the result. Keeping the read/derive/write under
+// one session lock prevents a concurrent clear or compaction capsule from
+// being silently overwritten by a stale snapshot.
+func (s *Session) AppendTasksContinuity(tasks []continuity.Task) (continuity.Capsule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var current *continuity.Capsule
+	if s.state.Continuity != nil {
+		cloned := continuity.Clone(*s.state.Continuity)
+		current = &cloned
+	}
+	next := continuity.WithTasks(current, tasks)
+	next.BasisMessages = len(s.state.Messages)
+	return s.appendContinuityLocked(next)
+}
+
+func (s *Session) appendContinuityLocked(c continuity.Capsule) (continuity.Capsule, error) {
+	prepared, err := continuity.Prepare(c)
+	if err != nil {
+		return continuity.Capsule{}, err
+	}
+	if err := s.append(RecordContinuity, prepared); err != nil {
+		return continuity.Capsule{}, err
+	}
+	cloned := continuity.Clone(prepared)
+	s.state.Continuity = &cloned
+	return continuity.Clone(prepared), nil
+}
+
+// ClearContinuity appends a tombstone instead of deleting history. A fork
+// before the tombstone can still recover the state that was current there;
+// replay at or after it cannot accidentally revive that older capsule.
+func (s *Session) ClearContinuity(source continuity.Source) (continuity.Capsule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var current *continuity.Capsule
+	if s.state.Continuity != nil {
+		copy := continuity.Clone(*s.state.Continuity)
+		current = &copy
+	}
+	c := continuity.Tombstone(current, source)
+	c.BasisMessages = len(s.state.Messages)
+	if current != nil {
+		c.ParentSession = s.state.ID
+		c.ParentMessages = len(s.state.Messages)
+		c.ParentCapsule = current.ID
+	}
+	return s.appendContinuityLocked(c)
 }
 
 func (s *Session) AppendUsage(u Usage) error {
@@ -1181,9 +1429,13 @@ func (s *Session) State() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := s.state
-	out.Messages = append([]provider.Message(nil), s.state.Messages...)
+	out.Messages = provider.CloneMessages(s.state.Messages)
 	out.Pins = append([]Pin(nil), s.state.Pins...)
 	out.UsageTargets = append([]string(nil), s.state.UsageTargets...)
+	if s.state.Continuity != nil {
+		copy := continuity.Clone(*s.state.Continuity)
+		out.Continuity = &copy
+	}
 	if s.state.pendingBudgetAttempts != nil {
 		out.pendingBudgetAttempts = make(map[string]int64, len(s.state.pendingBudgetAttempts))
 		for id, amount := range s.state.pendingBudgetAttempts {
@@ -1203,6 +1455,19 @@ func (s *Session) State() State {
 		}
 	}
 	return out
+}
+
+// CurrentContinuity returns an isolated snapshot of the latest capsule without
+// copying the entire conversation. Session binding and post-tool persistence
+// use this narrow projection on potentially long-running sessions.
+func (s *Session) CurrentContinuity() *continuity.Capsule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Continuity == nil {
+		return nil
+	}
+	copy := continuity.Clone(*s.state.Continuity)
+	return &copy
 }
 
 func (s *Session) ID() string   { return s.state.ID }

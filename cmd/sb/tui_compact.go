@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	"github.com/switchboard-code/switchboard/internal/session"
@@ -148,10 +149,19 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 			return finishNotice("error", "compact failed to carry the session budget, session unchanged: "+err.Error())
 		}
 		seed := compactSeedHead + state.ID + "). What follows is a summary of that conversation; treat it as established context.\n\n" + summary
+		seedOpening := provider.UserText(seed)
+		if capsule, ok := compactContinuity(accounting); ok {
+			if _, err = sess.AppendContinuity(capsule); err == nil {
+				seedOpening, err = stampTurnOpening(sess, seedOpening)
+			}
+		}
 		// The acknowledgment keeps the log strictly alternating, which every
 		// adapter renders correctly; a seed followed directly by the user's
 		// next prompt would put two user messages back to back.
-		if err := sess.AppendMessage(provider.UserText(seed)); err == nil {
+		if err == nil {
+			err = sess.AppendMessage(seedOpening)
+		}
+		if err == nil {
 			err = sess.AppendMessage(provider.Message{
 				Role:    provider.RoleAssistant,
 				Content: []provider.Block{provider.Text{Text: "Understood. Continuing from there."}},
@@ -165,6 +175,51 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 		return sessionSwapMsg{sess: sess, tier: app.tier, client: app.loop.Binding().Provider, fresh: false, keepFold: true, release: release,
 			operation: generation, sourceID: sourceID, preserveRuntimeTarget: true}
 	}
+}
+
+// compactContinuity carries structured task state into the compacted log.
+// The generated summary already lives in the seed message, so copying it into
+// Narrative would make the first provider request pay for it twice. The new
+// capsule is stamped into that seed once; an explicit tombstone or a capsule
+// with no useful content produces no header-only replacement.
+func compactContinuity(source session.State) (continuity.Capsule, bool) {
+	if source.Continuity == nil || source.Continuity.Cleared {
+		return continuity.Capsule{}, false
+	}
+
+	capsule := continuity.Clone(*source.Continuity)
+	// Narrative is the source context's prose summary. The new generated seed
+	// supersedes it, so carrying both would duplicate context tokens. Keep the
+	// explicitly structured objective/tasks/facts/decisions/files instead.
+	capsule.Narrative = ""
+	capsule.Omitted = withoutContinuityOmission(capsule.Omitted, "narrative")
+	if !continuityHasContent(capsule) {
+		return continuity.Capsule{}, false
+	}
+	capsule.ParentCapsule = source.Continuity.ID
+	capsule.Format = continuity.FormatVersion
+	capsule.ID = ""
+	capsule.Source = continuity.SourceCompact
+	capsule.BasisMessages = 0 // Session.AppendContinuity binds the fresh log.
+	capsule.ParentSession = source.ID
+	capsule.ParentMessages = len(source.Messages)
+	capsule.Cleared = false
+	return capsule, true
+}
+
+func continuityHasContent(c continuity.Capsule) bool {
+	return c.Objective != "" || c.Phase != "" || c.Narrative != "" || c.NextAction != "" || c.StopCondition != "" ||
+		len(c.Tasks) > 0 || len(c.Facts) > 0 || len(c.Decisions) > 0 || len(c.Rejected) > 0 || len(c.Files) > 0
+}
+
+func withoutContinuityOmission(omitted []string, field string) []string {
+	kept := make([]string, 0, len(omitted))
+	for _, name := range omitted {
+		if name != field {
+			kept = append(kept, name)
+		}
+	}
+	return kept
 }
 
 // compactSettings is /compact auto and /compact at: the automatic-compaction

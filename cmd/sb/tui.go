@@ -23,6 +23,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/credential"
 	"github.com/switchboard-code/switchboard/internal/delegate"
 	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/lsp"
 	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
@@ -71,13 +72,16 @@ type turnDoneMsg struct {
 }
 type turnPlanMsg struct {
 	generation uint64
-	prompt     string
-	images     []provider.Image
-	tier       config.Tier
-	client     provider.Provider
-	note       string
-	plan       turnPlan
-	err        error
+	opening    provider.Message
+	// prompt/images are display-only projections kept for UI diagnostics and
+	// tests. Routing and sending use opening exclusively.
+	prompt string
+	images []provider.Image
+	tier   config.Tier
+	client provider.Provider
+	note   string
+	plan   turnPlan
+	err    error
 }
 type tierNowMsg struct {
 	line string
@@ -141,13 +145,16 @@ type sessionSwapMsg struct {
 }
 type overrideProbeMsg struct {
 	generation uint64
-	prompt     string
-	images     []provider.Image
-	tier       config.Tier
-	client     provider.Provider
-	note       string
-	plan       turnPlan
-	err        error
+	opening    provider.Message
+	// prompt/images never reconstruct the outbound message; opening is the
+	// single routing and provider value.
+	prompt string
+	images []provider.Image
+	tier   config.Tier
+	client provider.Provider
+	note   string
+	plan   turnPlan
+	err    error
 }
 type updateCheckMsg struct {
 	latest string
@@ -276,7 +283,11 @@ type tuiModel struct {
 	custom []customCommand
 
 	dlg  dialog
-	full *diffView
+	full fullscreen
+
+	workspaceRuntime    *workspaceRuntime
+	workspaceGeneration uint64
+	lspGeneration       uint64
 
 	pendingAsk chan permission.Response
 
@@ -333,6 +344,8 @@ func runTUI(
 	trustStore *trust.Store,
 	trustErr error,
 	mcpEnv *mcpState,
+	lspServer *lsp.Server,
+	lspNote string,
 	undoRec *checkpoint.Recorder,
 	agents []delegate.Agent,
 	agentNotes []string,
@@ -372,6 +385,8 @@ func runTUI(
 		obs:         obs,
 		trust:       trustStore,
 		mcp:         mcpEnv,
+		lsp:         optionalLSPRuntime(lspServer),
+		lspNote:     lspNote,
 		undo:        undoRec,
 		agents:      agents,
 		agentNotes:  agentNotes,
@@ -382,6 +397,10 @@ func runTUI(
 	}
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()
+	}
+	if app.lsp != nil {
+		app.lspProblems, app.lspProblemsCancel = app.lsp.Problems().Subscribe()
+		defer app.lspProblemsCancel()
 	}
 
 	m := newTUIModel(app, th, md, ta)
@@ -405,13 +424,11 @@ func runTUI(
 	// not consuming messages yet; whatever a server says later arrives as a
 	// notice through the observer, which is how the user learns a server
 	// died an hour into the session.
-	for _, n := range mcpEnv.attach(func(n mcpNote) { obs.Notice(n.level, n.text) }) {
-		if n.level == "" {
-			m.addInfo("  " + n.text)
-		} else {
-			m.addNotice(n.level, n.text)
-		}
-	}
+	startupNotes, droppedStartupNotes := mcpEnv.attachCounted(func(n mcpNote) {
+		obs.Notice(n.level, n.text)
+	})
+	app.startupNotes = aggregateStartupNotes(startupNotes, droppedStartupNotes)
+	addStartupNoteReport(m, app.startupNotes)
 	if routeDec != nil {
 		m.addRoute(routeSummary(*routeDec), describeRoute(*routeDec))
 	}
@@ -420,6 +437,9 @@ func runTUI(
 	}
 
 	var initial []tea.Cmd
+	if app.lspProblems != nil {
+		initial = append(initial, waitLSPProblems(app.lsp, app.lspProblems))
+	}
 	if updateCheck {
 		initial = append(initial, startupUpdate(cfg))
 	}
@@ -502,16 +522,17 @@ func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiMo
 	}
 	app.runtimeMu.Unlock()
 	m := &tuiModel{
-		app:       app,
-		th:        th,
-		md:        md,
-		ta:        ta,
-		spin:      spinner.New(spinner.WithSpinner(spinner.Dot)),
-		tierLine:  app.tierLine(),
-		mode:      app.loop.Perms.Mode(),
-		history:   loadHistory(app.workspace),
-		custom:    loadCustomCommands(app.workspace),
-		sessionAt: time.Now(),
+		app:              app,
+		th:               th,
+		md:               md,
+		ta:               ta,
+		spin:             spinner.New(spinner.WithSpinner(spinner.Dot)),
+		tierLine:         app.tierLine(),
+		mode:             app.loop.Perms.Mode(),
+		history:          loadHistory(app.workspace),
+		custom:           loadCustomCommands(app.workspace),
+		sessionAt:        time.Now(),
+		workspaceRuntime: newWorkspaceRuntime(app.workspace),
 	}
 	m.histIdx = len(m.history)
 	m.tr = newTranscript(100, th, md)
@@ -533,8 +554,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if m.full != nil {
-			m.full.mouse(msg)
-			return m, nil
+			return m, m.full.mouse(msg)
 		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
@@ -623,6 +643,50 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dlg = &pickerDialog{title: msg.title, items: msg.items, onPick: msg.action}
 		return m, nil
 
+	case workspaceOpenedMsg:
+		return m, m.onWorkspaceOpened(msg)
+
+	case workspaceFilteredMsg:
+		return m, m.onWorkspaceFiltered(msg)
+
+	case workspacePreviewMsg:
+		return m, m.onWorkspacePreview(msg)
+
+	case workspaceCopiedMsg:
+		m.onWorkspaceCopied(msg)
+		return m, nil
+
+	case workspaceEditorReadyMsg:
+		return m, m.onWorkspaceEditorReady(msg)
+
+	case workspaceEditorDoneMsg:
+		return m, m.onWorkspaceEditorDone(msg)
+
+	case workspaceInvalidatedMsg:
+		if m.workspaceRuntime != nil {
+			m.workspaceRuntime.invalidate()
+		}
+		if view, ok := m.full.(*lspView); ok {
+			view.stale = true
+		}
+		return m, nil
+
+	case lspLoadedMsg:
+		return m, m.onLSPLoaded(msg)
+
+	case lspProblemsChangedMsg:
+		return m, m.onLSPProblemsChanged(msg)
+
+	case lspCopiedMsg:
+		m.onLSPCopied(msg)
+		return m, nil
+
+	case lspEditorReadyMsg:
+		return m, m.onLSPEditorReady(msg)
+
+	case lspEditorDoneMsg:
+		return m, m.onLSPEditorDone(msg)
+
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
 			store := storeSecretCmd(msg.ref, msg.writer, msg.storeName, value)
@@ -696,6 +760,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case diffLoadedMsg:
+		if msg.generation != 0 && (msg.generation != m.workspaceGeneration || msg.sessionID != currentSessionID(m) || m.full != nil) {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.addNotice("error", "diff failed: "+msg.err.Error())
 			return m, nil
@@ -703,9 +770,21 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.full = &diffView{lines: msg.lines}
 		return m, nil
 
-	case shellDoneMsg:
-		m.onShellDone(msg)
+	case turnReviewLoadedMsg:
+		if msg.generation != 0 && (msg.generation != m.workspaceGeneration || msg.sessionID != currentSessionID(m) ||
+			msg.turnEpoch != m.turnGeneration || m.busy || m.turnPlanning || m.full != nil ||
+			msg.bound && (msg.recorder == nil || !msg.recorder.ReviewCursorValid(msg.cursor))) {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.addNotice("error", "review failed: "+msg.err.Error())
+			return m, nil
+		}
+		m.full = &turnReviewView{index: msg.index, label: msg.label, lines: msg.lines}
 		return m, nil
+
+	case shellDoneMsg:
+		return m, m.onShellDone(msg)
 
 	case editorDoneMsg:
 		m.onEditorDone(msg)
@@ -752,14 +831,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// key routes one keypress. Dialogs and the fullscreen diff get first claim;
+// key routes one keypress. Dialogs and the fullscreen panel get first claim;
 // what remains goes to the input area.
 func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 	if m.full != nil {
-		if m.full.key(msg) {
-			m.full = nil
+		close, cmd := m.full.key(msg)
+		if close {
+			m.closeFullscreen()
 		}
-		return nil
+		return cmd
 	}
 	if m.dlg != nil {
 		done, cmd := m.dlg.update(msg, m.th)
@@ -1072,16 +1152,19 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 func (m *tuiModel) launchOverrideTurn(prompt string, images []provider.Image, tier config.Tier) tea.Cmd {
 	ctx, generation := m.startPlanning()
 	sticky := m.app.sticky
+	unstamped := turnOpening(prompt, images)
 	return func() tea.Msg {
 		result := overrideProbeMsg{generation: generation, prompt: prompt, images: images}
 		if err := ctx.Err(); err != nil {
 			result.err = err
 			return result
 		}
-		opening := provider.UserText(prompt)
-		for _, image := range images {
-			opening.Content = append(opening.Content, image)
+		opening, err := stampTurnOpening(m.app.loop.Session, unstamped)
+		if err != nil {
+			result.err = err
+			return result
 		}
+		result.opening = opening
 		plan := prospectiveTurnPlan(m.app.loop, sticky, opening, m.app.workspace)
 		result.plan = plan
 		rank := m.app.rankOf(tier)
@@ -1195,16 +1278,19 @@ func (m *tuiModel) launchTurn(prompt string, images []provider.Image) tea.Cmd {
 	currentTier := m.app.tier
 	binding := m.app.loop.Binding()
 	sticky := m.app.sticky
+	unstamped := turnOpening(prompt, images)
 	return func() tea.Msg {
 		result := turnPlanMsg{generation: generation, prompt: prompt, images: images}
 		if err := ctx.Err(); err != nil {
 			result.err = err
 			return result
 		}
-		opening := provider.UserText(prompt)
-		for _, image := range images {
-			opening.Content = append(opening.Content, image)
+		opening, err := stampTurnOpening(m.app.loop.Session, unstamped)
+		if err != nil {
+			result.err = err
+			return result
 		}
+		result.opening = opening
 		if _, onLadder := m.app.config.Tier(currentTier.ID); !onLadder {
 			result.plan = prospectiveTurnPlan(m.app.loop, sticky, opening, m.app.workspace)
 			probed, client := currentTier, binding.Provider
@@ -1296,8 +1382,8 @@ func (m *tuiModel) onTurnPlan(msg turnPlanMsg) tea.Cmd {
 		}
 	}
 	m.turnPlanning = false
-	m.beginTurn(msg.prompt)
-	m.launchModelTurn(msg.prompt, msg.images)
+	m.beginTurn(msg.opening.AuthoredText())
+	m.launchModelTurn(msg.opening)
 	return m.spin.Tick
 }
 
@@ -1316,8 +1402,8 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 	}
 	m.applyOverrideBinding(msg)
 	m.turnPlanning = false
-	m.beginTurn(msg.prompt)
-	m.launchModelTurn(msg.prompt, msg.images)
+	m.beginTurn(msg.opening.AuthoredText())
+	m.launchModelTurn(msg.opening)
 	return m.spin.Tick
 }
 
@@ -1376,7 +1462,7 @@ func (m *tuiModel) beginTurn(prompt string) {
 	m.app.watchSt.beginTurn(m.turnCtx)
 }
 
-func (m *tuiModel) launchModelTurn(prompt string, images []provider.Image) {
+func (m *tuiModel) launchModelTurn(opening provider.Message) {
 	decision := m.app.route
 	if decision != nil {
 		copy := *decision
@@ -1395,21 +1481,18 @@ func (m *tuiModel) launchModelTurn(prompt string, images []provider.Image) {
 		decision:   decision,
 		features:   features,
 	}
-	go m.runTurn(m.turnCtx, prompt, images, run)
+	go m.runTurn(m.turnCtx, opening, run)
 }
 
 // runTurn drives one turn on its own goroutine. Everything it reports arrives
 // as messages; the session stays the only thing it writes.
-func (m *tuiModel) runTurn(ctx context.Context, prompt string, images []provider.Image, run turnExecution) {
+func (m *tuiModel) runTurn(ctx context.Context, opening provider.Message, run turnExecution) {
+	prompt := opening.AuthoredText()
 	if run.watcher != nil {
 		run.watcher.StartTurn()
 	}
 	if run.advisor != nil {
 		run.advisor.StartTurn(prompt)
-	}
-	opening := provider.UserText(prompt)
-	for _, img := range images {
-		opening.Content = append(opening.Content, img)
 	}
 	err := m.app.loop.TurnMessage(ctx, opening)
 
@@ -1678,6 +1761,8 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 		m.addNotice("error", "session change returned no session")
 		return m.nextQueuedTurn()
 	}
+	m.closeFullscreen()
+	m.workspaceGeneration++
 	old := m.app.loop.Session
 	runtimeBinding := session.RuntimeBinding{Tier: msg.tier.ID, Target: msg.tier.Target.ID(), Pinned: msg.pinned}
 	if msg.preserveRuntimeTarget {
@@ -1709,7 +1794,16 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 		m.addNotice("error", "session runtime binding was not saved: "+err.Error())
 		return m.nextQueuedTurn()
 	}
-	m.app.loop.Session = msg.sess
+	if err := m.app.loop.BindSession(msg.sess); err != nil {
+		if msg.operation != 0 {
+			m.finishOperation(msg.operation, false)
+		}
+		if msg.sess != old {
+			_ = msg.sess.Close()
+		}
+		m.addNotice("error", "session context was not restored: "+err.Error())
+		return m.nextQueuedTurn()
+	}
 	if m.app.caches != nil {
 		m.app.caches.Reset(msg.tier.Target, cacheFor(msg.tier.Target, m.app.catalog))
 	}
@@ -1720,10 +1814,9 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	if !msg.keepFold {
 		m.app.watchSt.takeFold()
 	}
-	// The swapped-in context has read nothing, whatever the registry
-	// remembers from the old one: reads must happen again before writes,
-	// the same contract resume enforces by starting a fresh process.
-	m.app.loop.Tools.ForgetAllVersions()
+	// BindSession made the context switch indivisible: it restored the new
+	// session's todos and dropped every prior-session file-read token before
+	// publishing the session to the loop.
 	m.tr.reset()
 	// A new log is a new day for the routing dots and the clock; a resumed
 	// session's earlier moves live in its record, not the bar.
@@ -1784,13 +1877,19 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 // a session looks like continuing it rather than opening an empty window.
 func (m *tuiModel) replayHistory(state session.State) {
 	for _, msg := range state.Messages {
+		if msg.Role == provider.RoleUser {
+			// A continuity capsule is provider-visible metadata, not something
+			// the user typed. Render the authored projection once so a stamped
+			// opening neither leaks the hidden block nor splits multi-text input
+			// into several apparent turns.
+			if text := msg.AuthoredText(); text != "" {
+				m.addUser(text)
+			}
+		}
 		for _, b := range msg.Content {
 			switch b := b.(type) {
 			case provider.Text:
-				switch msg.Role {
-				case provider.RoleUser:
-					m.addUser(b.Text)
-				case provider.RoleAssistant:
+				if msg.Role == provider.RoleAssistant {
 					e := m.tr.add(&entry{kind: kindAssistant, text: b.Text})
 					m.tr.finalize(e)
 				}

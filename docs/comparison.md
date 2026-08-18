@@ -1,6 +1,6 @@
 # Product comparison
 
-This comparison is dated 2026-08-17. It separates repository-backed
+This comparison is dated 2026-08-18. It separates repository-backed
 Switchboard behavior, measured results, and external product reports.
 Competitor behavior changes quickly, so external claims should be rechecked
 before use in a release announcement.
@@ -25,9 +25,11 @@ one. It does not prove that another product lacks an internal mechanism.
 | Hard budget | Retry-inclusive dollar ceiling checked before routes, moves, and provider calls | No comparable model-selection budget gate found |
 | Cache state | Per-target modeled warmth with observed provider accounting | Cache discounts may be documented without a live routing belief |
 | Session branching | Append-only logs with fork, named pins, retry, recap, and line provenance | Resume and checkpoint features vary by product |
+| Terminal workbench | Searchable command palette, revision-aware file and literal search, exact Git diff, and built-in semantic LSP views | Terminal and IDE surfaces divide this work differently; integration breadth varies |
 | Verification | User-armed watch, turn bisect, paired races, and a router evaluation gate | Hooks and test commands are common; no equivalent combined surface found |
 | Command safety | Sandbox off by default; opt-in verified confinement; explicit yolo mode for unconfined host access | Products expose sandbox or approval modes with different guarantees |
-| Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP, hooks, and one subagent level | Claude Code leads in plugin and skill breadth; OpenCode leads in provider and LSP breadth |
+| CLI discovery | Static help before config or extension discovery; generated completion follows the dispatcher's closed grammar | Help and completion depth vary by product and release |
+| Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP, hooks, and one subagent level with up to four independent calls in an all-delegate batch | The reviewed guides list skill, plugin, provider, and LSP surfaces that Switchboard does not yet match; this review did not rank ecosystems |
 | Computer control | macOS Accessibility tool under the normal permission engine | Hosted or API computer-use surfaces exist; terminal integration varies |
 
 ## Routing, cost, and cache
@@ -65,6 +67,23 @@ prefix without rewriting the source log. `/pin` names a point, and `/retry`
 replays the recorded opening bytes on the same or another feasible tier.
 `/undo` restores captured write and edit changes without changing the sent
 conversation. Shell and manual side effects remain outside that checkpoint.
+Writes publish atomically. Edit and undo compare the expected file state
+immediately before publication and refuse a mismatch already present. The
+comparison and rename are not one atomic pathname CAS.
+
+`/review [turn]` reads the same checkpoint evidence without consuming or
+restoring it. It shows one retained write/edit mutation turn and refuses stale
+or redirected current bytes; bare `/review` means the open turn and never an
+older fallback. The bounded TUI panel has no apply, rollback, editor, Git-index,
+or worktree action. `/diff` remains the separate repository view against
+`HEAD`, including untracked files.
+
+A bounded, redacted continuity capsule can accompany the append-only history.
+It preserves recorded todo state and the derived next action across a restart,
+fork, retry, or compaction boundary without changing the visible user prompt.
+An undelivered valid capsule is injected once into the appropriate opening or
+compact seed, stays bound to its message boundary, and never grants file-read
+or execution authority.
 
 `/blame <path>` replays recorded write and edit operations against the current
 file. A surviving line can therefore be attributed to a session, turn, tier,
@@ -140,23 +159,32 @@ two adapters. It undercounted by as much as 24 percent. The cost model widens
 its upper bound from that measurement; it does not treat the result as an exact
 provider invoice.
 
-## Current reliability reports
+## What this fixes
 
 Public issue trackers contain useful failure reports, but an issue is not a
 prevalence estimate and may be fixed after this date. Reddit links below are
 individual community anecdotes or discussions, not verified incident rates.
-The items explain which failure modes Switchboard treats as product
-requirements.
+The first column names failure modes Switchboard treats as product requirements;
+it does not claim that every named product or user encounters them. Rows marked
+as design requirements are engineering hazards, not competitor incident claims.
 
 | Reported failure mode | External examples | Switchboard response |
 | --- | --- | --- |
-| Compaction breaks continuity or loses an explicitly selected workflow | [Codex #27555](https://github.com/openai/codex/issues/27555), [Codex #32169](https://github.com/openai/codex/issues/32169), [Claude Code #32407](https://github.com/anthropics/claude-code/issues/32407), [Claude Code #34872](https://github.com/anthropics/claude-code/issues/34872) | The source session stays append-only; compaction has a preview; fork and recap preserve a recoverable path. Switchboard does not claim that summaries can preserve unsupported native workflow controls. |
+| Compaction or restart loses active task state | [Codex #27555](https://github.com/openai/codex/issues/27555), [Codex #32169](https://github.com/openai/codex/issues/32169), [Claude Code #32407](https://github.com/anthropics/claude-code/issues/32407), [Claude Code #34872](https://github.com/anthropics/claude-code/issues/34872) | The source session stays append-only. A bounded continuity capsule carries recorded todo state and the derived next action once across the boundary; compaction still has a preview. Switchboard does not claim that a capsule can preserve unsupported native workflow controls. |
 | Usage is hard to explain or grows unexpectedly | [“300M tokens for a day?”](https://www.reddit.com/r/ClaudeCode/comments/1sgh2dc/300m_tokens_for_a_day/), [“Saying 'hey' cost me 22%”](https://www.reddit.com/r/ClaudeAI/comments/1s3hh29/saying_hey_cost_me_22_of_my_usage_limits/) | `/estimate` gives a pre-send range, `/budget` enforces a hard dollar ceiling, and the durable accounting ledger tags model work by purpose so turns, compaction, learning, advising, and command approval remain distinguishable. |
 | Terminal work hangs or cancellation does not settle cleanly | [Cursor terminal-action thread](https://www.reddit.com/r/cursor/comments/1msdwto/i_really_wish_cursor_would_fix_the_agent_choking/) | Cancellation is bounded and reaches active transports. macOS and Linux terminate the process group or tree; Windows terminates the direct child and warns that descendants may survive. Prompts entered during work stay visible in `/queue`; recovery paths drop them when the workspace cannot be restored safely. |
 | MCP approval has no usable unattended or parent-visible path | [Codex #18268](https://github.com/openai/codex/issues/18268), [Codex #24135](https://github.com/openai/codex/issues/24135), [Claude Code #61315](https://github.com/anthropics/claude-code/issues/61315) | External calls remain explicit permission effects. Headless and race contexts fail closed instead of waiting. Delegated agents do not inherit bridged MCP tools. |
 | Tool and plugin schemas consume context, collide, or load twice | [Claude plugin duplication thread](https://www.reddit.com/r/ClaudeAI/comments/1rij9tr/psa_your_claude_code_plugins_are_probably_loading/), [Cline tool-injection discussion](https://github.com/cline/cline/discussions/8578) | Plugins need explicit Switchboard enablement; executable components also need digest trust. Exact plugin identities and bridged tool-name collisions are resolved deterministically, MCP filters are enforced, and list changes apply on the next run. |
+| File-edit retries or false success leave the working tree hard to trust | [Individual Windsurf editing thread](https://www.reddit.com/r/Codeium/comments/1j9eott/anyone_else_having_issues_with_windsurf_editing/) | First-party writes publish atomically and reject an already-stale read token immediately before publication; `/diff` shows tracked and untracked results. This does not prove an edit is semantically correct or capture shell-written changes in undo. |
+| Session history is hard to search, export, or recover | [Windsurf feature request #127](https://github.com/Exafunction/codeium/issues/127) | Append-only local logs support `/find`, `/export`, `/recap`, resume, and bounded continuity. Provider-side state is not treated as the only copy. |
 | Repository automation or attached output exposes secrets | General risk, not a prevalence claim | Repository hooks require trust, MCP child environments are scrubbed or restricted, and outbound text passes the credential gate. |
 | Agent confidence or instruction following outruns verification | [LocalLLaMA software-engineering thread](https://www.reddit.com/r/LocalLLaMA/comments/1vavh2h/software_engineers_do_you_honestly_get_anything/) | Watch, bisect, race, and the evaluation gate keep test evidence separate from model claims. |
+| An editor, formatter, shell, or overlapping turn changes a file before an agent edit or undo publishes | Design requirement; no competitor prevalence claim | Per-path transactions compare the expected state immediately before atomic publication and refuse an observed mismatch. This is not an atomic pathname CAS against a simultaneous external replacement. |
+| A change review calls the tree clean while untracked work exists, or attributes later bytes to an agent turn | Design requirement; no competitor prevalence claim | `/diff` reads staged, unstaged, and untracked state without changing the index. `/review` separately revalidates exact recorded write/edit mutations and refuses stale current bytes. |
+| A diagnostics panel looks authoritative despite seeing only published documents | Design requirement; no competitor prevalence claim | `/problems` labels freshness and partial push coverage. An empty view explicitly does not claim that the repository passes its verifier. |
+| Extension startup noise either hides the prompt or a mandatory failure | Design requirement; no competitor prevalence claim | A bounded risk-first summary preserves retained mandatory severity, `/doctor extensions` shows every retained ordered detail, and buffer overflow reports its exact loss instead of claiming completeness. |
+| Parallel delegate work hides status, cost, or approval ownership | Design requirement; no competitor prevalence claim | `/tasks` names current-session work and targeted cancellation; approvals serialize with task identity and results rejoin in call order. Task IDs and status are process-local, while delegate session logs remain durable. |
+| Help is unavailable because config, inventory, or provider setup is broken | CLI operability requirement; no competitor prevalence claim | Root, subcommand, and nested action help run before update checks or runtime state. Parse errors, ordinary failures, and cancellation keep distinct shell exit statuses. |
 
 Switchboard still has open limits here. Compaction quality depends on the
 configured summarizer. Shell side effects are not captured by undo or bisect.
@@ -164,14 +192,14 @@ Unconfined user hooks and armed watch commands run with the user's authority.
 Fail-closed MCP behavior can make a native definition unavailable until its
 semantics are implemented.
 
-## Where other tools lead
+## Where Switchboard is narrower
 
-Claude Code has a larger skill and plugin ecosystem, agent-team workflows,
-IDE integrations, and MCP OAuth support. Codex CLI has broader configuration
-profiles, multiple sandbox postures, IDE and cloud surfaces, and a large
-installed extension base. OpenCode supports more providers and language
-servers and has a broader open-source community. Those advantages matter when
-the work depends on ecosystem breadth or a single-vendor surface.
+The August 2026 source review found capabilities that Switchboard does not yet
+match: Claude Code skill and plugin surfaces, agent-team workflows, IDE
+integrations, and MCP OAuth; Codex CLI profiles, sandbox postures, IDE and cloud
+surfaces, and extension distribution; and OpenCode provider and language-server
+catalogs. This is a dated feature inventory, not a normalized measure of
+ecosystem size, adoption, or quality.
 
 Switchboard currently supports four language-server families, one subagent
 level, and computer control only on macOS. Its plugin installer copies exact
@@ -220,10 +248,10 @@ it.
 
 ## External references
 
-Competitor breadth claims were checked against public material available in
-August 2026. The issue links in [Current reliability reports](#current-reliability-reports)
-are primary user reports. They document individual failures or requests, not
-product-wide rates.
+Competitor feature-inventory observations were checked against public guides
+available in August 2026. They are not ecosystem rankings. The issue links in
+[What this fixes](#what-this-fixes) are primary user reports. They document
+individual failures or requests, not product-wide rates.
 
 - [Claude Code feature reference](https://toolsbase.dev/en/reference/claude-code-features)
 - [Claude Code settings reference](https://hidekazu-konishi.com/entry/claude_code_features_settings_reference_2026.html)

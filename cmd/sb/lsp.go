@@ -1,7 +1,7 @@
 package main
 
-// LSP assembly. Three things have to line up before definition and
-// references join the suite: a workspace whose marker names an ecosystem,
+// LSP assembly. Three things have to line up before semantic navigation
+// joins the suite: a workspace whose marker names an ecosystem,
 // that ecosystem's server on the machine, and a trust grant to this
 // checkout — the same grant a repository's declared processes need,
 // because a language server runs what the workspace directs (a Go module's
@@ -10,11 +10,13 @@ package main
 // implies; /trust grant is.
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/switchboard-code/switchboard/internal/lsp"
 	"github.com/switchboard-code/switchboard/internal/tools"
@@ -28,22 +30,26 @@ import (
 // definition and references answer (internal/lsp/live_test.go); a server
 // nobody has run against for real does not belong in the table, which is
 // the §5.2 profile rule applied to language servers.
-var lspCandidates = []struct {
-	marker string
-	detect func() ([]string, bool)
-}{
-	{"go.mod", plainServer("gopls")},
-	{"tsconfig.json", typescriptNative},
-	{"package.json", typescriptNative},
-	{"pyproject.toml", plainServer("pyright-langserver", "--stdio")},
-	{"setup.py", plainServer("pyright-langserver", "--stdio")},
+type lspCandidateSpec struct {
+	marker        string
+	detect        func() ([]string, bool)
+	probe         func([]string) bool
+	openCloseSync bool
+}
+
+var lspCandidates = []lspCandidateSpec{
+	{marker: "go.mod", detect: plainServer("gopls")},
+	{marker: "tsconfig.json", detect: typescriptNative, probe: probeTypeScriptNative},
+	{marker: "package.json", detect: typescriptNative, probe: probeTypeScriptNative},
+	{marker: "pyproject.toml", detect: plainServer("pyright-langserver", "--stdio"), openCloseSync: true},
+	{marker: "setup.py", detect: plainServer("pyright-langserver", "--stdio"), openCloseSync: true},
 	// The marker is the compilation database, not a source extension:
 	// without it clangd guesses flags, and a session built on guessed
 	// flags would answer with guessed symbols. rust-analyzer is absent
 	// under the same rule that keeps the TS5 wrapper out — the
 	// verification machine's binary is a rustup shim that never speaks
 	// LSP, so the handshake has not been demonstrated (live_test.go).
-	{"compile_commands.json", plainServer("clangd")},
+	{marker: "compile_commands.json", detect: plainServer("clangd")},
 }
 
 func plainServer(binary string, args ...string) func() ([]string, bool) {
@@ -56,30 +62,39 @@ func plainServer(binary string, args ...string) func() ([]string, bool) {
 	}
 }
 
-// typescriptNative offers tsc's own language server, which the compiler
-// carries from TypeScript 7 on — the version probe reads nothing from the
-// workspace, only which tsc this machine has. The TS5-era wrapper
-// (typescript-language-server) refuses a 7 installation, and no 5 exists
-// on the verification machine to run it against, so it is deliberately
-// not offered.
+// typescriptNative detects the installed tsc without executing it. The
+// version probe is separate because trust previews must remain data-only:
+// a PATH entry may itself come from the workspace.
 func typescriptNative() ([]string, bool) {
 	path, err := exec.LookPath("tsc")
 	if err != nil {
 		return nil, false
 	}
-	out, err := exec.Command(path, "--version").Output()
+	return []string{path, "--lsp", "-stdio"}, true
+}
+
+// probeTypeScriptNative executes only after the workspace trust gate. tsc's
+// native language server is present from TypeScript 7 onward; the older
+// wrapper is deliberately not substituted.
+func probeTypeScriptNative(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := sanitizedCommandContext(ctx, argv[0], "--version").Output()
 	if err != nil {
-		return nil, false
+		return false
 	}
 	version, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "Version ")
 	if !ok {
-		return nil, false
+		return false
 	}
 	major, _, _ := strings.Cut(version, ".")
 	if n, err := strconv.Atoi(major); err != nil || n < 7 {
-		return nil, false
+		return false
 	}
-	return []string{path, "--lsp", "-stdio"}, true
+	return true
 }
 
 // lspCandidate answers which server would speak for this workspace: the
@@ -111,16 +126,24 @@ func setupLSP(workspace string, trustStore *trust.Store, registry *tools.Registr
 		}
 		name := filepath.Base(argv[0])
 		if trustStore == nil || !trustStore.Trusted(workspace) {
-			return nil, name + " can serve this workspace's " + c.marker +
-				"; /trust grant lets it answer definition and references"
+			return nil, name + " is installed for this workspace's " + c.marker +
+				"; /trust grant lets Switchboard verify and start it for definitions, references, outlines, and symbols"
 		}
-		server := &lsp.Server{Argv: argv, Root: workspace}
-		for _, tool := range []tools.Tool{lsp.NewDefinition(server, registry), lsp.NewReferences(server, registry)} {
+		if c.probe != nil && !c.probe(argv) {
+			continue
+		}
+		server := &lsp.Server{Argv: argv, Root: workspace, OpenCloseSync: c.openCloseSync}
+		for _, tool := range []tools.Tool{
+			lsp.NewDefinition(server, registry),
+			lsp.NewReferences(server, registry),
+			lsp.NewOutline(server, registry),
+			lsp.NewSymbols(server, registry),
+		} {
 			if err := registry.AddExternal(tool); err != nil {
 				return server, "language server tools unavailable: " + err.Error()
 			}
 		}
-		return server, name + " serves definition and references for this workspace"
+		return server, name + " serves definitions, references, outlines, symbols, and diagnostics for this workspace"
 	}
 	return nil, "" // no ecosystem marker with a server on the machine; absent, not broken
 }
