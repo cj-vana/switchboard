@@ -113,3 +113,30 @@ const (
 	maxActivityLines = 6
 	maxActivityBytes = 160
 )
+
+// activityReport is what the subagent did, for the delegating agent to read
+// when the final answer is missing or the run stopped early.
+//
+// Only then. A subagent that answered has answered, and its preamble promised
+// that the final message is what survives; appending a log to a good answer
+// would spend the delegator's context contradicting that. A failure is the
+// case where the answer is not enough, because "it failed" and "it failed
+// after three greps that all came back empty" send the delegator to different
+// next moves.
+func (h *TaskHandle) activityReport() string {
+	if h == nil || h.manager == nil {
+		return ""
+	}
+	h.manager.mu.Lock()
+	defer h.manager.mu.Unlock()
+	state := h.manager.tasks[h.id]
+	if state == nil || len(state.Activity) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("what it did, most recent last:\n")
+	for _, what := range state.Activity {
+		b.WriteString("  " + what + "\n")
+	}
+	return b.String()
+}

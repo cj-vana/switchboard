@@ -130,3 +130,32 @@ func snapshotFor(t *testing.T, m *TaskManager, id string) TaskSnapshot {
 	t.Fatalf("no task %s", id)
 	return TaskSnapshot{}
 }
+
+// "It failed" and "it failed after three greps that came back empty" send the
+// delegating agent to different next moves, so a failure carries what the
+// subagent did. A good answer does not: the preamble promised the final
+// message is what survives, and appending a log would contradict it.
+func TestFailureCarriesWhatTheSubagentDidAndSuccessDoesNot(t *testing.T) {
+	// Two live tasks at once, so the manager needs room for both: a second
+	// Execute on a one-slot manager waits for the first to release.
+	m := NewTaskManager(2)
+	handle, finish := running(t, m, "scout")
+	defer finish()
+	handle.RecordActivity("grep failed pattern-a")
+	handle.RecordActivity("grep failed pattern-b")
+
+	report := handle.activityReport()
+	if !strings.Contains(report, "pattern-a") || !strings.Contains(report, "pattern-b") {
+		t.Fatalf("the report omitted what it did: %q", report)
+	}
+	if !strings.Contains(report, "most recent last") {
+		t.Errorf("the report should say which end is which: %q", report)
+	}
+
+	// A task that did nothing reports nothing rather than an empty heading.
+	quiet, quietDone := running(t, m, "quiet")
+	defer quietDone()
+	if got := quiet.activityReport(); got != "" {
+		t.Errorf("a task with no activity reported %q", got)
+	}
+}

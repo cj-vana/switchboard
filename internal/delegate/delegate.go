@@ -334,13 +334,16 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent, 
 	case ctx.Err() != nil:
 		return tools.Result{}, ctx.Err()
 	case turnErr != nil && answer == "":
-		return tools.Result{Content: fmt.Sprintf("the subagent failed: %v\n%s", turnErr, trailer), IsError: true}, nil
+		return tools.Result{Content: fmt.Sprintf("the subagent failed: %v\n%s%s",
+			turnErr, handle.activityReport(), trailer), IsError: true}, nil
 	case turnErr != nil:
 		// A partial answer with a named failure beats discarding the work.
 		handle.RecordFailure("subagent stopped early: " + turnErr.Error())
-		return tools.Result{Content: fmt.Sprintf("%s\n\n[the subagent stopped early: %v]\n%s", answer, turnErr, trailer)}, nil
+		return tools.Result{Content: fmt.Sprintf("%s\n\n[the subagent stopped early: %v]\n%s%s",
+			answer, turnErr, handle.activityReport(), trailer)}, nil
 	case answer == "":
-		return tools.Result{Content: "the subagent finished without a final answer\n" + trailer, IsError: true}, nil
+		return tools.Result{Content: "the subagent finished without a final answer\n" +
+			handle.activityReport() + trailer, IsError: true}, nil
 	default:
 		return tools.Result{Content: answer + "\n\n" + trailer}, nil
 	}
