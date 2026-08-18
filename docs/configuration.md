@@ -74,10 +74,18 @@ setup.
 The model step offers serving surfaces as well as individual models. The
 catalog prices the models it has verified; it cannot enumerate the models a
 subscription or a compatible server offers, because those belong to the account
-and change without a release. Selecting a surface therefore queries that
-server's own model list. A model id can also be typed, which covers a server
-that does not answer the query, an entitlement that has not propagated, and a
-model published after the catalog revision.
+and change without a release. Every surface the machine is already connected to
+is queried directly, and its models appear in the list beside the catalog's.
+
+Selecting a surface that is not connected yet queries it and reports what it
+said. A server that refuses the request for want of a credential offers a
+masked key prompt in place; the key is stored in the OS credential service and
+the surface is queried again with it. A model id can also be typed, which
+covers a server that does not answer the query, an entitlement that has not
+propagated, and a model published after the catalog revision.
+
+A credential stored anywhere in the TUI takes effect on the next request rather
+than the next launch.
 
 These commands remain available later:
 
