@@ -23,6 +23,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/credential"
 	"github.com/switchboard-code/switchboard/internal/delegate"
 	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/lsp"
 	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
@@ -280,6 +281,7 @@ type tuiModel struct {
 
 	workspaceRuntime    *workspaceRuntime
 	workspaceGeneration uint64
+	lspGeneration       uint64
 
 	pendingAsk chan permission.Response
 
@@ -336,6 +338,8 @@ func runTUI(
 	trustStore *trust.Store,
 	trustErr error,
 	mcpEnv *mcpState,
+	lspServer *lsp.Server,
+	lspNote string,
 	undoRec *checkpoint.Recorder,
 	agents []delegate.Agent,
 	agentNotes []string,
@@ -375,6 +379,8 @@ func runTUI(
 		obs:         obs,
 		trust:       trustStore,
 		mcp:         mcpEnv,
+		lsp:         lspServer,
+		lspNote:     lspNote,
 		undo:        undoRec,
 		agents:      agents,
 		agentNotes:  agentNotes,
@@ -385,6 +391,10 @@ func runTUI(
 	}
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()
+	}
+	if app.lsp != nil {
+		app.lspProblems, app.lspProblemsCancel = app.lsp.Problems().Subscribe()
+		defer app.lspProblemsCancel()
 	}
 
 	m := newTUIModel(app, th, md, ta)
@@ -423,6 +433,9 @@ func runTUI(
 	}
 
 	var initial []tea.Cmd
+	if app.lspProblems != nil {
+		initial = append(initial, waitLSPProblems(app.lsp, app.lspProblems))
+	}
 	if updateCheck {
 		initial = append(initial, startupUpdate(cfg))
 	}
@@ -649,7 +662,26 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.workspaceRuntime != nil {
 			m.workspaceRuntime.invalidate()
 		}
+		if view, ok := m.full.(*lspView); ok {
+			view.stale = true
+		}
 		return m, nil
+
+	case lspLoadedMsg:
+		return m, m.onLSPLoaded(msg)
+
+	case lspProblemsChangedMsg:
+		return m, m.onLSPProblemsChanged(msg)
+
+	case lspCopiedMsg:
+		m.onLSPCopied(msg)
+		return m, nil
+
+	case lspEditorReadyMsg:
+		return m, m.onLSPEditorReady(msg)
+
+	case lspEditorDoneMsg:
+		return m, m.onLSPEditorDone(msg)
 
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {

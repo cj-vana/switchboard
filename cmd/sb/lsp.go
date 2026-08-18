@@ -1,7 +1,7 @@
 package main
 
-// LSP assembly. Three things have to line up before definition and
-// references join the suite: a workspace whose marker names an ecosystem,
+// LSP assembly. Three things have to line up before semantic navigation
+// joins the suite: a workspace whose marker names an ecosystem,
 // that ecosystem's server on the machine, and a trust grant to this
 // checkout — the same grant a repository's declared processes need,
 // because a language server runs what the workspace directs (a Go module's
@@ -112,15 +112,20 @@ func setupLSP(workspace string, trustStore *trust.Store, registry *tools.Registr
 		name := filepath.Base(argv[0])
 		if trustStore == nil || !trustStore.Trusted(workspace) {
 			return nil, name + " can serve this workspace's " + c.marker +
-				"; /trust grant lets it answer definition and references"
+				"; /trust grant lets it answer definitions, references, outlines, and symbols"
 		}
 		server := &lsp.Server{Argv: argv, Root: workspace}
-		for _, tool := range []tools.Tool{lsp.NewDefinition(server, registry), lsp.NewReferences(server, registry)} {
+		for _, tool := range []tools.Tool{
+			lsp.NewDefinition(server, registry),
+			lsp.NewReferences(server, registry),
+			lsp.NewOutline(server, registry),
+			lsp.NewSymbols(server, registry),
+		} {
 			if err := registry.AddExternal(tool); err != nil {
 				return server, "language server tools unavailable: " + err.Error()
 			}
 		}
-		return server, name + " serves definition and references for this workspace"
+		return server, name + " serves definitions, references, outlines, symbols, and diagnostics for this workspace"
 	}
 	return nil, "" // no ecosystem marker with a server on the machine; absent, not broken
 }

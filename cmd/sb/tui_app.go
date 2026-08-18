@@ -63,6 +63,14 @@ type tuiApp struct {
 	// mcp holds the session's connected servers, for /mcp and shutdown.
 	mcp *mcpState
 
+	// lsp is the one lazily started language server assembled before the
+	// provider tool schema froze. Its diagnostics subscription is coalesced;
+	// runTUI owns cancellation and main owns server shutdown.
+	lsp               lspRuntime
+	lspNote           string
+	lspProblems       <-chan uint64
+	lspProblemsCancel func()
+
 	// undo is the per-turn file checkpoint recorder, for /undo.
 	undo *checkpoint.Recorder
 

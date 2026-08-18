@@ -38,6 +38,7 @@ type Server struct {
 	starting     *serverStart
 	client       *Client
 	closed       bool
+	lastError    string
 	problemsOnce sync.Once
 	problems     *ProblemStore
 	// startClient is a test seam; nil uses startWithProblems.
@@ -98,7 +99,10 @@ func (s *Server) get(ctx context.Context) (*Client, error) {
 	closed := s.closed
 	if !closed && attempt.err == nil {
 		s.client = attempt.client
+		s.lastError = ""
 		problems.markAvailable()
+	} else if !closed && attempt.err != nil {
+		s.lastError = boundedStatusError(attempt.err)
 	}
 	if s.starting == attempt {
 		s.starting = nil
@@ -150,6 +154,26 @@ func (s *Server) WorkspaceSymbols(ctx context.Context, query string, limit int) 
 		return nil, false, err
 	}
 	return client.WorkspaceSymbols(ctx, query, limit)
+}
+
+// DefinitionAtSymbol synchronizes path from one exact disk snapshot, locates
+// symbol on the 1-based line, and asks the server for its definition.
+func (s *Server) DefinitionAtSymbol(ctx context.Context, path string, line int, symbol string) ([]Location, error) {
+	client, err := s.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.DefinitionAtSymbol(ctx, path, line, symbol)
+}
+
+// ReferencesAtSymbol synchronizes path from one exact disk snapshot, locates
+// symbol on the 1-based line, and asks the server for its references.
+func (s *Server) ReferencesAtSymbol(ctx context.Context, path string, line int, symbol string) ([]Location, error) {
+	client, err := s.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.ReferencesAtSymbol(ctx, path, line, symbol)
 }
 
 // Close shuts the server down if a call ever started it.
