@@ -192,7 +192,7 @@ func parseRouteTargetIDV2(id RouteTargetID) (RouteTarget, error) {
 // versioned machine key when parameters are explicit; user surfaces should
 // render this label so routing remains inspectable.
 func (t RouteTarget) Display() string {
-	label := fmt.Sprintf("%s/%s/%s", displayTargetComponent(t.Provider), displayTargetComponent(t.Surface), displayTargetComponent(t.ModelID))
+	label := fmt.Sprintf("%s/%s/%s", displayTargetComponent(t.Provider), displayTargetComponent(t.Surface), displayModelComponent(t.ModelID))
 	var params []string
 	if reasoning := t.Params.Reasoning; reasoning != nil {
 		thinking := "think"
@@ -222,10 +222,25 @@ func (t RouteTarget) Display() string {
 	return label
 }
 
+// displayModelComponent renders the model, which is the last component and
+// therefore absorbs everything after the second separator. A slash inside it
+// is not ambiguous for a reader, and namespaced ids are the ordinary case on
+// a compatible endpoint, so quoting every one of them adds noise to the row a
+// user reads most often. Anything else a bare component may not contain is
+// still quoted.
+func displayModelComponent(value string) string {
+	return displayComponent(value, "/")
+}
+
 func displayTargetComponent(value string) string {
+	return displayComponent(value, "")
+}
+
+func displayComponent(value, alsoBare string) string {
 	if value != "" && strings.IndexFunc(value, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
-			r == '-' || r == '_' || r == '.' || r == ':' || r == '@')
+			r == '-' || r == '_' || r == '.' || r == ':' || r == '@' ||
+			strings.ContainsRune(alsoBare, r))
 	}) < 0 {
 		return value
 	}
