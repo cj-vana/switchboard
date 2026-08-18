@@ -73,6 +73,16 @@ type TaskSnapshot struct {
 	StartedAt         time.Time
 	FinishedAt        time.Time
 	Error             string
+
+	// Activity is a bounded tail of what the subagent has been doing, so a
+	// caller can answer "what is it up to" without opening the sub-session.
+	Activity []string
+
+	// SteersSent counts guidance accepted for this task and SteersApplied
+	// counts what the loop has taken up. They differ while a round is in
+	// flight, which is the honest answer to "did it get my message yet".
+	SteersSent    int
+	SteersApplied int
 }
 
 type taskState struct {
@@ -80,6 +90,11 @@ type taskState struct {
 	cancel        context.CancelFunc
 	sequence      uint64
 	reportedError string
+
+	// pendingSteers is guidance queued for the next round boundary. It is
+	// drained by the running loop rather than delivered, because a message
+	// cannot be handed to a model mid-call.
+	pendingSteers []string
 }
 
 // TaskManager owns bounded delegate concurrency, task-local cancellation, and

@@ -13,9 +13,16 @@ import (
 func cmdTasks(m *tuiModel, args string) tea.Cmd {
 	parentID := m.app.loop.Session.ID()
 	fields := strings.Fields(args)
+	if len(fields) > 0 && fields[0] == "steer" {
+		if len(fields) < 3 {
+			return noticeCmd("warn", "usage: /tasks steer <id> <what to tell it>")
+		}
+		return steerTask(m, parentID, fields[1], strings.TrimSpace(
+			strings.TrimPrefix(strings.TrimSpace(args), "steer")[len(fields[1])+1:]))
+	}
 	if len(fields) > 0 {
 		if len(fields) != 2 || fields[0] != "cancel" {
-			return noticeCmd("warn", "usage: /tasks [cancel <id>]")
+			return noticeCmd("warn", "usage: /tasks [cancel <id>] [steer <id> <message>]")
 		}
 		var found *delegate.TaskSnapshot
 		for _, task := range tasksForSession(subagentTasks, parentID) {
@@ -36,6 +43,27 @@ func cmdTasks(m *tuiModel, args string) tea.Cmd {
 
 	m.addInfo(renderTasks(tasksForSession(subagentTasks, parentID), subagentTasks.MaxParallel(), parentID))
 	return nil
+}
+
+// steerTask sends guidance to a task this session owns. A subagent takes it up
+// at its next round boundary, which is the only place a message can be handed
+// to a model that is already working.
+func steerTask(m *tuiModel, parentID, id, message string) tea.Cmd {
+	var found *delegate.TaskSnapshot
+	for _, task := range tasksForSession(subagentTasks, parentID) {
+		if task.ID == id {
+			copied := task
+			found = &copied
+			break
+		}
+	}
+	if found == nil {
+		return noticeCmd("warn", "no delegate task "+workspaceSanitize(id)+" belongs to this session")
+	}
+	if err := subagentTasks.Steer(found.ID, message); err != nil {
+		return noticeCmd("warn", err.Error())
+	}
+	return noticeCmd("", "told "+found.ID+"; it reads this when its current round finishes")
 }
 
 func tasksForSession(manager *delegate.TaskManager, parentID string) []delegate.TaskSnapshot {
@@ -70,10 +98,22 @@ func renderTasks(tasks []delegate.TaskSnapshot, maxParallel int, parentID string
 		}
 		fmt.Fprintf(&b, "    parent %s · delegate %s · %d calls\n",
 			workspaceSanitize(task.ParentSessionID), workspaceSanitize(subsession), task.Calls)
+		if pending := task.SteersSent - task.SteersApplied; task.SteersSent > 0 {
+			// Sent and taken up are different facts while a round is in
+			// flight, and "did it get my message" is the question being asked.
+			line := fmt.Sprintf("    steered %d time(s)", task.SteersSent)
+			if pending > 0 {
+				line += fmt.Sprintf(", %d waiting for the current round to finish", pending)
+			}
+			fmt.Fprintf(&b, "%s\n", line)
+		}
+		for _, what := range task.Activity {
+			fmt.Fprintf(&b, "      %s\n", workspaceSanitize(what))
+		}
 		if task.Error != "" {
 			fmt.Fprintf(&b, "    %s\n", workspaceSanitize(task.Error))
 		}
 	}
-	b.WriteString("\n  /tasks cancel <id> stops one queued or running delegate only")
+	b.WriteString("\n  /tasks cancel <id> stops one; /tasks steer <id> <message> tells one something mid-task")
 	return strings.TrimRight(b.String(), "\n")
 }

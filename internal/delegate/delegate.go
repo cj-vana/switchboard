@@ -312,6 +312,10 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent, 
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("could not assemble the subagent: %v", err), IsError: true}, nil
 	}
+	// Guidance queued while this runs is taken up at the loop's own round
+	// boundaries. Nothing else can deliver it: a model mid-call has no seam
+	// for a message, and a tool result is not the place to put one.
+	loop.Inject = handle.injectSteering
 
 	started := time.Now()
 	turnErr := loop.Turn(ctx, in.Task)
@@ -373,6 +377,14 @@ type forwarding struct {
 func (f *forwarding) ThinkingDelta(string) {}
 func (f *forwarding) TextDelta(string)     {}
 
+// handle, when set, receives the same activity the parent observer sees, so a
+// caller can ask what a running task is doing without opening its session.
+func (f *forwarding) note(what string) {
+	if f.handle != nil {
+		f.handle.RecordActivity(what)
+	}
+}
+
 func (f *forwarding) ToolStart(call provider.ToolUse, req permission.Request) {
 	if call.Name == "todo" {
 		return
@@ -386,9 +398,29 @@ func (f *forwarding) ToolEnd(call provider.ToolUse, req permission.Request, res 
 	if call.Name == "todo" {
 		return
 	}
+	// The completed call, not the started one: a status answer wants what the
+	// task has done, and a call in flight is already visible as the last line
+	// with no verdict beside it.
+	verdict := "ok"
+	if res.IsError {
+		verdict = "failed"
+	}
+	f.note(fmt.Sprintf("%s %s %s", call.Name, verdict, describeCall(req)))
 	call.ID = f.task.ID + "/" + call.ID
 	req = attributeRequest(f.task, req)
 	f.parent.ToolEnd(call, req, res, took)
+}
+
+// describeCall is the shortest true thing about what a call touched: the
+// command it ran or the path it took, and nothing when it named neither.
+func describeCall(req permission.Request) string {
+	switch {
+	case len(req.Argv) > 0:
+		return strings.Join(req.Argv, " ")
+	case req.Path != "":
+		return req.Path
+	}
+	return ""
 }
 
 func (f *forwarding) ToolBatchEnd(ctx context.Context) { f.parent.ToolBatchEnd(ctx) }
