@@ -43,6 +43,29 @@ type watcher struct {
 
 	mu    sync.Mutex
 	moves int
+
+	// paused stops the policy moving the primary, without stopping the
+	// observation behind it. Signals keep being detected and recorded, so /why
+	// still answers what the router would have done, and the advisor still has
+	// the stream it reads. Turning routing off is a decision about who moves
+	// the rung, not about whether the session is watched.
+	paused bool
+}
+
+// setPaused turns automatic movement off or on. A pause takes effect from the
+// next assessment; a move already committed stands, because unwinding a rung
+// the user has seen and a provider has been billed for would be a second
+// surprise rather than the removal of the first.
+func (w *watcher) setPaused(paused bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.paused = paused
+}
+
+func (w *watcher) isPaused() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.paused
 }
 
 func newWatcher(inner agent.Observer, sticky *route.Sticky, maxRank int, onMove func(context.Context, int, string) (func() bool, func(), bool)) *watcher {
@@ -130,6 +153,12 @@ func (w *watcher) assess(ctx context.Context) {
 		return
 	}
 	move := w.sticky.Assess(w.maxRank)
+	if w.isPaused() {
+		// Assessed and discarded rather than never assessed: the policy's own
+		// counters advance, so turning routing back on resumes from what the
+		// session actually looks like instead of from a standing start.
+		return
+	}
 	switch {
 	case move.Direction != 0:
 		if w.onMove == nil {

@@ -423,6 +423,8 @@ func runTUI(
 	// a delegate's stumbles must never escalate the primary.
 	subagentForward.set(obs)
 	app.watcher = newWatcher(obs, sticky, len(cfg.Tiers)-1, app.moveTo)
+	// The setting outlives the process, so a rebuilt watcher inherits it.
+	app.watcher.setPaused(!cfg.RouteAutoOn())
 	loop.SetObserver(app.watcher)
 	loop.Asker = &tuiAsker{p: p}
 	loop.Tools.SetQuestioner(&tuiQuestioner{p: p})

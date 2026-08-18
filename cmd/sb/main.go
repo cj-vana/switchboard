@@ -430,6 +430,7 @@ func run() error {
 	r.route = routeDec
 	r.sticky = sticky
 	r.watcher = newWatcher(out, sticky, len(cfg.Tiers)-1, r.moveTo)
+	r.watcher.setPaused(!cfg.RouteAutoOn())
 	loop.SetObserver(r.watcher)
 
 	r.banner(sess, resumed)

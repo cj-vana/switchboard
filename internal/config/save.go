@@ -183,6 +183,16 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
+	if !c.RouteAutoOn() {
+		off := false
+		if err := encode(&buf, struct {
+			Routing routingEntry `toml:"routing"`
+		}{routingEntry{Auto: &off}}); err != nil {
+			return nil, err
+		}
+		buf.WriteString("\n")
+	}
+
 	if c.Theme != "" || !c.NotifyOn() {
 		ui := uiEntry{Theme: c.Theme}
 		// Absent means on, so the file carries the setting only when it is

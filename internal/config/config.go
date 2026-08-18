@@ -93,6 +93,13 @@ type Config struct {
 	// as a percentage. Default 85.
 	CompactAtPercent int
 
+	// RouteAuto lets the escalation policy move the primary mid-task on its
+	// own signals. Default on: a visible move beats a session spent on the
+	// wrong rung. Off keeps every rung change the user's, and the signals are
+	// still detected and recorded, so /why answers what would have happened.
+	// Read it through RouteAutoOn.
+	RouteAuto *bool
+
 	// Theme is the TUI color theme, persisted so /theme survives a restart.
 	// Empty means the built-in default; the TUI owns what names are valid.
 	Theme string
@@ -243,6 +250,9 @@ func (c *Config) AuthFor(providerName string) credential.Settings {
 	return c.Auth[providerName]
 }
 
+// RouteAutoOn is how the routing setting is read: absent means on.
+func (c *Config) RouteAutoOn() bool { return c.RouteAuto == nil || *c.RouteAuto }
+
 // NotifyOn is how the bell setting is read: absent means on.
 func (c *Config) NotifyOn() bool {
 	return c.Notify == nil || *c.Notify
@@ -275,6 +285,7 @@ type file struct {
 	Providers map[string]providerEntry `toml:"providers"`
 	Updates   updatesEntry             `toml:"updates"`
 	Compact   compactEntry             `toml:"compact"`
+	Routing   routingEntry             `toml:"routing"`
 	UI        uiEntry                  `toml:"ui"`
 	Limits    limitsEntry              `toml:"limits"`
 	Execution executionEntry           `toml:"execution"`
@@ -305,6 +316,12 @@ type limitsEntry struct {
 type compactEntry struct {
 	Auto      *bool `toml:"auto,omitempty"`
 	AtPercent int   `toml:"at_percent,omitempty"`
+}
+
+// routingEntry holds the escalation setting. Auto is a *bool so "absent" and
+// "explicitly off" are different facts: the default is on.
+type routingEntry struct {
+	Auto *bool `toml:"auto,omitempty"`
 }
 
 // uiEntry holds presentation settings. They live in the config rather than a
@@ -466,6 +483,7 @@ func LoadFile(path string) (*Config, error) {
 	if f.Compact.Auto != nil {
 		c.CompactAuto = *f.Compact.Auto
 	}
+	c.RouteAuto = f.Routing.Auto
 	if f.Compact.AtPercent != 0 {
 		if f.Compact.AtPercent < 50 || f.Compact.AtPercent > 95 {
 			// Below half the window it would compact constantly; above 95 it

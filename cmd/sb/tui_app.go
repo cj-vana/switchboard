@@ -287,6 +287,8 @@ func (a *tuiApp) bind(tier config.Tier, client provider.Provider, pin bool) {
 		a.sticky.Pin(rank)
 	}
 	a.watcher = newWatcher(a.obs, a.sticky, len(a.config.Tiers)-1, a.moveTo)
+	// The setting outlives the process, so a rebuilt watcher inherits it.
+	a.watcher.setPaused(!a.config.RouteAutoOn())
 	a.loop.SetObserver(a.watcher)
 	// The advisor survives the rebuild by wrapping whatever replaced its
 	// inner observer; dropping it silently on a tier switch would turn it off
