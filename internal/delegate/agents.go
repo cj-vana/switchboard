@@ -58,9 +58,19 @@ func LoadAgents(workspace string, validTools []string) (agents []Agent, notes []
 		dir      string
 		fromHome bool
 	}
-	dirs := []source{{filepath.Join(workspace, ".switchboard", "agents"), false}}
+	// Native .claude/agents definitions are read alongside this project's own,
+	// the way native skills already are: a definition is a prompt plus two
+	// defaults, and one written for the neighboring tool describes the same
+	// thing. Switchboard's own directory is consulted first at each scope, so
+	// a name defined in both resolves here.
+	dirs := []source{
+		{filepath.Join(workspace, ".switchboard", "agents"), false},
+		{filepath.Join(workspace, ".claude", "agents"), false},
+	}
 	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, source{filepath.Join(home, ".switchboard", "agents"), true})
+		dirs = append(dirs,
+			source{filepath.Join(home, ".switchboard", "agents"), true},
+			source{filepath.Join(home, ".claude", "agents"), true})
 	}
 
 	seen := map[string]bool{}
@@ -154,10 +164,22 @@ func splitTools(value string) []string {
 	var out []string
 	for _, f := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' }) {
 		if f = strings.ToLower(strings.TrimSpace(f)); f != "" {
+			if mapped, ok := nativeToolNames[f]; ok {
+				f = mapped
+			}
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// nativeToolNames translates the neighboring tool's spelling for a capability
+// this suite also has. A tools list is a restriction, so a name that cannot be
+// translated must keep failing the check rather than being dropped: honoring
+// a narrowing means applying it, and an exact correspondence is applying it,
+// while a guess would hand the subagent something its author withheld.
+var nativeToolNames = map[string]string{
+	"bash": "exec",
 }
 
 func sortedNames(set map[string]bool) []string {
