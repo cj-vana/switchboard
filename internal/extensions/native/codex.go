@@ -645,8 +645,14 @@ func reportUnresolvedCodexEnablement(configPath string, plugins map[string]codex
 			addDiagnostic(result, extensions.SeverityWarning, "unsupported-plugin-policy", configPath,
 				fmt.Sprintf("enabled Codex plugin %q declares native MCP policy; no Switchboard permission is inferred", id))
 		}
-		addDiagnostic(result, extensions.SeverityError, "enabled-plugin-install-unresolved", configPath,
-			fmt.Sprintf("Codex plugin %q is enabled in user config, but no authoritative installed-root registry is available; catalogs and caches are not substituted or scanned", id))
+		// A warning rather than an error: nothing here is broken and nothing
+		// in this build is degraded. Codex enabled a plugin in its own config
+		// and this build declines to guess where it was installed, which is a
+		// documented limit rather than a failure, and one the user cannot act
+		// on from here. Reported as an error it filled the first screen with
+		// red for a condition that is working as designed.
+		addDiagnostic(result, extensions.SeverityWarning, "enabled-plugin-install-unresolved", configPath,
+			fmt.Sprintf("Codex plugin %q is enabled for Codex and is not loaded here; its install location is not discoverable and this build does not guess at one", id))
 	}
 }
 

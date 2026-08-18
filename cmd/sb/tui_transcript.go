@@ -267,12 +267,48 @@ func (t *transcript) renderUncached(e *entry) []string {
 	case kindRaw:
 		return strings.Split(e.text, "\n")
 	default: // kindInfo
-		lines := wrapPlain(terminaltext.Display(e.text), w)
-		for i, l := range lines {
-			lines[i] = t.th.dim.Render(l)
-		}
-		return lines
+		return t.renderInfo(terminaltext.Display(e.text), w)
 	}
+}
+
+// renderInfo draws what a command answered.
+//
+// A command's output is not conversation and should not read as it: /doctor,
+// /tasks, and /context were dim prose in the same column as the model's
+// replies, so a screen of them looked like the session talking to itself.
+// This is the transcript's own card language turned to the side that is the
+// tool rather than the person — a rail down the left, the first line as the
+// heading commands already write, and the body indented under it.
+func (t *transcript) renderInfo(text string, w int) []string {
+	// The rail costs exactly what it draws. Commands lay their output out in
+	// columns, and every column reserved here is one the command's own
+	// alignment loses, so nothing is taken beyond the two cells of rail and
+	// the page margin the transcript adds.
+	inner := w - 3
+	if inner < 20 {
+		inner = 20
+	}
+	rail := t.th.faint.Render("│ ")
+
+	heading, body, _ := strings.Cut(text, "\n")
+	lines := []string{t.th.faint.Render("╭ ") + t.th.bold.Render(heading)}
+	for _, paragraph := range strings.Split(body, "\n") {
+		if strings.TrimSpace(paragraph) == "" {
+			lines = append(lines, rail)
+			continue
+		}
+		// Leading indentation is meaningful in these blocks — commands lay
+		// out columns with it — so it is preserved and the wrap applies to
+		// what is left.
+		indent := paragraph[:len(paragraph)-len(strings.TrimLeft(paragraph, " "))]
+		for _, l := range wrapPlain(strings.TrimLeft(paragraph, " "), inner-lipgloss.Width(indent)) {
+			lines = append(lines, rail+t.th.dim.Render(indent+l))
+		}
+	}
+	if len(lines) > 1 {
+		lines = append(lines, t.th.faint.Render("╰"))
+	}
+	return lines
 }
 
 // The transcript's glyph language is the patch panel: a heavy bar marks what

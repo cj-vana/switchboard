@@ -8,6 +8,7 @@ package main
 // entry nor its original order.
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +104,7 @@ func aggregateStartupNotes(notes []mcpNote, droppedCounts ...int) startupNoteRep
 	// failures still bypass deduplication in Highlights, so identical required
 	// components remain individually visible without being mislabeled unique.
 	seen := make(map[string]struct{}, len(notes))
-	var visibleWarnings, ordinaryErrors []mcpNote
+	var visibleWarnings, ordinaryErrors, otherWarnings []mcpNote
 	unique := 0
 	for _, original := range notes {
 		note := sanitizeStartupNote(original)
@@ -129,10 +130,19 @@ func aggregateStartupNotes(notes []mcpNote, droppedCounts ...int) startupNoteRep
 		if high {
 			continue
 		}
-		if isVisibleStartupWarning(note) {
+		switch {
+		case isVisibleStartupWarning(note):
 			visibleWarnings = append(visibleWarnings, note)
-		} else if isOrdinaryStartupError(note) {
+		case isOrdinaryStartupError(note):
 			ordinaryErrors = append(ordinaryErrors, note)
+		case severityRank(note.level) >= severityRank("warn"):
+			// Everything else that still calls itself a warning. It ranks
+			// below the security vocabulary and below an error, but a warning
+			// that is the only one of its kind should not be unseeable: with
+			// classes collapsed, one such finding costs one line, and the
+			// count in the summary no longer stands for something a user was
+			// never shown at all.
+			otherWarnings = append(otherWarnings, note)
 		}
 	}
 
@@ -140,9 +150,21 @@ func aggregateStartupNotes(notes []mcpNote, droppedCounts ...int) startupNoteRep
 	// ordinary errors. Full text for every omitted note remains in Details.
 	sortStartupNotes(visibleWarnings)
 	sortStartupNotes(ordinaryErrors)
-	noncritical := append(visibleWarnings, ordinaryErrors...)
+	sortStartupNotes(otherWarnings)
+	noncritical := append(append(visibleWarnings, ordinaryErrors...), otherWarnings...)
+	// One finding repeated across five plugins is one thing to know, not five,
+	// and it was taking every slot the screen had — so the other four findings
+	// went unseen behind a count. Notes that differ only in which name they
+	// quote collapse to their first, which then says how many it stands for.
+	noncritical, classCounts := collapseStartupNoteClasses(noncritical)
 	visibleNoncritical := min(len(noncritical), startupNoncriticalHighlightLimit)
 	for _, note := range noncritical[:visibleNoncritical] {
+		if more := classCounts[startupNoteClassKey(note)] - 1; more > 0 {
+			note.text = boundedStartupHighlight(note).text +
+				" (and " + strconv.Itoa(more) + " more like it)"
+			report.Highlights = append(report.Highlights, note)
+			continue
+		}
 		report.Highlights = append(report.Highlights, boundedStartupHighlight(note))
 	}
 	omittedNoncritical := len(noncritical) - visibleNoncritical
@@ -229,6 +251,35 @@ func classifyStartupNote(text string) startupNoteCategory {
 	}
 	return startupNoteOther
 }
+
+// collapseStartupNoteClasses keeps the first note of each class, in order, and
+// counts how many the class held. Details keeps every one of them verbatim;
+// this governs only which get a line on the opening screen.
+func collapseStartupNoteClasses(notes []mcpNote) ([]mcpNote, map[string]int) {
+	counts := make(map[string]int, len(notes))
+	kept := make([]mcpNote, 0, len(notes))
+	for _, note := range notes {
+		key := startupNoteClassKey(note)
+		counts[key]++
+		if counts[key] == 1 {
+			kept = append(kept, note)
+		}
+	}
+	return kept, counts
+}
+
+// startupNoteClassKey is the shape of a finding with the particulars removed:
+// quoted names and bracketed paths drop out, so "plugin \"a\" is not loaded"
+// and "plugin \"b\" is not loaded" are one class. Deliberately coarser than
+// semanticStartupNoteKey, which decides what is genuinely a duplicate; this
+// one decides only what is worth a separate line.
+func startupNoteClassKey(note mcpNote) string {
+	text := quotedStartupParticulars.ReplaceAllString(note.text, `""`)
+	text = strings.ToLower(strings.Join(strings.Fields(text), " "))
+	return strings.ToLower(strings.TrimSpace(note.level)) + "\x00" + trimStartupSourceLocation(text)
+}
+
+var quotedStartupParticulars = regexp.MustCompile(`"[^"]*"`)
 
 func semanticStartupNoteKey(note mcpNote, category startupNoteCategory) string {
 	level := strings.ToLower(strings.TrimSpace(note.level))

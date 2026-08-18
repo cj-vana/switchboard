@@ -281,3 +281,48 @@ func startupNoteText(notes []mcpNote) string {
 	}
 	return b.String()
 }
+
+// The reported screen: five Codex plugins enabled in another tool's config,
+// each producing the same finding with a different name quoted in it. They
+// took every highlight slot the opening screen has, so four unrelated
+// findings were pushed behind a count and the first thing a user saw was five
+// near-identical rows about plugins this build was never going to load.
+func TestAggregateStartupNotesCollapsesOneFindingRepeatedAcrossNames(t *testing.T) {
+	var notes []mcpNote
+	for _, plugin := range []string{"browser@codex", "build-in@codex", "build-mcp@codex", "chrome@codex", "cloudflare@codex"} {
+		notes = append(notes, mcpNote{
+			level: "warn",
+			text: `Codex plugin "` + plugin + `" is enabled for Codex and is not loaded here; ` +
+				`its install location is not discoverable and this build does not guess at one`,
+		})
+	}
+	notes = append(notes,
+		mcpNote{level: "warn", text: "workspace trust is not granted; repository hooks stay off"},
+		mcpNote{level: "warn", text: "an MCP server declared a tool name that collides"},
+	)
+
+	report := aggregateStartupNotes(notes, 0)
+	highlights := startupNoteText(report.Highlights)
+
+	// The highlight is truncated for width, so the count is taken on the part
+	// of the finding that always survives.
+	if got := strings.Count(highlights, "Codex plugin"); got != 1 {
+		t.Fatalf("one finding repeated across five names should occupy one line, got %d:\n%s", got, highlights)
+	}
+	if !strings.Contains(highlights, "and 4 more like it") {
+		t.Errorf("the collapsed line has to say how many it stands for:\n%s", highlights)
+	}
+	// The slots it was consuming now carry the findings that were hidden.
+	for _, want := range []string{"workspace trust", "collides"} {
+		if !strings.Contains(highlights, want) {
+			t.Errorf("a distinct finding stayed hidden behind the repeats: %q\n%s", want, highlights)
+		}
+	}
+	// Every note is still recoverable in full.
+	details := startupNoteText(report.Details)
+	for _, plugin := range []string{"browser@codex", "cloudflare@codex"} {
+		if !strings.Contains(details, plugin) {
+			t.Errorf("collapsing dropped %q from the details:\n%s", plugin, details)
+		}
+	}
+}

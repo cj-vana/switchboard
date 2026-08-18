@@ -160,10 +160,10 @@
   ],
   "diagnostics": [
     {
-      "severity": "error",
+      "severity": "warning",
       "code": "enabled-plugin-install-unresolved",
       "path": "$ROOT/codex-user/config.toml",
-      "message": "Codex plugin \"alpha@personal\" is enabled in user config, but no authoritative installed-root registry is available; catalogs and caches are not substituted or scanned"
+      "message": "Codex plugin \"alpha@personal\" is enabled for Codex and is not loaded here; its install location is not discoverable and this build does not guess at one"
     },
     {
       "severity": "warning",
