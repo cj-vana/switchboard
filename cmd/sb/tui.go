@@ -53,6 +53,11 @@ type toolEndMsg struct {
 type noticeMsg struct {
 	level, text string
 
+	// resumed marks a notice whose flow has already queued what comes next.
+	// A host that advances on every notice would otherwise take a step of its
+	// own alongside the one the flow scheduled.
+	resumed bool
+
 	// operation identifies an exclusive asynchronous UI operation. Such a
 	// notice is also its completion signal, so Update can release busy state
 	// only if it still belongs to the session that launched it.
@@ -693,7 +698,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
-			store := storeSecretCmd(msg.ref, msg.writer, msg.storeName, value)
+			store := storeSecretCmd(m.app.providers, msg.ref, msg.writer, msg.storeName, value)
 			if msg.then != nil {
 				return tea.Sequence(store, msg.then)
 			}

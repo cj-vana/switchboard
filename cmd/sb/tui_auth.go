@@ -195,12 +195,20 @@ func (d *secretDialog) view(width int, th *theme) string {
 
 // storeSecretCmd writes the credential off the UI goroutine and reports where
 // it landed, never what it was.
-func storeSecretCmd(ref credential.Ref, writer credential.Writer, storeName, value string) tea.Cmd {
+//
+// The adapters built before the key existed are dropped on the way out. An
+// adapter caches the credential it was constructed with, so without this the
+// key is stored, the store is reported, and every request for the rest of the
+// session still goes out unauthenticated.
+func storeSecretCmd(reg *providers, ref credential.Ref, writer credential.Writer, storeName, value string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := writer.Set(ctx, ref, value); err != nil {
 			return noticeMsg{level: "error", text: "storing " + ref.String() + " failed: " + err.Error()}
+		}
+		if reg != nil {
+			reg.reset()
 		}
 		return noticeMsg{text: "stored " + ref.String() + " in the " + storeName}
 	}

@@ -11,12 +11,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
 	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
@@ -50,12 +53,12 @@ const removeRungID = "\x00remove"
 func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalog, cfg *config.Config) ([]pickerItem, map[string]modelChoice) {
 	choices := map[string]modelChoice{}
 	var items []pickerItem
-	add := func(id string, c modelChoice, label string) {
+	add := func(id string, c modelChoice, label, desc string) {
 		if _, dup := choices[id]; dup {
 			return
 		}
 		choices[id] = c
-		items = append(items, pickerItem{id: id, label: label, desc: c.desc})
+		items = append(items, pickerItem{id: id, label: label, desc: desc})
 	}
 
 	local, localErr := reg.localServer().Models(ctx)
@@ -63,7 +66,7 @@ func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalo
 		sort.Strings(local)
 		for _, name := range local {
 			c := modelChoice{ref: "ollama/" + name, provider: "ollama", surface: "local", desc: "pulled locally"}
-			add(c.ref+" "+c.surface, c, c.ref)
+			add(c.ref+" "+c.surface, c, c.ref, c.desc)
 		}
 	}
 	for _, info := range cat.Entries() {
@@ -74,12 +77,94 @@ func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalo
 			desc:         catalogDesc(info),
 			effortLevels: info.EffortLevels,
 		}
-		add(c.ref+" "+c.surface, c, c.ref)
+		add(c.ref+" "+c.surface, c, c.ref, c.desc)
 	}
+	// Everything the machine is actually connected to, asked live. The
+	// catalog above is what has been priced; this is what the account holds,
+	// and for a plan or a compatible server the two have almost nothing in
+	// common. A surface that is not connected yet contributes nothing here
+	// and keeps its browse row, which is where it gets connected.
+	for _, listed := range listConnectedSurfaces(ctx, reg, cat, cfg) {
+		for _, name := range listed.models {
+			c := modelChoice{
+				ref:          listed.surface.provider + "/" + name,
+				provider:     listed.surface.provider,
+				surface:      listed.surface.surface,
+				desc:         listed.surface.desc,
+				effortLevels: listed.surface.effortLevels,
+			}
+			add(c.ref+" "+c.surface, c, c.ref, c.desc)
+		}
+	}
+
 	for _, c := range browsableSurfaces(cat, cfg, localErr) {
-		add(browsePrefix+c.provider+"/"+c.surface, c, c.provider+"/"+c.surface+"…")
+		add(browsePrefix+c.provider+"/"+c.surface, c, c.provider+"/"+c.surface+"…",
+			c.desc+" · pick from what this server serves")
 	}
 	return items, choices
+}
+
+// surfaceModels is one surface's live answer.
+type surfaceModels struct {
+	surface modelChoice
+	models  []string
+}
+
+// listConnectedSurfaces asks every surface that can answer right now what it
+// serves, all at once. Concurrently because the deadline is the picker's and
+// three servers in sequence would spend it; only where a credential already
+// resolves, because the alternative is a request that is certain to be
+// refused and a wait for it on every open.
+func listConnectedSurfaces(ctx context.Context, reg *providers, cat *catalog.Catalog, cfg *config.Config) []surfaceModels {
+	candidates := browsableSurfaces(cat, cfg, nil)
+	out := make([]surfaceModels, len(candidates))
+
+	var wg sync.WaitGroup
+	for i, c := range candidates {
+		if c.provider == ollama.Name {
+			continue // already listed live, above
+		}
+		if !surfaceConnected(ctx, cfg, c.provider, c.surface) {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, c modelChoice) {
+			defer wg.Done()
+			names, err := listSurfaceModels(ctx, reg, c.provider, c.surface)
+			if err != nil {
+				return
+			}
+			out[i] = surfaceModels{surface: c, models: names}
+		}(i, c)
+	}
+	wg.Wait()
+
+	listed := out[:0]
+	for _, s := range out {
+		if len(s.models) > 0 {
+			listed = append(listed, s)
+		}
+	}
+	return listed
+}
+
+// surfaceConnected reports whether a surface can be asked for its models
+// without prompting for anything first. An address it cannot know and a key
+// it has not been given are both the browse flow's job, not this one's.
+func surfaceConnected(ctx context.Context, cfg *config.Config, providerName, surface string) bool {
+	if surfaceNeedsAddress(providerName, surface) {
+		// An address the user typed is itself the connection. Whether that
+		// server also wants a key is its own answer to give, and plenty of
+		// compatible servers want none; predicting it here would hide every
+		// keyless endpoint from the list.
+		return cfg.ProviderForTarget(providerName, surface).BaseURL != ""
+	}
+	if needsNoCredential(modelChoice{provider: providerName, surface: surface}) {
+		return true
+	}
+	_, err := credential.Chain(cfg.AuthFor(providerName)).Get(
+		ctx, credential.Ref{Provider: providerName, Account: surface})
+	return err == nil
 }
 
 // browsableSurfaces is every surface worth opening, in the order a first run
@@ -111,7 +196,7 @@ func browsableSurfaces(cat *catalog.Catalog, cfg *config.Config, localErr error)
 		add(modelChoice{
 			provider:     info.Provider,
 			surface:      info.Surface,
-			desc:         catalogDesc(info) + " · ask this server what it serves",
+			desc:         catalogDesc(info),
 			effortLevels: info.EffortLevels,
 		})
 	}
@@ -121,7 +206,7 @@ func browsableSurfaces(cat *catalog.Catalog, cfg *config.Config, localErr error)
 	// every request at zero.
 	add(modelChoice{
 		provider: openaicompat.Name, surface: genericCompat,
-		desc: "any OpenAI-compatible server · " + orNone(cfg.ProviderForTarget(openaicompat.Name, genericCompat).BaseURL),
+		desc: "OpenAI-compatible server at " + orNone(cfg.ProviderForTarget(openaicompat.Name, genericCompat).BaseURL),
 	})
 	return out
 }

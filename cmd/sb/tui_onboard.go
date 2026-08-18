@@ -105,6 +105,7 @@ func (m *onboardModel) connectStep() tea.Cmd {
 						if err := wireCodex(cfg); err != nil {
 							return onboardWiredMsg{err: err}
 						}
+						reg.reset()
 						return onboardWiredMsg{note: "openai wired to your Codex CLI login"}
 					}
 				}
@@ -187,6 +188,11 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.text != "" {
 			m.lines = append(m.lines, msg.text)
 		}
+		if msg.resumed {
+			// Something else is already queued to continue this flow; taking
+			// a step here as well would run two of them.
+			return m, nil
+		}
 		if m.step == stepConnect {
 			return m, m.connectStep()
 		}
@@ -197,14 +203,27 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
-			return func() tea.Msg {
+			store := func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				if err := msg.writer.Set(ctx, msg.ref, value); err != nil {
 					return onboardKeyStoredMsg{note: "storing the key failed: " + err.Error()}
 				}
-				return onboardKeyStoredMsg{note: "stored " + msg.ref.String() + " in the " + msg.storeName}
+				// The adapters built before the key existed cached its
+				// absence; the next request has to be built with it.
+				m.reg.reset()
+				note := "stored " + msg.ref.String() + " in the " + msg.storeName
+				if msg.then != nil {
+					return noticeMsg{text: note, resumed: true}
+				}
+				return onboardKeyStoredMsg{note: note}
 			}
+			if msg.then != nil {
+				// The flow that asked for the key resumes with it in place,
+				// rather than the wizard deciding what comes next.
+				return tea.Sequence(store, msg.then)
+			}
+			return store
 		})
 		return m, nil
 

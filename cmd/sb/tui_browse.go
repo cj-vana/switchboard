@@ -36,6 +36,7 @@ const (
 	browsePrefix  = "\x00browse "
 	typeModelID   = "\x00type-model"
 	setAddressID  = "\x00set-address"
+	storeSecretID = "\x00store-secret"
 	genericCompat = "generic"
 )
 
@@ -107,6 +108,17 @@ func browseSurfaceCmd(reg *providers, cfg *config.Config, choice modelChoice, on
 		}
 
 		var items []pickerItem
+		// A server that refused the request has not told us what it serves,
+		// and it never will until it is authenticated. Offering the key here
+		// is the difference between a real list and asking the user to guess
+		// a model id, which is the thing this menu exists to stop.
+		if refusedForAuth(listErr) {
+			items = append(items, pickerItem{
+				id:    storeSecretID,
+				label: "store a credential…",
+				desc:  "this server refused: " + firstLine(listErr.Error()),
+			})
+		}
 		for _, name := range names {
 			items = append(items, pickerItem{id: name, label: providerName + "/" + name, desc: choice.desc})
 		}
@@ -136,6 +148,8 @@ func browseSurfaceCmd(reg *providers, cfg *config.Config, choice modelChoice, on
 			items: items,
 			action: func(id string) tea.Cmd {
 				switch id {
+				case storeSecretID:
+					return askSurfaceSecretCmd(providerName, surface, again)
 				case setAddressID:
 					return askAddressCmd(reg, cfg, providerName, surface, again)
 				case typeModelID:
@@ -188,6 +202,36 @@ func askAddressCmd(reg *providers, cfg *config.Config, providerName, surface str
 	}
 }
 
+// askSurfaceSecretCmd takes the credential a surface just refused a request
+// for, and reopens the surface once it is stored. The prompt is the same
+// masked one /login uses and lands in the same store.
+func askSurfaceSecretCmd(providerName, surface string, then func() tea.Cmd) tea.Cmd {
+	ref := credential.Ref{Provider: providerName, Account: surface}
+	store := credential.NewOSStore()
+	writer, ok := any(store).(credential.Writer)
+	if !ok {
+		return noticeCmd("error", store.Name()+" cannot store credentials on this platform; set "+
+			credential.EnvNames(ref)[0]+" in the environment instead")
+	}
+	return func() tea.Msg {
+		return secretPromptMsg{ref: ref, writer: writer, storeName: store.Name(), then: then()}
+	}
+}
+
+// refusedForAuth reports whether a server declined for want of a credential,
+// which is the one listing failure a key can fix.
+func refusedForAuth(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *credential.NotFoundError
+	if errors.As(err, &notFound) {
+		return true
+	}
+	var apiErr *provider.APIError
+	return errors.As(err, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403)
+}
+
 // listSurfaceModels asks the surface's own server what it serves. A failure is
 // returned rather than swallowed because the reason — no address, no key, a
 // server that is down — is what the caller shows next to the row that types an
@@ -219,13 +263,8 @@ func listNote(listed int, err error) string {
 		}
 		return "if the id you want is not listed"
 	}
-	var notFound *credential.NotFoundError
-	if errors.As(err, &notFound) {
-		return "no credential yet; type the id and setup will ask for one"
-	}
-	var apiErr *provider.APIError
-	if errors.As(err, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403) {
-		return "the server refused the credential; /login stores a new one"
+	if refusedForAuth(err) {
+		return "the server will not list until it is authenticated; store a credential above"
 	}
 	return firstLine(err.Error())
 }

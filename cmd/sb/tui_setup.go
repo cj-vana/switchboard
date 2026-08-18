@@ -199,6 +199,7 @@ func wireCodexHelper(m *tuiModel) tea.Cmd {
 		if err := wireCodex(cfg); err != nil {
 			return noticeMsg{level: "error", text: "wiring the codex login failed: " + err.Error()}
 		}
+		m.app.providers.reset()
 		return noticeMsg{text: "openai now authenticates with your Codex CLI login; when its token expires, running codex once refreshes it"}
 	}
 }

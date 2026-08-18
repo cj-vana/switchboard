@@ -89,6 +89,9 @@ func ollamaHost(flagHost string, cfg *config.Config) string {
 // construction happens again; without this, the checklist would report a
 // change that the next probe does not act on.
 func (p *providers) reset() {
+	if p == nil {
+		return
+	}
 	p.clientsMu.Lock()
 	defer p.clientsMu.Unlock()
 	p.resetLocked()
@@ -108,6 +111,9 @@ func (p *providers) resetLocked() {
 // supersedes the launch flag rather than losing to it: both are the same
 // person naming the same server, and this one was said later.
 func (p *providers) adoptOllamaHost(raw string) {
+	if p == nil {
+		return
+	}
 	p.clientsMu.Lock()
 	defer p.clientsMu.Unlock()
 	p.host = raw

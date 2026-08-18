@@ -359,3 +359,164 @@ func TestSetupChecklistSetsTheOllamaAddress(t *testing.T) {
 		t.Fatalf("the live client still points at %q", got)
 	}
 }
+
+// authServer refuses everything without a bearer token, which is what a
+// hosted compatible endpoint does and what makes the listing order matter.
+func authServer(t *testing.T, token string, models ...string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Not authenticated"}}`)
+			return
+		}
+		var b strings.Builder
+		b.WriteString(`{"object":"list","data":[`)
+		for i, m := range models {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(`{"id":"` + m + `"}`)
+		}
+		b.WriteString(`]}`)
+		io.WriteString(w, b.String())
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/v1"
+}
+
+// The reported failure: a server that will not list without a key left the
+// picker empty and pushed the user into typing a model id from memory, which
+// is exactly what this menu exists to prevent. The credential has to be
+// askable at the point of refusal.
+func TestASurfaceThatRefusesOffersTheCredentialThere(t *testing.T) {
+	m := modelsTestModel(t)
+	addr := authServer(t, "sk-test", "unsloth/Qwen3.8-27B-GGUF")
+	m.app.config.SetProviderBaseURL(
+		config.ProviderSurfaceKey("openaicompat", "generic"), addr)
+
+	var opened pickerMsg
+	msg := walk(t, cmdModels(m, ""),
+		func(p pickerMsg) string {
+			if strings.HasPrefix(p.title, "bind a model") {
+				return rowID(t, p, "openaicompat/generic…")
+			}
+			opened = p
+			return rowID(t, p, "store a credential…")
+		},
+		func(tp textPromptMsg) string {
+			t.Fatalf("a refusal should ask for a key, not text: %q", tp.title)
+			return ""
+		})
+
+	// The row that explains the empty list has to name the reason.
+	for _, it := range opened.items {
+		if it.label == "store a credential…" && !strings.Contains(it.desc, "401") {
+			t.Errorf("the credential row should quote the refusal: %q", it.desc)
+		}
+	}
+
+	prompt, ok := msg.(secretPromptMsg)
+	if !ok {
+		t.Fatalf("expected a masked key prompt, got %T", msg)
+	}
+	if prompt.ref.Provider != "openaicompat" || prompt.ref.Account != "generic" {
+		t.Fatalf("the prompt asks for %+v, want the surface that refused", prompt.ref)
+	}
+	if prompt.then == nil {
+		// Without this the key is stored and the user is returned nowhere,
+		// which is the state that made them type an id blind.
+		t.Fatal("storing the key must reopen the surface, not end the flow")
+	}
+}
+
+// A model list nobody can read is not a reason to stop: with the address
+// known, the surface is listed alongside everything else the machine reaches.
+func TestAConnectedCompatibleEndpointListsInTheMainPicker(t *testing.T) {
+	m := modelsTestModel(t)
+	addr := compatServer(t, "unsloth/Qwen3.8-27B-GGUF")
+	m.app.config.SetProviderBaseURL(
+		config.ProviderSurfaceKey("openaicompat", "generic"), addr)
+
+	p, ok := cmdModels(m, "")().(pickerMsg)
+	if !ok {
+		t.Fatal("/models did not open a picker")
+	}
+	var found bool
+	for _, it := range p.items {
+		found = found || it.label == "openaicompat/unsloth/Qwen3.8-27B-GGUF"
+	}
+	if !found {
+		var have []string
+		for _, it := range p.items {
+			have = append(have, it.label)
+		}
+		t.Fatalf("a connected server's models should be offered directly; rows are %s",
+			strings.Join(have, ", "))
+	}
+
+	// The id keeps its slash. ParseTarget splits on the first one only, so a
+	// namespaced model stays one model rather than becoming a surface.
+	choice := modelChoice{ref: "openaicompat/unsloth/Qwen3.8-27B-GGUF", surface: "generic"}
+	if err := m.app.config.BindTier("t9", "", choice.ref, choice.surface, ""); err != nil {
+		t.Fatal(err)
+	}
+	tier, _ := m.app.config.Tier("t9")
+	if tier.Target.ModelID != "unsloth/Qwen3.8-27B-GGUF" {
+		t.Fatalf("the namespaced id bound as %q", tier.Target.ModelID)
+	}
+}
+
+// Storing a credential has to reach the adapters. One built before the key
+// existed caches its absence, and every later request goes out unauthenticated
+// even though the store reported success.
+func TestStoringACredentialDropsTheClientsBuiltWithoutIt(t *testing.T) {
+	cfg := &config.Config{
+		Path:      filepath.Join(t.TempDir(), config.FileName),
+		Providers: map[string]config.ProviderSettings{},
+	}
+	cfg.SetProviderBaseURL(config.ProviderSurfaceKey("openaicompat", "generic"),
+		compatServer(t, "a-model"))
+	reg := newProviders("http://127.0.0.1:1", cfg)
+
+	target := surfaceTarget("openaicompat", "generic")
+	before, err := reg.get(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := reg.get(t.Context(), target); again != before {
+		t.Fatal("the registry should cache a built client")
+	}
+
+	reg.reset()
+
+	after, err := reg.get(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("reset must drop the cached client so the next one is built with the new credential")
+	}
+}
+
+// A notice whose flow already queued its next step must not also be treated
+// as a step finishing, or the wizard runs two at once.
+func TestAResumedNoticeDoesNotAdvanceTheWizard(t *testing.T) {
+	cfg := &config.Config{Path: filepath.Join(t.TempDir(), config.FileName)}
+	m := &onboardModel{
+		reg:    newProviders("http://127.0.0.1:1", cfg),
+		cat:    &catalog.Catalog{Revision: "test"},
+		cfg:    cfg,
+		th:     darkTheme(),
+		step:   stepModel,
+		choice: modelChoice{ref: "openaicompat/x", provider: "openaicompat", surface: "generic"},
+	}
+
+	_, cmd := m.Update(noticeMsg{text: "stored openaicompat/generic", resumed: true})
+	if cmd != nil {
+		t.Fatal("a resumed notice should leave the queued continuation to run alone")
+	}
+	if m.quitting {
+		t.Fatal("a resumed notice bound the rung instead of waiting for the flow")
+	}
+}
