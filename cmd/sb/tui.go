@@ -276,7 +276,7 @@ type tuiModel struct {
 	custom []customCommand
 
 	dlg  dialog
-	full *diffView
+	full fullscreen
 
 	pendingAsk chan permission.Response
 
@@ -704,8 +704,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case shellDoneMsg:
-		m.onShellDone(msg)
-		return m, nil
+		return m, m.onShellDone(msg)
 
 	case editorDoneMsg:
 		m.onEditorDone(msg)
@@ -752,14 +751,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// key routes one keypress. Dialogs and the fullscreen diff get first claim;
+// key routes one keypress. Dialogs and the fullscreen panel get first claim;
 // what remains goes to the input area.
 func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 	if m.full != nil {
-		if m.full.key(msg) {
+		close, cmd := m.full.key(msg)
+		if close {
 			m.full = nil
 		}
-		return nil
+		return cmd
 	}
 	if m.dlg != nil {
 		done, cmd := m.dlg.update(msg, m.th)

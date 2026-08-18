@@ -101,8 +101,9 @@ func cmdContext(m *tuiModel, _ string) tea.Cmd {
 	return nil
 }
 
-// openPalette is ctrl+p: every command in one fuzzy-adjacent picker. It runs
-// the bare command; one that needs arguments opens its own picker or says so.
+// openPalette is ctrl+p: every command in one searchable, fuzzy-ranked picker.
+// It runs the bare command; one that needs arguments opens its own picker or
+// says so.
 func (m *tuiModel) openPalette() tea.Cmd {
 	var items []pickerItem
 	for _, c := range commands() {

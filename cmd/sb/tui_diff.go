@@ -79,11 +79,12 @@ func highlightDiff(text string, dark bool) []string {
 	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 }
 
-// key scrolls; it reports true when the view should close.
-func (d *diffView) key(msg tea.KeyMsg) bool {
+// key scrolls; it reports true when the view should close. The diff has no
+// asynchronous key actions, so its command is always nil.
+func (d *diffView) key(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
-		return true
+		return true, nil
 	case "up", "k":
 		d.scroll(-1)
 	case "down", "j":
@@ -98,7 +99,7 @@ func (d *diffView) key(msg tea.KeyMsg) bool {
 		d.offset = len(d.lines)
 		d.scroll(0)
 	}
-	return false
+	return false, nil
 }
 
 func (d *diffView) mouse(msg tea.MouseMsg) {

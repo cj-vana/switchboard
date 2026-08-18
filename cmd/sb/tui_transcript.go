@@ -161,6 +161,10 @@ func (t *transcript) finalizeAll() {
 // invalidate re-renders entry i and splices its lines into the flat buffer.
 func (t *transcript) invalidate(i int) {
 	e := t.entries[i]
+	// Expansion and late tool/shell completion mutate an existing entry. Its
+	// cached collapsed rendering no longer describes the entry we are about to
+	// splice back into the transcript.
+	e.cache = nil
 	lines := t.render(e)
 	oldStart := t.starts[i]
 	oldEnd := len(t.flat)

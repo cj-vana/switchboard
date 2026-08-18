@@ -1,7 +1,9 @@
 package main
 
 import (
+	"sort"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -143,49 +145,84 @@ type pickerDialog struct {
 	title    string
 	items    []pickerItem
 	sel      int
+	query    string
 	onPick   func(id string) tea.Cmd
 	onCancel func() tea.Cmd
 }
 
+const pickerQueryMaxRunes = 128
+
+type pickerMatch struct {
+	item  pickerItem
+	index int
+	score int
+}
+
 func (d *pickerDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
+	matches := d.matches()
+	d.clampSelection(len(matches))
 	switch key.String() {
 	case "esc":
 		if d.onCancel != nil {
 			return true, d.onCancel()
 		}
 		return true, nil
-	case "up", "k":
+	case "up":
 		if d.sel > 0 {
 			d.sel--
 		}
-	case "down", "j":
-		if d.sel < len(d.items)-1 {
+	case "down":
+		if d.sel < len(matches)-1 {
 			d.sel++
 		}
-	case "enter":
-		if d.sel >= 0 && d.sel < len(d.items) {
-			return true, d.onPick(d.items[d.sel].id)
+	case "backspace":
+		runes := []rune(d.query)
+		if len(runes) > 0 {
+			d.setQuery(string(runes[:len(runes)-1]))
 		}
-		return true, nil
+	case "ctrl+w":
+		d.setQuery(trimLastPickerWord(d.query))
+	case "ctrl+u":
+		d.setQuery("")
+	case "enter":
+		if d.sel >= 0 && d.sel < len(matches) {
+			if d.onPick == nil {
+				return true, nil
+			}
+			return true, d.onPick(matches[d.sel].item.id)
+		}
+		return false, nil
+	default:
+		if key.Type == tea.KeyRunes {
+			d.appendQuery(key.Runes)
+		} else if key.Type == tea.KeySpace {
+			d.appendQuery([]rune{' '})
+		}
 	}
 	return false, nil
 }
 
 func (d *pickerDialog) view(width int, th *theme) string {
 	const maxRows = 10
+	matches := d.matches()
+	d.clampSelection(len(matches))
 	start := 0
 	if d.sel >= maxRows {
 		start = d.sel - maxRows + 1
 	}
 	end := start + maxRows
-	if end > len(d.items) {
-		end = len(d.items)
+	if end > len(matches) {
+		end = len(matches)
 	}
 
 	var b strings.Builder
-	b.WriteString(th.bold.Render(" "+d.title) + "\n\n")
+	b.WriteString(th.bold.Render(" "+d.title) + "\n")
+	b.WriteString(th.accent.Render(" search ") + " " + terminaltext.Escape(d.query) + th.faint.Render("▌") + "\n\n")
+	if len(matches) == 0 {
+		b.WriteString(th.dim.Render(" no matches") + "\n")
+	}
 	for i := start; i < end; i++ {
-		it := d.items[i]
+		it := matches[i].item
 		marker := "   "
 		if it.current {
 			marker = th.ok.Render(" ● ")
@@ -202,6 +239,157 @@ func (d *pickerDialog) view(width int, th *theme) string {
 		}
 		b.WriteString(row + "\n")
 	}
-	b.WriteString(th.faint.Render(" ↑↓ choose · enter select · esc cancel"))
+	b.WriteString(th.faint.Render(" type to filter · ↑↓ choose · enter select · esc cancel"))
 	return b.String()
+}
+
+func (d *pickerDialog) appendQuery(typed []rune) {
+	query := []rune(d.query)
+	remaining := pickerQueryMaxRunes - len(query)
+	if remaining <= 0 {
+		return
+	}
+	for _, r := range typed {
+		if remaining == 0 {
+			break
+		}
+		if !unicode.IsPrint(r) {
+			continue
+		}
+		query = append(query, r)
+		remaining--
+	}
+	d.setQuery(string(query))
+}
+
+func (d *pickerDialog) setQuery(query string) {
+	before := d.matches()
+	selected := -1
+	if d.sel >= 0 && d.sel < len(before) {
+		selected = before[d.sel].index
+	}
+
+	d.query = query
+	after := d.matches()
+	if selected >= 0 {
+		for i := range after {
+			if after[i].index == selected {
+				d.sel = i
+				return
+			}
+		}
+	}
+	d.sel = 0
+	d.clampSelection(len(after))
+}
+
+func (d *pickerDialog) clampSelection(n int) {
+	if n == 0 {
+		d.sel = 0
+		return
+	}
+	if d.sel < 0 {
+		d.sel = 0
+	}
+	if d.sel >= n {
+		d.sel = n - 1
+	}
+}
+
+func (d *pickerDialog) matches() []pickerMatch {
+	query := strings.TrimSpace(strings.ToLower(d.query))
+	matches := make([]pickerMatch, 0, len(d.items))
+	for i, item := range d.items {
+		score, ok := pickerItemScore(query, item)
+		if !ok {
+			continue
+		}
+		matches = append(matches, pickerMatch{item: item, index: i, score: score})
+	}
+	if query != "" {
+		sort.SliceStable(matches, func(i, j int) bool {
+			if matches[i].score != matches[j].score {
+				return matches[i].score < matches[j].score
+			}
+			return matches[i].index < matches[j].index
+		})
+	}
+	return matches
+}
+
+func pickerItemScore(query string, item pickerItem) (int, bool) {
+	if query == "" {
+		return 0, true
+	}
+	fields := []struct {
+		text   string
+		weight int
+	}{
+		{strings.ToLower(item.id), 0},
+		{strings.ToLower(item.label), 8},
+		{strings.ToLower(item.desc), 24},
+	}
+
+	total := 0
+	for _, term := range strings.Fields(query) {
+		best := -1
+		for _, field := range fields {
+			if score, ok := pickerFieldScore(term, field.text); ok {
+				score += field.weight
+				if best < 0 || score < best {
+					best = score
+				}
+			}
+		}
+		if best < 0 {
+			return 0, false
+		}
+		total += best
+	}
+	return total, true
+}
+
+func pickerFieldScore(query, field string) (int, bool) {
+	if query == field {
+		return 0, true
+	}
+	if strings.HasPrefix(field, query) {
+		return 20 + len([]rune(field)) - len([]rune(query)), true
+	}
+	if at := strings.Index(field, query); at >= 0 {
+		return 100 + at*2 + len([]rune(field)) - len([]rune(query)), true
+	}
+
+	queryRunes := []rune(query)
+	fieldRunes := []rune(field)
+	qi := 0
+	first := -1
+	last := -1
+	for i, r := range fieldRunes {
+		if qi >= len(queryRunes) || r != queryRunes[qi] {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		last = i
+		qi++
+	}
+	if qi != len(queryRunes) {
+		return 0, false
+	}
+	span := last - first + 1
+	gaps := span - len(queryRunes)
+	return 300 + first*2 + gaps*4 + len(fieldRunes) - len(queryRunes), true
+}
+
+func trimLastPickerWord(query string) string {
+	runes := []rune(query)
+	for len(runes) > 0 && unicode.IsSpace(runes[len(runes)-1]) {
+		runes = runes[:len(runes)-1]
+	}
+	for len(runes) > 0 && !unicode.IsSpace(runes[len(runes)-1]) {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
 }
