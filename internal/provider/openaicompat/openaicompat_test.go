@@ -466,3 +466,42 @@ func TestContextCancellationStopsStream(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
+
+func TestModelsListsWhatTheServerServes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("asked for %s, want /models", r.URL.Path)
+		}
+		io.WriteString(w, `{"object":"list","data":[{"id":"qwen3:8b"},{"id":"llama3.2"}]}`)
+	}))
+	defer srv.Close()
+
+	c, err := New("generic", WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := c.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || names[0] != "qwen3:8b" || names[1] != "llama3.2" {
+		t.Fatalf("Models() = %v, want the server's two ids in order", names)
+	}
+}
+
+// A profile with no address has not been configured, and the message has to
+// say which setting is missing: a transport error would send the user looking
+// for a server that was never named.
+func TestAProfileWithNoAddressNamesTheSettingItNeeds(t *testing.T) {
+	c, err := New("generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Models(context.Background())
+	if err == nil {
+		t.Fatal("a profile with no address answered a request")
+	}
+	if !strings.Contains(err.Error(), `openaicompat/generic`) || !strings.Contains(err.Error(), "base_url") {
+		t.Fatalf("the error should name the config key, got: %v", err)
+	}
+}

@@ -17,6 +17,8 @@ import (
 	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
 // errSetupCancelled distinguishes "the user backed out" from a setup that
@@ -95,7 +97,9 @@ func (m *onboardModel) connectStep() tea.Cmd {
 					m.step = stepModel
 					return m.modelStep()
 				case setupLocalID:
-					return m.connectStep() // nothing to do but look again
+					return askAddressCmd(reg, cfg, ollama.Name, ollama.SurfaceLocal, m.connectStep)
+				case setupCompatID:
+					return askAddressCmd(reg, cfg, openaicompat.Name, genericCompat, m.connectStep)
 				case setupCodexID:
 					return func() tea.Msg {
 						if err := wireCodex(cfg); err != nil {
@@ -129,11 +133,11 @@ func (m *onboardModel) askSecret(ref credential.Ref) tea.Cmd {
 }
 
 func (m *onboardModel) modelStep() tea.Cmd {
-	reg, cat := m.reg, m.cat
+	reg, cat, cfg := m.reg, m.cat, m.cfg
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		items, choices := gatherModelChoices(ctx, reg, cat)
+		items, choices := gatherModelChoices(ctx, reg, cat, cfg)
 		return onboardChoicesMsg{items: items, choices: choices}
 	}
 }
@@ -143,8 +147,11 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case onboardChoicesMsg:
 		m.step = stepModel // the message is the model step, however it arrived
 		if len(msg.items) == 0 {
-			m.err = errors.New("no models to offer: the Ollama server did not answer and the catalog is empty.\n" +
-				"Start Ollama and `ollama pull` a model, then run sb again")
+			// Unreachable: the compatible-endpoint row is offered whatever
+			// else is or is not there. The guard is what keeps first run from
+			// ever drawing an empty picker.
+			m.err = errors.New("nothing to offer, not even a server to point at.\n" +
+				"Write a [tiers.t1] section into the config by hand, or run sb doctor")
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -153,14 +160,40 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			title: "switchboard setup — pick the model t1 starts on",
 			items: msg.items,
 			onPick: func(id string) tea.Cmd {
-				m.choice = choices[id]
-				return func() tea.Msg { return onboardPickedMsg{id: id} }
+				choice := choices[id]
+				if choice.browse {
+					// A surface, not a model yet: its server is asked what it
+					// serves, and the pick comes back through here.
+					return browseSurfaceCmd(m.reg, m.cfg, choice, m.pick)
+				}
+				return m.pick(choice)
 			},
 		}
 		return m, nil
 
 	case onboardPickedMsg:
 		return m, m.afterPick()
+
+	case textPromptMsg:
+		m.dlg = newTextDialog(msg)
+		return m, nil
+
+	// A notice inside the wizard is a step that resolved without storing
+	// anything: an empty key prompt on a server that wants none, a save that
+	// failed. It has to be said and then moved past, because a wizard that
+	// closes its dialog and advances nothing leaves the user at a screen with
+	// no keys that do anything.
+	case noticeMsg:
+		if msg.text != "" {
+			m.lines = append(m.lines, msg.text)
+		}
+		if m.step == stepConnect {
+			return m, m.connectStep()
+		}
+		if m.choice.ref == "" {
+			return m, m.modelStep()
+		}
+		return m, m.effortOrBind()
 
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
@@ -233,15 +266,23 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// pick records the chosen target and moves the wizard on. It is the callback
+// the surface browser resolves to, so a model reached through two menus and a
+// typed id lands in exactly the same place as one picked off the first screen.
+func (m *onboardModel) pick(choice modelChoice) tea.Cmd {
+	m.choice = choice
+	return func() tea.Msg { return onboardPickedMsg{id: choice.ref} }
+}
+
 // afterPick decides whether the chosen model needs a credential before it can
-// answer. Ollama never does; anything else is asked for only when the chain
-// finds nothing, because a key in the environment already works.
+// answer. A local server never does; anything else is asked for only when the
+// chain finds nothing, because a key in the environment already works.
 func (m *onboardModel) afterPick() tea.Cmd {
 	choice, cfg := m.choice, m.cfg
-	if strings.HasPrefix(choice.ref, "ollama/") {
+	if needsNoCredential(choice) {
 		return m.effortOrBind()
 	}
-	providerName, _, _ := strings.Cut(choice.ref, "/")
+	providerName := choiceProvider(choice)
 	ref := credential.Ref{Provider: providerName, Account: choice.surface}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

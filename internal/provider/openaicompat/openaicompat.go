@@ -229,6 +229,32 @@ func blockChars(b provider.Block) int {
 	}
 }
 
+// BaseURL reports the address this client will call, so a UI can say which
+// server it is about to ask rather than describing it as "the endpoint".
+func (c *Client) BaseURL() string { return c.profile.BaseURL }
+
+// Models lists what the server serves. /models is the only discovery the
+// format has, and a server that answers it can have its model ids offered
+// instead of typed from memory. A server that does not answer is not an
+// error the caller has to treat as fatal: the id can still be entered by hand.
+func (c *Client) Models(ctx context.Context) ([]string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var list modelList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, &provider.ProtocolError{Provider: c.Name(), Detail: "decoding /models", Err: err}
+	}
+	out := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		out = append(out, m.ID)
+	}
+	return out, nil
+}
+
 // Probe reports reachability and what the profile says the server can do. The
 // model list is the only capability signal the format offers; everything else
 // comes from the profile, which is why profiles have to be tested rather than
@@ -271,6 +297,15 @@ func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provid
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	if c.profile.BaseURL == "" {
+		// A profile with no address cannot be reached, and the failure is a
+		// missing setting rather than a server that is down. Saying which
+		// setting is the difference between a fix and a guess.
+		return nil, fmt.Errorf(
+			"%s profile %q has no server address; set it with /setup, or write [providers.%q] base_url in the config",
+			Name, c.profileName, Name+"/"+c.profileName)
+	}
+
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)

@@ -59,12 +59,25 @@ automatic installation.
 ## First-run setup
 
 Run `sb` from a project directory. If no configuration exists, Switchboard
-opens a setup checklist and probes each available provider. The Ollama row also
-shows how many models are installed locally.
+opens a setup checklist and probes each available provider. The Ollama row
+shows the address it probed and how many models are installed there; selecting
+it sets that address, which is what a server on another machine needs. A second
+row takes the base url of any OpenAI-compatible server, such as LM Studio,
+vLLM, llama.cpp, or a proxy. Both addresses are written to the config file.
 
 Providers that require a key use a masked prompt and store the value in the OS
-credential service. If Codex CLI is signed in, setup can configure its token
-helper for OpenAI. Choose the first tier's model to finish setup.
+credential service. An empty entry stores nothing and continues, which is the
+answer for a server that issues no keys. If Codex CLI is signed in, setup can
+configure its token helper for OpenAI. Choose the first tier's model to finish
+setup.
+
+The model step offers serving surfaces as well as individual models. The
+catalog prices the models it has verified; it cannot enumerate the models a
+subscription or a compatible server offers, because those belong to the account
+and change without a release. Selecting a surface therefore queries that
+server's own model list. A model id can also be typed, which covers a server
+that does not answer the query, an entitlement that has not propagated, and a
+model published after the catalog revision.
 
 These commands remain available later:
 
@@ -198,6 +211,25 @@ therefore two targets.
 Set `[providers.<name>] base_url` to redirect a provider adapter to a gateway.
 This changes the address only. It does not merge prices, cache records, or
 capability evidence with another target.
+
+An address may also be scoped to one serving surface, which a provider fronting
+arbitrary servers requires:
+
+```toml
+[providers."openaicompat/generic"]
+base_url = "http://localhost:1234/v1"
+```
+
+A surface-qualified key takes precedence over the provider-wide key for that
+surface only. Without the distinction, configuring a compatible endpoint would
+also redirect `openaicompat/ollama`, which serves the local server's
+compatibility endpoint. A tier that names `openaicompat/<model>` without a
+`surface` uses the `generic` profile.
+
+The local server's address resolves in this order: the `-host` flag, then
+`[providers.ollama] base_url`, then `OLLAMA_HOST`, then
+`http://localhost:11434`. Setting the address from the setup checklist
+supersedes the flag for the running session.
 
 Credential sources and outbound secret checks are documented in
 [Security](security.md).

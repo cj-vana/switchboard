@@ -17,52 +17,113 @@ import (
 
 	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
-// modelChoice is one bindable target. The ref/surface split mirrors what
-// BindTier validates, and effortLevels comes from the catalog because only it
-// knows whether a level is a real request parameter or a string the adapter
-// would reject.
+// modelChoice is one bindable target, or one surface to open. The ref/surface
+// split mirrors what BindTier validates, and effortLevels comes from the
+// catalog because only it knows whether a level is a real request parameter or
+// a string the adapter would reject.
 type modelChoice struct {
-	ref          string // provider/model
+	ref          string // provider/model; empty while the model is still unknown
+	provider     string
 	surface      string
 	desc         string
 	effortLevels []string
+
+	// browse marks a surface rather than a model. The catalog knows a
+	// surface exists and what it costs; only its server knows which models
+	// it serves today, so the pick opens a question rather than answering
+	// one.
+	browse bool
 }
 
 const removeRungID = "\x00remove"
 
-// gatherModelChoices assembles everything bindable: live local models first,
-// then the catalog. Shared by /models and first-run setup, which are the same
-// question asked at different moments.
-func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalog) ([]pickerItem, map[string]modelChoice) {
+// gatherModelChoices assembles everything bindable: live local models, then
+// the catalog's priced entries, then every serving surface the catalog knows
+// the mechanics of. The third group is the one that makes the ladder
+// buildable at all for plan-metered and compatible endpoints, where the models
+// are the account's rather than the catalog's and cannot be enumerated here.
+// Shared by /models and first-run setup, which are the same question asked at
+// different moments.
+func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalog, cfg *config.Config) ([]pickerItem, map[string]modelChoice) {
 	choices := map[string]modelChoice{}
 	var items []pickerItem
-	add := func(c modelChoice) {
-		id := c.ref + " " + c.surface
+	add := func(id string, c modelChoice, label string) {
 		if _, dup := choices[id]; dup {
 			return
 		}
 		choices[id] = c
-		items = append(items, pickerItem{id: id, label: c.ref, desc: c.desc})
+		items = append(items, pickerItem{id: id, label: label, desc: c.desc})
 	}
 
-	local, err := reg.ollama.Models(ctx)
-	if err == nil {
+	local, localErr := reg.localServer().Models(ctx)
+	if localErr == nil {
 		sort.Strings(local)
 		for _, name := range local {
-			add(modelChoice{ref: "ollama/" + name, surface: "local", desc: "pulled locally"})
+			c := modelChoice{ref: "ollama/" + name, provider: "ollama", surface: "local", desc: "pulled locally"}
+			add(c.ref+" "+c.surface, c, c.ref)
 		}
 	}
 	for _, info := range cat.Entries() {
-		add(modelChoice{
+		c := modelChoice{
 			ref:          info.Provider + "/" + info.ProviderModelID,
+			provider:     info.Provider,
 			surface:      info.Surface,
 			desc:         catalogDesc(info),
 			effortLevels: info.EffortLevels,
-		})
+		}
+		add(c.ref+" "+c.surface, c, c.ref)
+	}
+	for _, c := range browsableSurfaces(cat, cfg, localErr) {
+		add(browsePrefix+c.provider+"/"+c.surface, c, c.provider+"/"+c.surface+"…")
 	}
 	return items, choices
+}
+
+// browsableSurfaces is every surface worth opening, in the order a first run
+// should read them: the local server, then what the catalog describes, then
+// the uncharacterized compatible endpoint that stands for everything else.
+func browsableSurfaces(cat *catalog.Catalog, cfg *config.Config, localErr error) []modelChoice {
+	var out []modelChoice
+	seen := map[string]bool{}
+	add := func(c modelChoice) {
+		key := c.provider + "/" + c.surface
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		c.browse = true
+		out = append(out, c)
+	}
+
+	if localErr != nil {
+		// The list above is empty because nothing answered. The row that
+		// says so is also the row that fixes it, since a server on another
+		// host is the ordinary reason.
+		add(modelChoice{
+			provider: "ollama", surface: "local",
+			desc: "server not answering; set its address or start it",
+		})
+	}
+	for _, info := range cat.Surfaces() {
+		add(modelChoice{
+			provider:     info.Provider,
+			surface:      info.Surface,
+			desc:         catalogDesc(info) + " · ask this server what it serves",
+			effortLevels: info.EffortLevels,
+		})
+	}
+	// Not in the catalog, and it cannot be: the generic profile is the floor
+	// of assumed capability for a server nobody has characterized, so there is
+	// no price sheet to publish for it and pretending otherwise would price
+	// every request at zero.
+	add(modelChoice{
+		provider: openaicompat.Name, surface: genericCompat,
+		desc: "any OpenAI-compatible server · " + orNone(cfg.ProviderForTarget(openaicompat.Name, genericCompat).BaseURL),
+	})
+	return out
 }
 
 func cmdModels(m *tuiModel, args string) tea.Cmd {
@@ -71,9 +132,12 @@ func cmdModels(m *tuiModel, args string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		items, choices := gatherModelChoices(ctx, reg, cat)
+		items, choices := gatherModelChoices(ctx, reg, cat, cfg)
 		if len(items) == 0 {
-			return noticeMsg{level: "error", text: "no models found: the ollama server did not answer and the catalog is empty"}
+			// The compatible-endpoint row is unconditional, so this is
+			// unreachable rather than a state worth diagnosing. It stays as
+			// the guard that keeps an empty picker from ever being drawn.
+			return noticeMsg{level: "error", text: "nothing to offer; bind a rung by hand in " + cfg.Path}
 		}
 		if len(cfg.Tiers) > 0 {
 			items = append(items, pickerItem{id: removeRungID, label: "remove a rung…", desc: "drop a tier from the ladder"})
@@ -86,7 +150,12 @@ func cmdModels(m *tuiModel, args string) tea.Cmd {
 				if id == removeRungID {
 					return removeRungCmd(m)
 				}
-				return chooseTierCmd(m, choices[id])
+				choice := choices[id]
+				if choice.browse {
+					return browseSurfaceCmd(reg, cfg, choice,
+						func(c modelChoice) tea.Cmd { return chooseTierCmd(m, c) })
+				}
+				return chooseTierCmd(m, choice)
 			},
 		}
 	}

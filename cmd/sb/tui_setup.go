@@ -21,12 +21,16 @@ import (
 	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
 const (
-	setupDoneID  = "\x00done"
-	setupCodexID = "\x00codex"
-	setupLocalID = "\x00ollama"
+	setupDoneID   = "\x00done"
+	setupCodexID  = "\x00codex"
+	setupLocalID  = "\x00ollama"
+	setupCompatID = "\x00compat"
 )
 
 // codexHelper reads the access token Codex CLI keeps refreshed. Wiring it is
@@ -34,6 +38,14 @@ const (
 // its own: whose token it is stays visible.
 var codexHelper = []string{"sh", "-c",
 	`python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.codex/auth.json')))['tokens']['access_token'])"`}
+
+// locallyMetered reports whether a reference names a surface the catalog says
+// consumes nothing scarce, which is also the set of surfaces that issue no
+// credentials.
+func locallyMetered(cat *catalog.Catalog, ref credential.Ref) bool {
+	info, _, ok := cat.Lookup(provider.RouteTarget{Provider: ref.Provider, Surface: ref.Account})
+	return ok && info.Metering == catalog.Local
+}
 
 func cmdSetup(m *tuiModel, _ string) tea.Cmd {
 	return setupChecklist(m)
@@ -45,21 +57,40 @@ func cmdSetup(m *tuiModel, _ string) tea.Cmd {
 func setupItems(ctx context.Context, reg *providers, cat *catalog.Catalog, cfg *config.Config) []pickerItem {
 	var items []pickerItem
 
-	if names, err := reg.ollama.Models(ctx); err == nil {
+	host := reg.localServer().BaseURL()
+	if names, err := reg.localServer().Models(ctx); err == nil {
 		items = append(items, pickerItem{
 			id: setupLocalID, label: "ollama/local", current: true,
-			desc: fmt.Sprintf("running, %d models pulled", len(names)),
+			desc: fmt.Sprintf("running at %s, %d models pulled", host, len(names)),
 		})
 	} else {
 		items = append(items, pickerItem{
 			id: setupLocalID, label: "ollama/local",
-			desc: "server not answering; start ollama to use local models",
+			desc: "server not answering at " + host + "; start ollama, or set its address here",
 		})
 	}
+
+	// The compatible endpoint is configuration rather than a credential: until
+	// it has an address there is no server to have a standing with, which is
+	// why it needs a row of its own rather than a key prompt.
+	compat := cfg.ProviderForTarget(openaicompat.Name, genericCompat).BaseURL
+	items = append(items, pickerItem{
+		id:      setupCompatID,
+		label:   openaicompat.Name + "/" + genericCompat,
+		desc:    "any OpenAI-compatible server · " + orNone(compat),
+		current: compat != "",
+	})
 
 	for _, ref := range credentialRefs(cfg, cat) {
 		if ref.Provider == "ollama" {
 			continue // covered by the liveness row above
+		}
+		if locallyMetered(cat, ref) {
+			// Nothing meters it and nothing issues a key for it, so a
+			// credential row would be a prompt with no correct answer. /login
+			// still lists every reference, for the endpoint that turns out to
+			// want one anyway.
+			continue
 		}
 		standing := credentialStanding(ctx, cfg, ref)
 		items = append(items, pickerItem{
@@ -97,7 +128,11 @@ func setupChecklist(m *tuiModel) tea.Cmd {
 				case setupDoneID:
 					return noticeCmd("", "setup closed; /models binds what you connected, /setup returns here")
 				case setupLocalID:
-					return noticeCmd("", "local models need a running Ollama server: https://ollama.com, then `ollama pull <model>`")
+					return askAddressCmd(app.providers, app.config, ollama.Name, ollama.SurfaceLocal,
+						func() tea.Cmd { return setupChecklist(m) })
+				case setupCompatID:
+					return askAddressCmd(app.providers, app.config, openaicompat.Name, genericCompat,
+						func() tea.Cmd { return setupChecklist(m) })
 				case setupCodexID:
 					return tea.Sequence(wireCodexHelper(m), setupChecklist(m))
 				}

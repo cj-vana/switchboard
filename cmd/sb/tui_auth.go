@@ -183,7 +183,7 @@ func (d *secretDialog) view(width int, th *theme) string {
 	b.WriteString(th.bold.Render(" credential for "+d.ref.String()) + "\n")
 	b.WriteString(th.dim.Render(" paste or type; input is hidden; stored in the "+d.storeName) + "\n\n")
 	b.WriteString(" " + d.input.View() + "\n")
-	b.WriteString(th.faint.Render(" enter store · esc cancel"))
+	b.WriteString(th.faint.Render(" enter store · empty entry skips · esc cancel"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

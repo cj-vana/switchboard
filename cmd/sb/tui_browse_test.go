@@ -1,0 +1,361 @@
+package main
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+)
+
+// compatServer stands in for anything that speaks the chat-completions
+// format: LM Studio, vLLM, llama.cpp, a proxy. All the picker needs from it is
+// the model list.
+func compatServer(t *testing.T, models ...string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		var b strings.Builder
+		b.WriteString(`{"object":"list","data":[`)
+		for i, m := range models {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(`{"id":"` + m + `"}`)
+		}
+		b.WriteString(`]}`)
+		io.WriteString(w, b.String())
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/v1"
+}
+
+// walk drives a dialog chain the way a person does, answering pickers with an
+// id and text prompts with a line, until something that is not a dialog comes
+// back.
+func walk(t *testing.T, cmd tea.Cmd, choose func(pickerMsg) string, typed func(textPromptMsg) string) tea.Msg {
+	t.Helper()
+	for i := 0; i < 12; i++ {
+		if cmd == nil {
+			t.Fatal("the flow ended with no message")
+		}
+		switch msg := cmd().(type) {
+		case pickerMsg:
+			cmd = msg.action(choose(msg))
+		case textPromptMsg:
+			cmd = msg.submit(typed(msg))
+		default:
+			return msg
+		}
+	}
+	t.Fatal("the dialog chain never terminated")
+	return nil
+}
+
+func rowID(t *testing.T, p pickerMsg, label string) string {
+	t.Helper()
+	for _, it := range p.items {
+		if it.label == label {
+			return it.id
+		}
+	}
+	var have []string
+	for _, it := range p.items {
+		have = append(have, it.label)
+	}
+	t.Fatalf("no row labelled %q in %q; rows are %s", label, p.title, strings.Join(have, ", "))
+	return ""
+}
+
+// The bug this covers: the picker offered only what the catalog had priced —
+// four Anthropic models and whatever Ollama had pulled — so a Kimi plan, a
+// ChatGPT plan, and any OpenAI-compatible server were unreachable from the
+// menus that exist to reach them.
+func TestEverySurfaceIsOfferedNotJustPricedModels(t *testing.T) {
+	m := modelsTestModel(t)
+
+	p, ok := cmdModels(m, "")().(pickerMsg)
+	if !ok {
+		t.Fatal("/models did not open a picker")
+	}
+	labels := map[string]bool{}
+	for _, it := range p.items {
+		labels[it.label] = true
+	}
+	for _, want := range []string{
+		"kimi/coding…",
+		"openai/subscription…",
+		"openaicompat/ollama…",
+		"openaicompat/generic…",
+		"ollama/local…",
+	} {
+		if !labels[want] {
+			var have []string
+			for _, it := range p.items {
+				have = append(have, it.label)
+			}
+			t.Errorf("no row for %s; rows are %s", want, strings.Join(have, ", "))
+		}
+	}
+	// The priced entries are still there and still bind directly.
+	if !labels["anthropic/claude-opus-5"] {
+		t.Error("a catalog entry stopped being offered")
+	}
+}
+
+// The whole reported flow, end to end: point sb at an OpenAI-compatible
+// server, pick one of the models it actually serves, and land with a rung
+// bound and an address the next launch will read.
+func TestCompatibleEndpointTakesAnAddressThenBindsAModel(t *testing.T) {
+	m := modelsTestModel(t)
+	addr := compatServer(t, "qwen3-coder", "gpt-oss-120b")
+
+	var listed []string
+	msg := walk(t, cmdModels(m, ""),
+		func(p pickerMsg) string {
+			switch {
+			case strings.HasPrefix(p.title, "bind a model"):
+				return rowID(t, p, "openaicompat/generic…")
+			case strings.HasPrefix(p.title, "models on openaicompat/generic"):
+				for _, it := range p.items {
+					listed = append(listed, it.label)
+				}
+				return rowID(t, p, "openaicompat/gpt-oss-120b")
+			case strings.HasPrefix(p.title, "which tier"):
+				return p.items[len(p.items)-1].id
+			}
+			t.Fatalf("unexpected picker %q", p.title)
+			return ""
+		},
+		func(tp textPromptMsg) string {
+			if !strings.HasPrefix(tp.title, "server address") {
+				t.Fatalf("unexpected prompt %q", tp.title)
+			}
+			return addr
+		})
+
+	notice, ok := msg.(noticeMsg)
+	if !ok || notice.level == "error" {
+		t.Fatalf("binding failed: %#v", msg)
+	}
+	if len(listed) < 3 || listed[0] != "openaicompat/gpt-oss-120b" {
+		t.Fatalf("the server's models should be listed in order, got %v", listed)
+	}
+
+	saved, err := config.LoadFile(m.app.config.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := saved.ProviderForTarget("openaicompat", "generic").BaseURL; got != addr {
+		t.Fatalf("the address saved as %q, want %q", got, addr)
+	}
+	tier, ok := saved.Tier("t2")
+	if !ok {
+		t.Fatal("the new rung was not saved")
+	}
+	if tier.Target.Provider != "openaicompat" || tier.Target.Surface != "generic" ||
+		tier.Target.ModelID != "gpt-oss-120b" {
+		t.Fatalf("t2 bound to %+v, want the compatible endpoint's model", tier.Target)
+	}
+}
+
+// A server that will not list is not a dead end: the id can still be typed,
+// and the row that offers it says why the list above is empty.
+func TestATypedModelIDIsAlwaysOffered(t *testing.T) {
+	m := modelsTestModel(t)
+
+	msg := walk(t, cmdModels(m, ""),
+		func(p pickerMsg) string {
+			switch {
+			case strings.HasPrefix(p.title, "bind a model"):
+				return rowID(t, p, "kimi/coding…")
+			case strings.HasPrefix(p.title, "models on kimi/coding"):
+				row := rowID(t, p, "type a model id…")
+				for _, it := range p.items {
+					if it.id == row && it.desc == "" {
+						t.Error("the type-it-in row should say why the list is the length it is")
+					}
+				}
+				return row
+			case strings.HasPrefix(p.title, "which tier"):
+				return p.items[len(p.items)-1].id
+			}
+			t.Fatalf("unexpected picker %q", p.title)
+			return ""
+		},
+		func(tp textPromptMsg) string {
+			if !strings.HasPrefix(tp.title, "model id") {
+				t.Fatalf("unexpected prompt %q", tp.title)
+			}
+			return "kimi-for-coding"
+		})
+
+	if notice, ok := msg.(noticeMsg); !ok || notice.level == "error" {
+		t.Fatalf("binding a typed id failed: %#v", msg)
+	}
+	saved, err := config.LoadFile(m.app.config.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tier, ok := saved.Tier("t2")
+	if !ok || tier.Target.ModelID != "kimi-for-coding" || tier.Target.Provider != "kimi" {
+		t.Fatalf("t2 = %+v, want the typed kimi model", tier.Target)
+	}
+}
+
+// First run is where this matters most: the wizard has to be able to finish
+// against a server the catalog has never heard of.
+func TestOnboardingBindsT1OnACompatibleEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cat, err := catalog.LoadBundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Path: filepath.Join(home, config.FileName)}
+	m := &onboardModel{reg: newProviders("http://127.0.0.1:1", cfg), cat: cat, cfg: cfg, th: darkTheme()}
+	addr := compatServer(t, "qwen3-coder")
+
+	items, choices := gatherModelChoices(t.Context(), m.reg, cat, cfg)
+	step(t, m, onboardChoicesMsg{items: items, choices: choices})
+
+	var browse string
+	for id, c := range choices {
+		if c.browse && c.provider == "openaicompat" && c.surface == "generic" {
+			browse = id
+		}
+	}
+	if browse == "" {
+		t.Fatal("the wizard never offered the compatible endpoint")
+	}
+
+	dlg, ok := m.dlg.(*pickerDialog)
+	if !ok {
+		t.Fatalf("the model picker never opened, dialog is %T", m.dlg)
+	}
+	msg := walk(t, dlg.onPick(browse),
+		func(p pickerMsg) string { return rowID(t, p, "openaicompat/qwen3-coder") },
+		func(tp textPromptMsg) string { return addr })
+	step(t, m, msg)
+
+	// A compatible endpoint may or may not want a bearer token, so the wizard
+	// asks; this server does not, and walking past the prompt has to leave the
+	// wizard on the rung rather than on a dead screen.
+	if _, asked := m.dlg.(*secretDialog); !asked {
+		t.Fatalf("expected the optional key prompt, dialog is %T", m.dlg)
+	}
+	step(t, m, noticeMsg{text: "nothing entered, nothing stored"})
+
+	if m.cancelled || m.err != nil {
+		t.Fatalf("the wizard failed: cancelled=%v err=%v", m.cancelled, m.err)
+	}
+	saved, err := config.LoadFile(cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tier, ok := saved.Tier("t1")
+	if !ok {
+		t.Fatal("t1 was not persisted")
+	}
+	if tier.Target.Provider != "openaicompat" || tier.Target.ModelID != "qwen3-coder" {
+		t.Fatalf("t1 bound to %+v, want the compatible endpoint's model", tier.Target)
+	}
+}
+
+// A key prompt the user walks past used to close the dialog and advance
+// nothing, leaving first run on a screen where no key did anything. An empty
+// entry is a legitimate answer on a server that wants no key, so it has to
+// carry the wizard forward.
+func TestSkippingTheKeyPromptStillBindsTheRung(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{Path: filepath.Join(home, config.FileName)}
+	m := &onboardModel{
+		reg:  newProviders("http://127.0.0.1:1", cfg),
+		cat:  &catalog.Catalog{Revision: "test"},
+		cfg:  cfg,
+		th:   darkTheme(),
+		step: stepModel,
+		choice: modelChoice{
+			ref: "openaicompat/qwen3", provider: "openaicompat", surface: "generic",
+		},
+	}
+	step(t, m, noticeMsg{text: "nothing entered, nothing stored"})
+
+	if !m.quitting || m.err != nil {
+		t.Fatalf("the wizard should have finished; quitting=%v err=%v", m.quitting, m.err)
+	}
+	saved, err := config.LoadFile(cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier, ok := saved.Tier("t1"); !ok || tier.Target.ModelID != "qwen3" {
+		t.Fatalf("t1 = %+v, want the picked model bound anyway", tier.Target)
+	}
+}
+
+// The checklist is where an address gets set before any model is picked, and
+// the row has to reopen with what it stored.
+func TestSetupChecklistSetsTheCompatibleEndpointAddress(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := modelsTestModel(t)
+
+	first, ok := setupChecklist(m)().(pickerMsg)
+	if !ok {
+		t.Fatal("the checklist did not open")
+	}
+	id := rowID(t, first, "openaicompat/generic")
+	prompt, ok := first.action(id)().(textPromptMsg)
+	if !ok {
+		t.Fatal("the compatible endpoint row did not ask for an address")
+	}
+	reopened, ok := prompt.submit("http://localhost:1234/v1")().(pickerMsg)
+	if !ok {
+		t.Fatal("the checklist did not reopen after the address was stored")
+	}
+	for _, it := range reopened.items {
+		if it.label == "openaicompat/generic" {
+			if !strings.Contains(it.desc, "http://localhost:1234/v1") || !it.current {
+				t.Fatalf("the row should show what it stored: %+v", it)
+			}
+			return
+		}
+	}
+	t.Fatal("the row vanished after being configured")
+}
+
+// The local row is the one people reach for when Ollama is on another
+// machine, so it has to change the address rather than print advice.
+func TestSetupChecklistSetsTheOllamaAddress(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := modelsTestModel(t)
+
+	first := setupChecklist(m)().(pickerMsg)
+	prompt, ok := first.action(setupLocalID)().(textPromptMsg)
+	if !ok {
+		t.Fatal("the ollama row did not ask for an address")
+	}
+	if _, ok := prompt.submit("box:11434")().(pickerMsg); !ok {
+		t.Fatal("the checklist did not reopen after the address was stored")
+	}
+
+	if got := m.app.config.ProviderFor("ollama").BaseURL; got != "box:11434" {
+		t.Fatalf("the address saved as %q", got)
+	}
+	// Stored is not enough: the adapter already built against the old address
+	// has to be rebuilt, or the checklist reports a change nothing acts on.
+	if got := m.app.providers.localServer().BaseURL(); got != "http://box:11434" {
+		t.Fatalf("the live client still points at %q", got)
+	}
+}

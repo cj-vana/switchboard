@@ -602,3 +602,22 @@ func TestContextCancellationStopsStream(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
+
+// Models is what a picker offers for a surface whose model ids cannot be
+// guessed — a plan endpoint's above all, where the names are the vendor's and
+// appear in no catalog.
+func TestModelsListsTheAccountsModels(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/models") {
+			t.Errorf("asked for %s, want /v1/models", r.URL.Path)
+		}
+		io.WriteString(w, `{"data":[{"id":"k3-256k"},{"id":"k3-turbo"}]}`)
+	})
+	names, err := c.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || names[0] != "k3-256k" {
+		t.Fatalf("Models() = %v, want the two ids the server listed", names)
+	}
+}

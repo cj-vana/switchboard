@@ -167,6 +167,43 @@ func (c *Config) ProviderFor(name string) ProviderSettings {
 	return c.Providers[name]
 }
 
+// ProviderForTarget returns the settings that govern one serving surface.
+//
+// A surface-qualified key wins over the provider-wide one, because a provider
+// whose whole reason for existing is that it fronts arbitrary servers has more
+// than one address at a time: openaicompat/ollama is the local server's
+// compatibility endpoint and openaicompat/generic is whatever the user pointed
+// it at, and redirecting one must not silently redirect the other.
+func (c *Config) ProviderForTarget(name, surface string) ProviderSettings {
+	if surface != "" {
+		if s, ok := c.Providers[ProviderSurfaceKey(name, surface)]; ok && s.BaseURL != "" {
+			return s
+		}
+	}
+	return c.Providers[name]
+}
+
+// ProviderSurfaceKey is the config key one surface's endpoint is written
+// under, so the reader and the writer cannot spell it differently.
+func ProviderSurfaceKey(name, surface string) string { return name + "/" + surface }
+
+// SetProviderBaseURL records an endpoint, or forgets one when the address is
+// empty: an entry with a blank address would be written to the file as a
+// setting that says nothing.
+func (c *Config) SetProviderBaseURL(key, baseURL string) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		delete(c.Providers, key)
+		return
+	}
+	if c.Providers == nil {
+		c.Providers = map[string]ProviderSettings{}
+	}
+	settings := c.Providers[key]
+	settings.BaseURL = strings.TrimSuffix(baseURL, "/")
+	c.Providers[key] = settings
+}
+
 // AuthFor returns the credential settings for a provider, which is the zero
 // value when none are configured: the default chain still works, because the
 // environment and the platform store need no configuration.
@@ -524,6 +561,12 @@ var defaultSurfaces = map[string]string{
 	"anthropic": "first-party",
 	"openai":    "first-party",
 	"kimi":      "coding",
+
+	// An unnamed compatible endpoint is the generic profile: the floor of
+	// assumed capability, which is the honest default for a server nobody has
+	// characterized. Reaching Ollama's compatibility endpoint is the named
+	// case and still has to say surface = "ollama".
+	"openaicompat": "generic",
 }
 
 // ParseTarget reads a "provider/model" reference into a route target.

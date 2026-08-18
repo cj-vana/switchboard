@@ -29,7 +29,7 @@ func parseCLIOptions(args []string) (options, []string, error) {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
 	flags.StringVar(&opts.tier, "tier", "", "tier to start on, for example t2 (default: the lowest configured tier)")
-	flags.StringVar(&opts.host, "host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")
+	flags.StringVar(&opts.host, "host", "", "Ollama base URL (default [providers.ollama] base_url, $OLLAMA_HOST, or http://localhost:11434)")
 	flags.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, auto, yolo, or bypass")
 	flags.Var(sandboxFlag{target: &opts.sandbox}, "sandbox", "command confinement: bare flag means on; also accepts off, on, or auto (default: config, then off)")
 	flags.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")

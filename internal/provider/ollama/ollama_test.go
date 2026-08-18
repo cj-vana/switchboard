@@ -494,3 +494,21 @@ func TestContextCancellationStopsStream(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
+
+// An unset flag passed straight through must not overwrite what the
+// environment already said. The wiring reads the flag first and hands the
+// result on regardless, so an empty address has to mean "leave it alone" —
+// otherwise OLLAMA_HOST is silently ignored on every default launch.
+func TestAnEmptyBaseURLLeavesTheEnvironmentAlone(t *testing.T) {
+	t.Setenv("OLLAMA_HOST", "http://ollama.example:11434")
+
+	if got := New(WithBaseURL("")).BaseURL(); got != "http://ollama.example:11434" {
+		t.Fatalf("BaseURL() = %q, want the environment's address", got)
+	}
+	if got := New(WithBaseURL("  ")).BaseURL(); got != "http://ollama.example:11434" {
+		t.Fatalf("blank BaseURL() = %q, want the environment's address", got)
+	}
+	if got := New(WithBaseURL("box:11434")).BaseURL(); got != "http://box:11434" {
+		t.Fatalf("BaseURL() = %q, want the given address normalized", got)
+	}
+}

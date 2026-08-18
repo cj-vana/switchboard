@@ -687,6 +687,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case lspEditorDoneMsg:
 		return m, m.onLSPEditorDone(msg)
 
+	case textPromptMsg:
+		m.dlg = newTextDialog(msg)
+		return m, nil
+
 	case secretPromptMsg:
 		m.dlg = newSecretDialog(msg.ref, msg.storeName, func(value string) tea.Cmd {
 			store := storeSecretCmd(msg.ref, msg.writer, msg.storeName, value)

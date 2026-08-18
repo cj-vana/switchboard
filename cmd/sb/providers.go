@@ -44,6 +44,11 @@ type providers struct {
 
 	config *config.Config
 
+	// host is the Ollama address the flag asked for, kept so a rebuild after
+	// a settings change resolves it against the same precedence as startup.
+	// Guarded by clientsMu, which it is an input to.
+	host string
+
 	// probes remembers what each target's own probe attested, because a
 	// capability the server reported live outranks the catalog's default for
 	// its surface — the local surface says vision: false, and the server
@@ -55,12 +60,66 @@ type providers struct {
 
 func newProviders(host string, cfg *config.Config) *providers {
 	return &providers{
-		ollama: ollama.New(ollama.WithBaseURL(host)),
+		ollama: ollama.New(ollama.WithBaseURL(ollamaHost(host, cfg))),
 		compat: map[string]*openaicompat.Client{},
 		openai: map[string]*openaicompat.Client{},
 		config: cfg,
+		host:   host,
 		probes: map[provider.RouteTargetID]provider.ProbeResult{},
 	}
+}
+
+// ollamaHost resolves which server the local adapter talks to: the flag, then
+// the config, then whatever the client itself reads from the environment. The
+// flag wins because it was typed for this run; an empty result is deliberate
+// and means "leave the environment alone".
+func ollamaHost(flagHost string, cfg *config.Config) string {
+	if strings.TrimSpace(flagHost) != "" {
+		return flagHost
+	}
+	if cfg != nil {
+		return cfg.ProviderFor(ollama.Name).BaseURL
+	}
+	return ""
+}
+
+// reset drops every cached client so the next request is built against the
+// settings as they stand now. A base URL entered in /setup or a key stored
+// mid-session reaches an adapter that was already constructed only if the
+// construction happens again; without this, the checklist would report a
+// change that the next probe does not act on.
+func (p *providers) reset() {
+	p.clientsMu.Lock()
+	defer p.clientsMu.Unlock()
+	p.resetLocked()
+}
+
+// resetLocked is reset's body for a caller that already holds clientsMu.
+func (p *providers) resetLocked() {
+	p.ollama = ollama.New(ollama.WithBaseURL(ollamaHost(p.host, p.config)))
+	p.compat = map[string]*openaicompat.Client{}
+	p.openai = map[string]*openaicompat.Client{}
+	p.anthropic = nil
+	p.kimi = nil
+	p.responses = nil
+}
+
+// adoptOllamaHost takes an address the user chose during the session. It
+// supersedes the launch flag rather than losing to it: both are the same
+// person naming the same server, and this one was said later.
+func (p *providers) adoptOllamaHost(raw string) {
+	p.clientsMu.Lock()
+	defer p.clientsMu.Unlock()
+	p.host = raw
+	p.resetLocked()
+}
+
+// localServer is the Ollama client as it stands now. Callers read it through
+// here rather than through the field, because reset replaces it.
+func (p *providers) localServer() *ollama.Client {
+	p.clientsMu.Lock()
+	defer p.clientsMu.Unlock()
+	return p.ollama
 }
 
 // probedVision reports whether this target's live probe attested image
@@ -85,9 +144,11 @@ func (p *providers) probedCapabilities(target provider.RouteTarget) (provider.Pr
 	return probe, ok
 }
 
-// baseURL is the configured address for a provider, or empty for its default.
-func (p *providers) baseURL(name string) string {
-	return p.config.ProviderFor(name).BaseURL
+// baseURL is the configured address for a target's surface, or empty for the
+// adapter's default. It is per surface rather than per provider because one
+// provider can front several servers at once (§4).
+func (p *providers) baseURL(target provider.RouteTarget) string {
+	return p.config.ProviderForTarget(target.Provider, target.Surface).BaseURL
 }
 
 func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provider.Provider, error) {
@@ -111,7 +172,7 @@ func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provi
 		}
 		p.anthropic = anthropic.New(
 			anthropic.WithAPIKey(key),
-			anthropic.WithBaseURL(p.baseURL(anthropic.Name)),
+			anthropic.WithBaseURL(p.baseURL(target)),
 		)
 		return p.anthropic, nil
 
@@ -123,7 +184,7 @@ func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provi
 		if err != nil {
 			return nil, err
 		}
-		p.kimi = kimi.New(key, anthropic.WithBaseURL(p.baseURL(kimi.Name)))
+		p.kimi = kimi.New(key, anthropic.WithBaseURL(p.baseURL(target)))
 		return p.kimi, nil
 
 	case openai.Name:
@@ -139,7 +200,7 @@ func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provi
 			}
 			p.responses = openai.NewResponses(
 				openai.WithResponsesToken(token),
-				openai.WithResponsesBaseURL(p.baseURL(openai.Name)),
+				openai.WithResponsesBaseURL(p.baseURL(target)),
 			)
 			return p.responses, nil
 		}
@@ -150,7 +211,7 @@ func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provi
 		if err != nil {
 			return nil, err
 		}
-		if base := p.baseURL(openai.Name); base != "" {
+		if base := p.baseURL(target); base != "" {
 			opts = append(opts, openaicompat.WithBaseURL(base))
 		}
 		c := openai.New(target.Surface, opts...)
@@ -166,8 +227,8 @@ func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provi
 			return nil, err
 		}
 		switch {
-		case p.baseURL(openaicompat.Name) != "":
-			opts = append(opts, openaicompat.WithBaseURL(p.baseURL(openaicompat.Name)))
+		case p.baseURL(target) != "":
+			opts = append(opts, openaicompat.WithBaseURL(p.baseURL(target)))
 		case target.Surface == "ollama":
 			// The same server, reached through its compatibility endpoint. The
 			// host was already resolved from the flag and the environment for

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -392,4 +393,70 @@ func trimLastPickerWord(query string) string {
 		runes = runes[:len(runes)-1]
 	}
 	return string(runes)
+}
+
+// textPromptMsg opens the text dialog. It is a message rather than a direct
+// assignment for the same reason secretPromptMsg is: the picker that asked for
+// it is mid-update, and its close would null the dialog out again.
+type textPromptMsg struct {
+	title   string
+	help    string
+	initial string
+
+	// submit runs with the trimmed entry. An empty entry cancels, so a
+	// caller never has to decide what an empty string meant.
+	submit func(value string) tea.Cmd
+}
+
+// textDialog takes one line of visible text: a server address, a model id.
+// It is deliberately not secretDialog with the echo turned back on — a
+// dialog that sometimes hides what is typed and sometimes does not is one
+// mistake away from showing a key.
+type textDialog struct {
+	title  string
+	help   string
+	input  textinput.Model
+	submit func(value string) tea.Cmd
+}
+
+func newTextDialog(msg textPromptMsg) *textDialog {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.SetValue(msg.initial)
+	ti.CursorEnd()
+	ti.Focus()
+	return &textDialog{title: msg.title, help: msg.help, input: ti, submit: msg.submit}
+}
+
+func (d *textDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		return true, nil
+	case "enter":
+		value := strings.TrimSpace(d.input.Value())
+		if value == "" {
+			return true, nil
+		}
+		return true, d.submit(value)
+	}
+	var cmd tea.Cmd
+	d.input, cmd = d.input.Update(key)
+	return false, cmd
+}
+
+func (d *textDialog) view(width int, th *theme) string {
+	var b strings.Builder
+	b.WriteString(th.bold.Render(" "+d.title) + "\n")
+	if d.help != "" {
+		b.WriteString(th.dim.Render(" "+d.help) + "\n")
+	}
+	b.WriteString("\n " + d.input.View() + "\n")
+	b.WriteString(th.faint.Render(" enter save · esc cancel"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor(th)).
+		Padding(0, 1).
+		Width(max(width-4, 40))
+	return box.Render(b.String())
 }

@@ -141,6 +141,28 @@ func (c *Client) CountTokens(ctx context.Context, target provider.RouteTarget, r
 	return provider.TokenEstimate{InputTokens: counted.InputTokens, Exact: true}, nil
 }
 
+// Models lists what this key is offered. Probe already reads the endpoint to
+// answer "is this one model there"; a picker needs the same list to offer the
+// model ids rather than make the user recall them, and a plan-metered surface
+// such as Kimi Code is otherwise unguessable.
+func (c *Client) Models(ctx context.Context) ([]string, error) {
+	resp, err := c.do(ctx, "/v1/models?limit=1000", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var list modelList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, &provider.ProtocolError{Provider: c.Name(), Detail: "decoding /v1/models", Err: err}
+	}
+	out := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		out = append(out, m.ID)
+	}
+	return out, nil
+}
+
 func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provider.ProbeResult, error) {
 	var res provider.ProbeResult
 

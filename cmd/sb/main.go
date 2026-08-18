@@ -586,7 +586,7 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *c
 	}
 
 	if len(cfg.Tiers) == 0 {
-		return config.Tier{}, nil, "", noTargetError(ctx, reg.ollama, cfg)
+		return config.Tier{}, nil, "", noTargetError(ctx, reg.localServer(), cfg)
 	}
 	if opts.prompt == "" {
 		// Interactive startup needs a live provider to assemble the session, but

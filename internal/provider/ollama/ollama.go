@@ -48,8 +48,16 @@ type Client struct {
 
 type Option func(*Client)
 
+// WithBaseURL points the client at a server. An empty address is not an
+// address: it leaves whatever the constructor resolved from the environment
+// in place, so a caller that passes an unset flag through does not silently
+// overwrite OLLAMA_HOST with the built-in default.
 func WithBaseURL(raw string) Option {
-	return func(c *Client) { c.baseURL = normalizeHost(raw) }
+	return func(c *Client) {
+		if strings.TrimSpace(raw) != "" {
+			c.baseURL = normalizeHost(raw)
+		}
+	}
 }
 
 func WithHTTPClient(h *http.Client) Option {

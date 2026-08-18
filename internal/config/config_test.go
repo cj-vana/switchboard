@@ -426,3 +426,48 @@ fallback = ["ollama/first", "kimi/second"]
 		}
 	}
 }
+
+// One provider can front several servers at once, so an address belongs to a
+// surface. The provider-wide key stays the fallback, which is what keeps a
+// gateway redirect meaning what it always did.
+func TestAnAddressBelongsToASurface(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	c := &Config{Path: path, Providers: map[string]ProviderSettings{}}
+	c.SetProviderBaseURL("openaicompat", "http://gateway.internal/v1")
+	c.SetProviderBaseURL(ProviderSurfaceKey("openaicompat", "generic"), "http://localhost:1234/v1/")
+	if err := c.BindTier("t1", "", "openaicompat/qwen3", "generic", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	saved, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := saved.ProviderForTarget("openaicompat", "generic").BaseURL; got != "http://localhost:1234/v1" {
+		t.Fatalf("the generic surface resolved to %q, want its own address with the trailing slash dropped", got)
+	}
+	if got := saved.ProviderForTarget("openaicompat", "ollama").BaseURL; got != "http://gateway.internal/v1" {
+		t.Fatalf("a surface with no address of its own resolved to %q, want the provider-wide one", got)
+	}
+	if got := saved.ProviderForTarget("anthropic", "first-party").BaseURL; got != "" {
+		t.Fatalf("an unconfigured provider resolved to %q, want the adapter's default", got)
+	}
+
+	// The compatible adapter's default surface round-trips without the file
+	// having to spell it out, the way every other provider's does.
+	tier, ok := saved.Tier("t1")
+	if !ok {
+		t.Fatal("t1 did not survive the round trip")
+	}
+	if tier.Target.Surface != "generic" || tier.Target.ModelID != "qwen3" {
+		t.Fatalf("t1 loaded as %+v, want the generic compatible surface", tier.Target)
+	}
+
+	c.SetProviderBaseURL(ProviderSurfaceKey("openaicompat", "generic"), "")
+	if _, still := c.Providers[ProviderSurfaceKey("openaicompat", "generic")]; still {
+		t.Fatal("clearing an address should remove the entry, not write a blank one")
+	}
+}
