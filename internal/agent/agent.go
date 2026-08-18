@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/hooks"
 	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/prefix"
@@ -125,6 +126,12 @@ type Loop struct {
 	// turns or at an explicit model-call boundary. A turn snapshots its observer
 	// once, while a model call snapshots provider, target, and cache as one unit.
 	runtimeMu sync.RWMutex
+
+	// sessionMu makes a session/tools context swap indivisible with respect to
+	// a turn. A bind may be requested concurrently, but it waits until the
+	// active turn has finished before clearing read state, restoring todos, and
+	// publishing the new session together.
+	sessionMu sync.Mutex
 }
 
 // Binding is the provider state that must move as one unit. Cache state is
@@ -151,6 +158,35 @@ func (l *Loop) Bind(binding Binding) {
 	l.Target = binding.Target
 	l.Cache = binding.Cache
 	l.runtimeMu.Unlock()
+}
+
+// BindSession switches to a context that did not inherit the current
+// transcript byte-for-byte: resume, clear, compaction, or an ordinary session
+// swap. It drops all file-read evidence before exposing the new session, and a
+// session with no live capsule explicitly clears the previous todos.
+func (l *Loop) BindSession(sess *session.Session) error {
+	l.sessionMu.Lock()
+	defer l.sessionMu.Unlock()
+	if sess == nil {
+		return fmt.Errorf("bind session: nil session")
+	}
+	if l.Tools == nil {
+		return fmt.Errorf("bind session: nil tool registry")
+	}
+	items, err := todoItemsFromContinuity(sess.CurrentContinuity())
+	if err != nil {
+		return fmt.Errorf("bind session: %w", err)
+	}
+	// File-read evidence belongs to the exact durable context that observed
+	// those bytes, not merely to a registry or workspace. No generic session
+	// binding can prove that relationship, so every bind drops it. Branch also
+	// starts empty to close the pre-ToolResult interval.
+	l.Tools.ForgetAllVersions()
+	if err := l.Tools.RestoreTodos(items); err != nil {
+		return fmt.Errorf("bind session: restore todos: %w", err)
+	}
+	l.Session = sess
+	return nil
 }
 
 // SetObserver installs the observer graph used by the next turn. A turn keeps
@@ -227,7 +263,14 @@ func (l *Loop) Turn(ctx context.Context, input string) error {
 // and complete: it opens the turn, so it is the boundary /fork cuts on and
 // the message every later request replays.
 func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error {
+	l.sessionMu.Lock()
+	defer l.sessionMu.Unlock()
 	observer := l.observer()
+	var err error
+	opening, _, err = l.Session.StampContinuityOpening(opening)
+	if err != nil {
+		return err
+	}
 	// The turn is the undo unit: everything this input causes the tools to
 	// change restores together. A subagent's loop leaves this nil and its
 	// registry shares the primary recorder, so a delegate's edits file under
@@ -303,10 +346,15 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 		// malformed conversation, and every later request built from this
 		// session would carry that damage forward.
 		if len(results) > 0 {
-			if err := l.Session.AppendMessage(provider.Message{
+			resultMessage := provider.Message{
 				Role:    provider.RoleTool,
 				Content: results,
-			}); err != nil {
+			}
+			if successfulTodoResult(results) {
+				if _, err := l.Session.AppendToolResultsWithTasks(resultMessage, continuityTasks(l.Tools.Todos())); err != nil {
+					return err
+				}
+			} else if err := l.Session.AppendMessage(resultMessage); err != nil {
 				return err
 			}
 		}
@@ -323,6 +371,38 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 	observer.Notice("warn", msg)
 	l.Session.AppendNote("warn", msg)
 	return ErrRoundLimit
+}
+
+func successfulTodoResult(results []provider.Block) bool {
+	for _, block := range results {
+		result, ok := block.(provider.ToolResult)
+		if ok && result.Name == "todo" && !result.IsError {
+			return true
+		}
+	}
+	return false
+}
+
+func continuityTasks(items []tools.TodoItem) []continuity.Task {
+	tasks := make([]continuity.Task, len(items))
+	for i, item := range items {
+		tasks[i] = continuity.Task{Text: item.Text, Status: continuity.TaskStatus(item.Status)}
+	}
+	return tasks
+}
+
+func todoItemsFromContinuity(capsule *continuity.Capsule) ([]tools.TodoItem, error) {
+	if capsule == nil || capsule.Cleared {
+		return nil, nil
+	}
+	if err := continuity.ValidateStored(*capsule); err != nil {
+		return nil, fmt.Errorf("invalid continuity capsule: %w", err)
+	}
+	items := make([]tools.TodoItem, len(capsule.Tasks))
+	for i, task := range capsule.Tasks {
+		items[i] = tools.TodoItem{Text: task.Text, Status: tools.TodoStatus(task.Status)}
+	}
+	return items, nil
 }
 
 // callModel issues one model call, retrying transient failures. It returns
@@ -740,12 +820,7 @@ func sleep(ctx context.Context, d time.Duration) error {
 // messageLabel is what the checkpoint recorder files the turn under: the
 // text the user typed, whatever else the message carries.
 func messageLabel(msg provider.Message) string {
-	for _, b := range msg.Content {
-		if t, ok := b.(provider.Text); ok {
-			return t.Text
-		}
-	}
-	return ""
+	return msg.AuthoredText()
 }
 
 func orDefault(v, fallback int) int {

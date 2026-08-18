@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/switchboard-code/switchboard/internal/continuity"
 	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
@@ -92,6 +93,7 @@ func (s *Store) forkSessionOnto(source *Session, keepMessages int, target provid
 		return nil, fmt.Errorf("%w: origin session %s", ErrRaceBranchPending, source.state.raceBranchOrigin)
 	}
 	state := source.state
+	state.Messages = provider.CloneMessages(source.state.Messages)
 	return s.forkPathOnto(source.state.ID, source.path, keepMessages, target, allowEmpty, &state)
 }
 
@@ -172,16 +174,29 @@ func (s *Store) forkPathOnto(id, path string, keepMessages int, target provider.
 			// and can also inherit a user pin into an automatic race arm.
 			continue
 		}
-		if rec.Type == RecordMessage {
+		if rec.Type == RecordContinuity {
+			capsule, err := continuity.DecodeStored(rec.Payload)
+			if err != nil {
+				return nil, err
+			}
+			// Keep every capsule derived from the exact prefix. This includes a
+			// basis-zero capsule referenced by a first opening: retry must replay
+			// that opening byte-for-byte, and its durable reference is valid only
+			// while the same capsule remains current in the fork.
+			if pastCut || capsule.BasisMessages > keepMessages {
+				continue
+			}
+			kept = append(kept, rec)
+			continue
+		}
+		if message, isMessage, err := conversationMessage(rec); err != nil {
+			return nil, err
+		} else if isMessage {
 			if !pastCut && messages == keepMessages {
-				var m provider.Message
-				if err := json.Unmarshal(rec.Payload, &m); err != nil {
-					return nil, err
-				}
-				if m.Role != provider.RoleUser {
+				if message.Role != provider.RoleUser {
 					return nil, fmt.Errorf(
 						"the cut falls inside a turn: message %d is %s, and a turn is dropped whole or kept whole",
-						keepMessages, m.Role)
+						keepMessages, message.Role)
 				}
 				pastCut = true
 			}

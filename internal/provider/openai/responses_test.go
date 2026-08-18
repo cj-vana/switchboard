@@ -260,6 +260,41 @@ func TestResponsesToolResultBecomesItsOwnItem(t *testing.T) {
 	}
 }
 
+func TestResponsesContinuityAndPromptRemainIsolatedParts(t *testing.T) {
+	body, err := NewResponses().buildRequest(SubscriptionTarget("gpt-5.4-mini"), provider.Request{Messages: []provider.Message{{
+		Role: provider.RoleUser,
+		Content: []provider.Block{
+			provider.Text{Text: "[continuity capsule]\n\n"},
+			provider.Text{Text: "continue with the fix"},
+		},
+		ContinuityRef: "0123456789abcdef0123456789abcdef",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Input []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Input) != 1 || len(decoded.Input[0].Content) != 2 ||
+		decoded.Input[0].Content[0].Text != "[continuity capsule]\n\n" ||
+		decoded.Input[0].Content[1].Text != "continue with the fix" {
+		t.Fatalf("Responses continuity parts = %+v", decoded.Input)
+	}
+	if strings.Contains(string(body), "continuity_ref") {
+		t.Fatal("session-only continuity metadata reached the Responses wire")
+	}
+}
+
 // This endpoint caches by routing key, so a plan of block positions has nowhere
 // to land. Sending the request without them would drop what the manager asked
 // for and report a miss it caused.

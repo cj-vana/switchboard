@@ -298,6 +298,30 @@ func TestBuildRequestShape(t *testing.T) {
 	}
 }
 
+func TestContinuityBlockKeepsBlankLineBeforeFlattenedPrompt(t *testing.T) {
+	raw, err := New().buildRequest(Target("m"), provider.Request{Messages: []provider.Message{{
+		Role: provider.RoleUser,
+		Content: []provider.Block{
+			provider.Text{Text: "[continuity capsule]\n\n"},
+			provider.Text{Text: "continue with the fix"},
+		},
+		ContinuityRef: "0123456789abcdef0123456789abcdef",
+	}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded chatRequest
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Messages) != 1 || decoded.Messages[0].Content != "[continuity capsule]\n\ncontinue with the fix" {
+		t.Fatalf("flattened continuity opening = %+v", decoded.Messages)
+	}
+	if strings.Contains(string(raw), "continuity_ref") {
+		t.Fatal("session-only continuity metadata reached the Ollama wire")
+	}
+}
+
 // Two calls to the same tool in one turn are only distinguishable by ID, so the
 // result messages must carry it.
 func TestBuildRequestCorrelatesRepeatedToolCalls(t *testing.T) {

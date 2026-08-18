@@ -179,13 +179,13 @@ func ReadTimeline(path string) ([]Timeline, error) {
 		if err != nil {
 			return nil, err
 		}
+		if message, ok, err := conversationMessage(rec); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, Timeline{At: rec.At, Message: &message})
+			continue
+		}
 		switch rec.Type {
-		case RecordMessage:
-			var m provider.Message
-			if err := json.Unmarshal(rec.Payload, &m); err != nil {
-				return nil, err
-			}
-			out = append(out, Timeline{At: rec.At, Message: &m})
 		case RecordRoute:
 			var route Route
 			if err := json.Unmarshal(rec.Payload, &route); err != nil {
@@ -306,17 +306,17 @@ func ReadOpening(path string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if rec.Type != RecordMessage {
-			continue
-		}
-		var m provider.Message
-		if err := json.Unmarshal(rec.Payload, &m); err != nil {
+		m, ok, err := conversationMessage(rec)
+		if err != nil {
 			return "", err
+		}
+		if !ok {
+			continue
 		}
 		// A user-role message whose blocks are all tool results renders no
 		// text and is not the user speaking; keep looking.
 		if m.Role == provider.RoleUser {
-			if text := strings.TrimSpace(m.Text()); text != "" {
+			if text := strings.TrimSpace(m.AuthoredText()); text != "" {
 				return text, nil
 			}
 		}

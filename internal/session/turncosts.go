@@ -84,15 +84,15 @@ func ReadTurnCosts(path string) ([]TurnCost, error) {
 		if err != nil {
 			return nil, err
 		}
+		if message, ok, err := conversationMessage(rec); err != nil {
+			return nil, err
+		} else if ok {
+			if OpensTurn(message) {
+				turns = append(turns, TurnCost{Turn: len(turns) + 1, Prompt: strings.TrimSpace(message.AuthoredText()), Purpose: UsagePurposeTurn})
+			}
+			continue
+		}
 		switch rec.Type {
-		case RecordMessage:
-			var m provider.Message
-			if err := json.Unmarshal(rec.Payload, &m); err != nil {
-				return nil, err
-			}
-			if OpensTurn(m) {
-				turns = append(turns, TurnCost{Turn: len(turns) + 1, Prompt: strings.TrimSpace(m.Text()), Purpose: UsagePurposeTurn})
-			}
 		case RecordUsage:
 			var u Usage
 			if err := json.Unmarshal(rec.Payload, &u); err != nil {

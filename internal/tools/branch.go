@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"errors"
-	"maps"
 )
 
 // Branch clones a registry for a context that branched off this one — a
@@ -18,20 +17,17 @@ import (
 // branch must not run keeps its schema and refuses at call time instead,
 // through the refuse map (tool name to the reason the model reads).
 //
-// The read state must be copied, not shared. The §6.7 skip answers a
-// repeated full read with a marker because the bytes already sit in the
-// context — and at branch time that is as true of the fork as of the
-// source, since the fork's context is the same bytes. But two branches
-// racing the same prompt read the same files, and a read that armed the
-// skip in one context must not answer with a marker in the other, whose
-// context never received those bytes. Copy at the moment of branching,
-// then let the records diverge with their contexts.
+// File-read state starts empty. A read tool updates its registry before the
+// matching ToolResult is durable, so the registry alone cannot prove those
+// bytes reached the exact session prefix being forked. Rereading in a branch
+// is conservative and keeps both read-before-write and the §6.7 reinjection
+// skip honest even when a fork races the result append.
 func (r *Registry) Branch(refuse map[string]string) *Registry {
 	nr := &Registry{
 		root:       r.root,
 		capability: r.capability,
 		execution:  r.execution,
-		versions:   r.versions.clone(),
+		versions:   &fileVersions{seen: map[string]string{}, whole: map[string]string{}},
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 		// No checkpointer: a branch is read-only by policy, and an undo
@@ -43,7 +39,7 @@ func (r *Registry) Branch(refuse map[string]string) *Registry {
 		switch name {
 		// The core tools hold a pointer to their registry, so each branch
 		// needs its own instances or every branch read would arm the
-		// source's skip. Everything else — astgrep, skill, the LSP pair,
+		// source's state. Everything else — astgrep, skill, the LSP pair,
 		// bridged MCP tools, delegate — carries no per-context read state,
 		// so the instance is shared and the definition bytes with it.
 		case "read":
@@ -75,18 +71,6 @@ func (r *Registry) Branch(refuse map[string]string) *Registry {
 		nr.add(tool)
 	}
 	return nr
-}
-
-// clone copies the read record at a moment in time, under the lock, so a
-// branch starts from exactly what this context has read and neither record
-// hears about the other's reads afterwards.
-func (v *fileVersions) clone() *fileVersions {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return &fileVersions{
-		seen:  maps.Clone(v.seen),
-		whole: maps.Clone(v.whole),
-	}
 }
 
 // refusedTool keeps a tool's schema while refusing to run it. The schema is

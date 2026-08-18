@@ -26,26 +26,30 @@ func TestBranchDefinitionsRenderByteIdentical(t *testing.T) {
 	}
 }
 
-// The read-state half: the branch starts from the source's record — at
-// branch time their contexts hold the same bytes — and the records diverge
-// from there, so a read that arms the §6.7 skip in one context never
-// answers with a marker in the other.
-func TestBranchReadStateIsCopiedNotShared(t *testing.T) {
+// A Registry read is ahead of the transcript until its ToolResult is durable.
+// Branch therefore starts without read authority or reinjection skips rather
+// than assuming that an in-memory token belongs to the forked prefix.
+func TestBranchReadStateStartsEmptyEvenAfterSourceRead(t *testing.T) {
 	r, root := newRegistry(t)
 	writeFile(t, root+"/before.go", "read before the branch\n")
 	writeFile(t, root+"/after.go", "read after the branch\n")
 
-	// A full read before branching arms the skip for both: the branch's
-	// context is the same bytes, so the marker is as true there.
+	// This can represent the dangerous interval after read.Run and before the
+	// matching ToolResult append. Neither the skip nor write authority crosses.
 	run(t, r, "read", map[string]any{"path": "before.go"})
 	branch := r.Branch(nil)
-	if res := run(t, branch, "read", map[string]any{"path": "before.go"}); !strings.Contains(res.Content, "unchanged") {
-		t.Errorf("a file the shared prefix holds re-read as bytes in the branch:\n%s", res.Content)
+	write, err := tryRun(branch, "write", map[string]any{"path": "before.go", "content": "unsafe\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !write.IsError || !strings.Contains(write.Content, "not been read") {
+		t.Fatalf("branch inherited source write authority: %+v", write)
+	}
+	if res := run(t, branch, "read", map[string]any{"path": "before.go"}); strings.Contains(res.Content, "unchanged") {
+		t.Errorf("branch inherited an unproved reinjection skip:\n%s", res.Content)
 	}
 
-	// A full read after branching arms only the context that did it. The
-	// other context never received the bytes, so a marker there would tell
-	// the model to rely on content it does not have.
+	// Once the branch itself reads, its state remains independent.
 	run(t, branch, "read", map[string]any{"path": "after.go"})
 	if res := run(t, r, "read", map[string]any{"path": "after.go"}); strings.Contains(res.Content, "unchanged") {
 		t.Errorf("a branch read armed the source's skip:\n%s", res.Content)

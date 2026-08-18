@@ -363,6 +363,38 @@ func TestBuildRequestShape(t *testing.T) {
 	}
 }
 
+func TestContinuityBlockKeepsBlankLineBeforeFlattenedPrompt(t *testing.T) {
+	c, err := New("generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := Target("generic", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := c.buildRequest(target, provider.Request{Messages: []provider.Message{{
+		Role: provider.RoleUser,
+		Content: []provider.Block{
+			provider.Text{Text: "[continuity capsule]\n\n"},
+			provider.Text{Text: "continue with the fix"},
+		},
+		ContinuityRef: "0123456789abcdef0123456789abcdef",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded chatRequest
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Messages) != 1 || decoded.Messages[0].Content != "[continuity capsule]\n\ncontinue with the fix" {
+		t.Fatalf("flattened continuity opening = %+v", decoded.Messages)
+	}
+	if strings.Contains(string(raw), "continuity_ref") {
+		t.Fatal("session-only continuity metadata reached the chat-completions wire")
+	}
+}
+
 func TestUnsupportedEffortIsACapabilityError(t *testing.T) {
 	c, _ := New("ollama")
 	tgt := target(t, "m")
