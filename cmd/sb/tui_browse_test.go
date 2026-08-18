@@ -293,8 +293,11 @@ func TestSkippingTheKeyPromptStillBindsTheRung(t *testing.T) {
 	}
 	step(t, m, noticeMsg{text: "nothing entered, nothing stored"})
 
-	if !m.quitting || m.err != nil {
-		t.Fatalf("the wizard should have finished; quitting=%v err=%v", m.quitting, m.err)
+	if m.err != nil {
+		t.Fatalf("the wizard failed: %v", m.err)
+	}
+	if m.step != stepMore {
+		t.Fatalf("the rung should be bound and the ladder question asked, step is %v", m.step)
 	}
 	saved, err := config.LoadFile(cfg.Path)
 	if err != nil {

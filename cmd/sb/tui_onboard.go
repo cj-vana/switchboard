@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +50,13 @@ type onboardWiredMsg struct {
 	note string
 	err  error
 }
-type onboardBoundMsg struct{ err error }
+type onboardBoundMsg struct {
+	tier string
+	err  error
+}
+
+// onboardDoneMsg ends the wizard with the ladder as it stands.
+type onboardDoneMsg struct{}
 
 // onboardStep orders the wizard: connect what can be connected, then pick
 // what t1 runs on. Keys first is deliberate — a key stored in the first step
@@ -59,7 +66,11 @@ type onboardStep int
 const (
 	stepConnect onboardStep = iota
 	stepModel
+	stepMore
 )
+
+// onboardAddID is the row that keeps the wizard open for another rung.
+const onboardAddID = "\x00add-rung"
 
 type onboardModel struct {
 	reg *providers
@@ -193,10 +204,12 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// a step here as well would run two of them.
 			return m, nil
 		}
-		if m.step == stepConnect {
+		switch {
+		case m.step == stepConnect:
 			return m, m.connectStep()
-		}
-		if m.choice.ref == "" {
+		case m.step == stepMore:
+			return m, m.moreRungsStep()
+		case m.choice.ref == "":
 			return m, m.modelStep()
 		}
 		return m, m.effortOrBind()
@@ -252,14 +265,18 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case onboardBoundMsg:
 		if msg.err != nil {
 			m.err = msg.err
-		} else {
-			m.lines = append(m.lines,
-				"t1 now runs "+m.choice.ref,
-				"saved to "+m.cfg.Path,
-				"add more rungs any time with /models")
+			m.quitting = true
+			return m, tea.Quit
 		}
-		m.quitting = true
-		return m, tea.Quit
+		m.lines = append(m.lines, msg.tier+" now runs "+m.choice.ref)
+		// The chosen target has been written; anything that arrives next is
+		// about the ladder rather than about this rung.
+		m.choice = modelChoice{}
+		m.step = stepMore
+		return m, m.moreRungsStep()
+
+	case onboardDoneMsg:
+		return m.finish()
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -272,8 +289,13 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if done {
 				m.dlg = nil
 				if cmd == nil {
-					// Every dialog here resolves to a command; a bare close
-					// is the user backing out.
+					// A bare close is the user backing out. Once a rung is
+					// bound it is already written to the file, so backing out
+					// means the ladder is finished rather than that a saved
+					// configuration should be thrown away.
+					if len(m.cfg.Tiers) > 0 {
+						return m.finish()
+					}
 					m.cancelled = true
 					m.quitting = true
 					return m, tea.Quit
@@ -337,14 +359,73 @@ func (m *onboardModel) effortOrBind() tea.Cmd {
 	}
 }
 
+// bind writes the chosen target to the next free rung. The wizard fills the
+// ladder from the bottom because that is the order it is read in: a session
+// opens on t1 and escalates upward, so the first thing chosen is the thing
+// that runs by default.
 func (m *onboardModel) bind(effort string) tea.Cmd {
 	choice, cfg := m.choice, m.cfg
 	return func() tea.Msg {
-		if err := cfg.BindTier("t1", "", choice.ref, choice.surface, effort); err != nil {
+		id := "t" + strconv.Itoa(highestRung(cfg)+1)
+		if err := cfg.BindTier(id, "", choice.ref, choice.surface, effort); err != nil {
 			return onboardBoundMsg{err: err}
 		}
-		return onboardBoundMsg{err: cfg.Save()}
+		return onboardBoundMsg{tier: id, err: cfg.Save()}
 	}
+}
+
+// moreRungsStep is the question the wizard used to answer for the user. A
+// ladder is the thing this tool is for, and binding one rung then dropping
+// into a session leaves the other rungs to a command nobody has met yet.
+func (m *onboardModel) moreRungsStep() tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg {
+		next := "t" + strconv.Itoa(highestRung(cfg)+1)
+		return pickerMsg{
+			title: "ladder so far — " + ladderSummary(cfg),
+			items: []pickerItem{
+				{
+					id:    onboardAddID,
+					label: "add " + next + "…",
+					desc:  "one rung up: /" + next + " switches to it, and escalation reaches for it",
+				},
+				{
+					id:    setupDoneID,
+					label: "start the session",
+					desc:  "sessions open on t1; /models adds rungs later",
+				},
+			},
+			action: func(id string) tea.Cmd {
+				if id == onboardAddID {
+					m.step = stepModel
+					return m.modelStep()
+				}
+				return func() tea.Msg { return onboardDoneMsg{} }
+			},
+		}
+	}
+}
+
+// ladderSummary is the one line that says what has been built so far, so the
+// question "another rung?" is asked against something visible.
+func ladderSummary(cfg *config.Config) string {
+	parts := make([]string, 0, len(cfg.Tiers))
+	for _, t := range cfg.Tiers {
+		parts = append(parts, t.ID+" "+t.Target.Provider+"/"+t.Target.ModelID)
+	}
+	if len(parts) == 0 {
+		return "nothing bound yet"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// finish closes the wizard with the ladder that was built.
+func (m *onboardModel) finish() (tea.Model, tea.Cmd) {
+	m.lines = append(m.lines,
+		"saved to "+m.cfg.Path,
+		"/models adds or rebinds rungs any time")
+	m.quitting = true
+	return m, tea.Quit
 }
 
 func (m *onboardModel) View() string {
