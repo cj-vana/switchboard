@@ -39,7 +39,7 @@ func (t *execTool) Schema() json.RawMessage {
     "command": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Program and arguments, for example [\"go\",\"test\",\"./...\"]. When shell is true, pass exactly one element holding the whole script."
+      "description": "Program and arguments, for example [\"go\",\"test\",\"./...\"]. When shell is true, pass exactly one element holding the whole script, for example [\"grep -r foo . | head -20\"]."
     },
     "shell": {"type": "boolean", "description": "Run the single command element through /bin/sh. Only needed for pipes, redirection, or expansion."},
 	"network": {"type": "boolean", "description": "Request internet access when a sandbox is active. With the default sandbox-off posture, approved commands already have the host's full network reach regardless of this hint."},
@@ -65,7 +65,13 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 		return Plan{}, fmt.Errorf("exec: command is empty")
 	}
 	if in.Shell && len(in.Command) != 1 {
-		return Plan{}, fmt.Errorf("exec: shell mode takes the whole script as one element, got %d", len(in.Command))
+		// The model met this twice in one session and corrected twice, which
+		// means the sentence it read was not the shape it needed. An error
+		// that shows the call is one it can act on without a second attempt.
+		return Plan{}, fmt.Errorf(
+			`exec: shell mode takes the whole script as one element, got %d; `+
+				`join them: {"command": [%q], "shell": true}`,
+			len(in.Command), strings.Join(in.Command, " "))
 	}
 
 	timeout := time.Duration(in.TimeoutSeconds) * time.Second
