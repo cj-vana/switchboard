@@ -188,9 +188,6 @@ func decodeSyncOptions(raw json.RawMessage) (SyncOptions, error) {
 				}
 			}
 		}
-		if out.Change != SyncNone && !out.OpenClose {
-			return SyncOptions{}, fmt.Errorf("change kind %d requires openClose support", out.Change)
-		}
 		return out, nil
 	}
 
@@ -198,7 +195,10 @@ func decodeSyncOptions(raw json.RawMessage) (SyncOptions, error) {
 	if err != nil {
 		return SyncOptions{}, err
 	}
-	return SyncOptions{OpenClose: kind != SyncNone, Change: kind}, nil
+	// The numeric TextDocumentSyncKind shorthand advertises only change
+	// delivery. didOpen/didClose is a separate capability and must not be
+	// inferred from a non-zero change kind.
+	return SyncOptions{Change: kind}, nil
 }
 
 func decodeSyncKind(raw json.RawMessage) (SyncKind, error) {

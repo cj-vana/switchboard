@@ -318,6 +318,24 @@ func TestCanceledStartupAttemptCanRetrySuccessfully(t *testing.T) {
 	server.Close()
 }
 
+func TestServerOpenCloseSyncIsAnExplicitProfileOverride(t *testing.T) {
+	server := &Server{Root: t.TempDir(), OpenCloseSync: true}
+	server.startClient = func(_ context.Context, _ []string, _ string, store *ProblemStore) (*Client, error) {
+		client := testStartedClient(store, "legacy-sync")
+		client.capabilities.Sync.Change = SyncIncremental
+		return client, nil
+	}
+
+	capabilities, err := server.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !capabilities.Sync.OpenClose || capabilities.Sync.Change != SyncIncremental {
+		t.Fatalf("profiled synchronization = %+v", capabilities.Sync)
+	}
+	server.Close()
+}
+
 func TestConcurrentServerCallsShareOneStartupAttempt(t *testing.T) {
 	root := t.TempDir()
 	server := &Server{Root: root}
@@ -366,6 +384,67 @@ func TestConcurrentServerCallsShareOneStartupAttempt(t *testing.T) {
 	}
 	server.Close()
 }
+
+func TestClosePublishesFailureToEverySharedStartupCaller(t *testing.T) {
+	root := t.TempDir()
+	server := &Server{Root: root}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server.startClient = func(_ context.Context, _ []string, _ string, store *ProblemStore) (*Client, error) {
+		close(started)
+		<-release // Deliberately ignore cancellation and finish after Server.Close.
+		return testStartedClient(store, "discarded"), nil
+	}
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := server.Capabilities(context.Background())
+		first <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("startup attempt did not begin")
+	}
+
+	waiting := make(chan struct{})
+	second := make(chan error, 1)
+	go func() {
+		_, err := server.Capabilities(&waiterContext{waiting: waiting})
+		second <- err
+	}()
+	select {
+	case <-waiting: // Done is consulted only once the second caller is waiting on the shared attempt.
+	case <-time.After(time.Second):
+		t.Fatal("second caller did not join the shared startup attempt")
+	}
+
+	server.Close()
+	close(release)
+	for index, result := range []<-chan error{first, second} {
+		select {
+		case err := <-result:
+			if err == nil || !strings.Contains(err.Error(), "language server is closed") {
+				t.Fatalf("caller %d error = %v, want the published closed error", index+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("caller %d remained blocked after Close", index+1)
+		}
+	}
+}
+
+type waiterContext struct {
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *waiterContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *waiterContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return nil
+}
+func (c *waiterContext) Err() error    { return nil }
+func (c *waiterContext) Value(any) any { return nil }
 
 func testStartedClient(store *ProblemStore, name string) *Client {
 	return &Client{

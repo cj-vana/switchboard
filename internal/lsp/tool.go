@@ -33,6 +33,11 @@ const (
 type Server struct {
 	Argv []string
 	Root string
+	// OpenCloseSync is a verified server-profile correction for a runtime
+	// whose legacy numeric textDocumentSync advertisement omits the separate
+	// openClose behavior it actually requires. Generic numeric decoding stays
+	// change-only; only a live-tested candidate should set this.
+	OpenCloseSync bool
 
 	mu           sync.Mutex
 	starting     *serverStart
@@ -86,22 +91,36 @@ func (s *Server) get(ctx context.Context) (*Client, error) {
 	}
 	argv := append([]string(nil), s.Argv...)
 	root := s.Root
+	openCloseSync := s.OpenCloseSync
 	problems := s.Problems()
 	s.mu.Unlock()
 
-	attempt.client, attempt.err = starter(startCtx, argv, root, problems)
+	startedClient, startErr := starter(startCtx, argv, root, problems)
 	cancel()
-	if attempt.err != nil {
+	if startErr == nil && startedClient != nil && openCloseSync {
+		capabilities := startedClient.Capabilities()
+		capabilities.Sync.OpenClose = true
+		startedClient.setCapabilities(capabilities)
+	}
+	if startErr != nil {
 		problems.unavailable()
 	}
 
 	s.mu.Lock()
 	closed := s.closed
-	if !closed && attempt.err == nil {
+	attempt.client, attempt.err = startedClient, startErr
+	if closed {
+		// Publish the terminal server state before waking callers that shared
+		// this attempt. The successfully started client was never installed and
+		// is closed below; returning it to a waiter would hand out exactly that
+		// discarded runtime while Close is tearing it down.
+		attempt.client = nil
+		attempt.err = fmt.Errorf("language server is closed")
+	} else if attempt.err == nil {
 		s.client = attempt.client
 		s.lastError = ""
 		problems.markAvailable()
-	} else if !closed && attempt.err != nil {
+	} else {
 		s.lastError = boundedStatusError(attempt.err)
 	}
 	if s.starting == attempt {
@@ -110,9 +129,8 @@ func (s *Server) get(ctx context.Context) (*Client, error) {
 	close(attempt.done)
 	s.mu.Unlock()
 
-	if closed && attempt.client != nil {
-		attempt.client.Close()
-		return nil, fmt.Errorf("language server is closed")
+	if closed && startedClient != nil {
+		startedClient.Close()
 	}
 	// Failures are intentionally not cached. A caller-owned deadline, a
 	// process race, or a temporarily unavailable binary must not disable LSP

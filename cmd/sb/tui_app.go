@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,6 +61,12 @@ type tuiApp struct {
 
 	// mcp holds the session's connected servers, for /mcp and shutdown.
 	mcp *mcpState
+
+	// startupNotes is the sanitized retained extension diagnostic record, plus
+	// an explicit count if the bounded pre-surface buffer overflowed. Startup
+	// renders only its highlights and summary; /doctor extensions opens every
+	// retained detail in original discovery order.
+	startupNotes startupNoteReport
 
 	// lsp is the one lazily started language server assembled before the
 	// provider tool schema froze. Its diagnostics subscription is coalesced;
@@ -120,28 +125,31 @@ func (a *tuiApp) displayPath(abs string) string {
 // tuiObserver is the loop's Observer, forwarding into the Bubble Tea program.
 // Called from the loop's goroutine; Send queues without blocking.
 type tuiObserver struct {
-	p              *tea.Program
-	workspaceDirty atomic.Bool
+	p *tea.Program
 }
 
 func (o *tuiObserver) ThinkingDelta(text string) { o.p.Send(deltaMsg{thinking: true, text: text}) }
 func (o *tuiObserver) TextDelta(text string)     { o.p.Send(deltaMsg{text: text}) }
 func (o *tuiObserver) ToolStart(call provider.ToolUse, req permission.Request) {
-	if req.Effect == permission.EffectWrite || req.Effect == permission.EffectExecute {
-		o.workspaceDirty.Store(true)
-	}
 	o.p.Send(toolStartMsg{id: call.ID, name: call.Name, req: req})
 }
-func (o *tuiObserver) ToolEnd(call provider.ToolUse, _ permission.Request, res tools.Result, took time.Duration) {
+func (o *tuiObserver) ToolEnd(call provider.ToolUse, req permission.Request, res tools.Result, took time.Duration) {
 	o.p.Send(toolEndMsg{id: call.ID, name: call.Name, res: res, took: took})
-}
-func (o *tuiObserver) ToolBatchEnd(context.Context) {
-	if o.p != nil && o.workspaceDirty.Swap(false) {
+	// Completion, not the shared batch callback, is the sound invalidation
+	// point once independent delegates overlap. One task may end a read-only
+	// batch while another write is still running; a single batch-level dirty
+	// bit could then be cleared before the write publishes and never fire again.
+	if invalidatesWorkspace(req) {
 		o.p.Send(workspaceInvalidatedMsg{})
 	}
 }
-func (o *tuiObserver) Notice(level, text string) { o.p.Send(noticeMsg{level: level, text: text}) }
-func (o *tuiObserver) TurnUsage(u session.Usage) { o.p.Send(usageMsg{u: u}) }
+func (o *tuiObserver) ToolBatchEnd(context.Context) {}
+func (o *tuiObserver) Notice(level, text string)    { o.p.Send(noticeMsg{level: level, text: text}) }
+func (o *tuiObserver) TurnUsage(u session.Usage)    { o.p.Send(usageMsg{u: u}) }
+
+func invalidatesWorkspace(req permission.Request) bool {
+	return req.Effect == permission.EffectWrite || req.Effect == permission.EffectExecute
+}
 
 // tuiAsker resolves a permission Ask against a dialog in the TUI. The loop
 // blocks here until the user answers or the turn is cancelled; a program that

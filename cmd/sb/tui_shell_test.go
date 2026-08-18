@@ -108,12 +108,22 @@ func TestShellSignalNamesTheCause(t *testing.T) {
 
 func TestShellTimeoutAndCancellationNameTheirCause(t *testing.T) {
 	timedOut := classifyShellResult(errors.New("process killed"), context.DeadlineExceeded)
-	if got := timedOut.summary(); got != "timed out after "+shellTimeout.String() {
+	wantTimeout := "timed out after " + shellTimeout.String()
+	wantCancelled := "cancelled by user"
+	if runtime.GOOS == "windows" {
+		limit := "; only the direct shell was stopped; descendant processes may still be running"
+		wantTimeout += limit
+		wantCancelled += limit
+	}
+	if got := timedOut.summary(); got != wantTimeout {
 		t.Fatalf("timeout summary = %q", got)
 	}
 	cancelled := classifyShellResult(errors.New("process killed"), context.Canceled)
-	if got := cancelled.summary(); got != "cancelled by user" {
+	if got := cancelled.summary(); got != wantCancelled {
 		t.Fatalf("cancellation summary = %q", got)
+	}
+	if record := cancelled.contextRecord(); (runtime.GOOS == "windows") != strings.Contains(record, "descendants_may_survive=true") {
+		t.Fatalf("cancellation context did not match platform cleanup semantics: %q", record)
 	}
 
 	if runtime.GOOS == "windows" {
@@ -169,4 +179,33 @@ func TestStaleShellCompletionCannotMutateTheCurrentSession(t *testing.T) {
 	// owned context behind.
 	m.operationSourceID = msg.sourceID
 	m.finishOperation(msg.operation, false)
+}
+
+func TestShellCompletionInvalidatesLiteralAndSemanticWorkspaceSnapshots(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		result shellResult
+	}{
+		{name: "success", result: shellResult{kind: shellSucceeded}},
+		// A failed shell may already have changed files before its non-zero exit.
+		{name: "failure after partial mutation", result: shellResult{kind: shellExited, exitCode: 9}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := testModel(t)
+			m.workspaceRuntime = newWorkspaceRuntime(m.app.workspace)
+			semantic := &lspView{}
+			m.full = semantic
+			m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: "shell", desc: test.name}, rank: -1})
+
+			before := m.workspaceRuntime.epoch.Load()
+			m.onShellDone(shellDoneMsg{command: test.name, result: test.result})
+
+			if after := m.workspaceRuntime.epoch.Load(); after != before+1 {
+				t.Fatalf("workspace epoch = %d, want %d", after, before+1)
+			}
+			if !semantic.stale {
+				t.Fatal("shell completion left the open semantic result looking current")
+			}
+		})
+	}
 }

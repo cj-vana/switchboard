@@ -2,18 +2,27 @@
 
 A terminal coding agent where the model is a slot, not a fixed property of the
 tool. You configure a ladder of models, cheapest at the bottom. Before each user
-turn, the deterministic router chooses the lowest suitable feasible rung; it
-can move upward on evidence such as repeated tool calls, error spikes, new test
-failures, or hedging. Every session is an append-only record that can be priced,
-replayed, and searched. Free and open source (MIT), for macOS and Linux.
+turn, the deterministic router chooses the lowest suitable feasible rung.
+Repeated tool calls, error spikes, new test failures, and hedging can propose a
+move; round, feasibility, and budget gates decide whether it applies. Every
+session is an append-only record that can be priced, replayed, and searched.
+Free and open source (MIT), for macOS and Linux.
 
-Version 1.1 adds deterministic per-turn routing, native Claude and Codex skill,
-plugin, and MCP discovery, and explicit execution modes. Commands run without a
-sandbox by default. Auto mode can send eligible ordinary commands to a
-configured low-cost reviewer; shell, interpreter, sensitive, external, and
-Windows commands remain human-approved. Yolo mode runs ordinary edits and
-commands without prompts while keeping sensitive and external actions gated.
-Verified Seatbelt or bubblewrap confinement is available when requested.
+Version 1.2 adds a searchable TUI workbench with revision-aware file and text
+search, an exact read-only Git diff that includes untracked files, bounded
+turn-scoped review of recorded agent mutations, semantic language-server views,
+atomic revision-checked edits and undo, durable continuity capsules, visible
+parallel delegate tasks, static side-effect-free CLI help and completion, and
+bounded startup extension diagnostics with a retained-detail drill-down. The
+line-oriented REPL and headless mode remain deliberately smaller than the TUI.
+
+Commands run without a sandbox by default. Auto mode uses a configured low-cost
+reviewer only under active verified confinement; host-direct, shared-loopback,
+opaque, sensitive, external, and Windows commands remain human-approved. A
+confined explicit full-network request can remain reviewable. Yolo mode runs
+ordinary edits and commands host-direct without prompts, while sensitive and
+external actions remain gated. Verified Seatbelt or bubblewrap confinement is
+available on request.
 
 ## Links
 
@@ -23,6 +32,7 @@ Verified Seatbelt or bubblewrap confinement is available when requested.
 - Configuration: https://github.com/switchboard-code/switchboard/blob/main/docs/configuration.md
 - Routing and accounting: https://github.com/switchboard-code/switchboard/blob/main/docs/routing.md
 - Sessions and TUI: https://github.com/switchboard-code/switchboard/blob/main/docs/session.md
+- Version 1.2 notes: https://github.com/switchboard-code/switchboard/blob/main/docs/release-1.2.md
 - Security and execution modes: https://github.com/switchboard-code/switchboard/blob/main/docs/security.md
 - Skills, plugins, commands, and MCP: https://github.com/switchboard-code/switchboard/blob/main/docs/extensions.md
 - Eval evidence: https://github.com/switchboard-code/switchboard/blob/main/docs/eval.md

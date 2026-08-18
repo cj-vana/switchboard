@@ -49,10 +49,11 @@ production profiles retain some host IPC, and Seatbelt also shares host
 loopback, so bypass asks on both platforms today. `yolo` forces host-direct
 filesystem and network access while retaining the requested sandbox selection,
 which becomes effective again after leaving `yolo`. Default, acceptEdits, and
-auto modes may approve a command while the sandbox is off; the approval
-identifies the full host reach rather than presenting it as confinement. While
-`yolo` is active, `/sandbox on` and `/sandbox auto` are refused; leave `yolo`
-first.
+auto modes remain separate from confinement. Default and acceptEdits can run a
+host-direct command after human approval. Permission `auto` also asks the human
+whenever verified confinement is not active; a cheap reviewer never authorizes
+host-direct execution. While `yolo` is active, `/sandbox on` and `/sandbox auto`
+are refused; leave `yolo` first.
 
 Every rule on both platforms was arrived at by running it. Where one looks
 redundant it is usually load-bearing in a way that is invisible until it is
@@ -150,17 +151,18 @@ macOS as a separate trust boundary, not as proof of off-machine isolation.
 
 `NetworkFull` is requested per command through the `network` field on the `exec`
 tool. The permission decision includes that request. Default, acceptEdits, and
-bypass modes surface it to the user; auto mode includes it in the bounded model
-review. Plan mode denies it. The sandbox governs what a command reads and
-writes; it cannot judge whether sending this workspace to the internet is what
-the user meant.
+bypass modes surface it to the user. Under active verified confinement, auto
+mode can include an explicit full-network request in bounded model review. Plan
+mode denies it. The sandbox governs what a command reads and writes; it cannot
+judge whether sending this workspace to the internet is what the user meant.
 
 Under macOS Seatbelt, an ordinary loopback-only command skips auto review and
 asks the user because it can address an existing host service. An explicit
 full-network request remains eligible for auto review because that broader
-reach is stated in the review packet. Linux direct argv remains eligible. Both
-review packets disclose retained host IPC authority. Shell form, inline
-interpreter code, and sensitive commands always skip model review.
+reach is stated in the review packet. Linux direct argv remains eligible only
+inside verified bubblewrap confinement. Both review packets disclose retained
+host IPC authority. Shell form, inline interpreter code, sensitive commands,
+and external tools always skip model review.
 
 ## Host services and IPC
 

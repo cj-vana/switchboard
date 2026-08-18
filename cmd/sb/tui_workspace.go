@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -94,29 +93,29 @@ func (r *workspaceRuntime) refresh(ctx context.Context) (workspace.Snapshot, err
 	return workspace.Snapshot{}, errors.New("workspace changed while its file index was refreshing; reopen the panel")
 }
 
-func (r *workspaceRuntime) search(ctx context.Context, literal string) ([]workspace.TextMatch, bool, error) {
+func (r *workspaceRuntime) search(ctx context.Context, literal string) ([]workspace.TextMatch, workspace.SearchStatus, error) {
 	_, index, err := r.resources(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, workspace.SearchStatus{}, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		epoch := r.epoch.Load()
 		if _, err := index.Refresh(ctx); err != nil {
-			return nil, false, err
+			return nil, workspace.SearchStatus{}, err
 		}
-		matches, truncated, err := index.Search(ctx, literal, workspace.SearchOptions{
+		matches, status, err := index.Search(ctx, literal, workspace.SearchOptions{
 			Limit:        workspace.DefaultSearchLimit,
 			MaxFileBytes: workspace.DefaultSearchBytes,
 		})
 		if err != nil {
-			return nil, false, err
+			return nil, workspace.SearchStatus{}, err
 		}
 		if epoch == r.epoch.Load() {
-			return matches, truncated, nil
+			return matches, status, nil
 		}
 		index.Invalidate()
 	}
-	return nil, false, errors.New("workspace changed while search was running; run the search again")
+	return nil, workspace.SearchStatus{}, errors.New("workspace changed while search was running; run the search again")
 }
 
 func (r *workspaceRuntime) read(ctx context.Context, path string) (workspace.Document, error) {
@@ -190,6 +189,8 @@ type workspaceView struct {
 	loading   string
 	err       error
 	truncated bool
+	skipped   int
+	oversized int
 	snapshot  workspace.Snapshot
 	allRows   []workspaceRow
 	rows      []workspaceRow
@@ -218,7 +219,7 @@ type workspaceOpenedMsg struct {
 	generation uint64
 	snapshot   workspace.Snapshot
 	matches    []workspace.TextMatch
-	truncated  bool
+	status     workspace.SearchStatus
 	err        error
 }
 
@@ -293,6 +294,7 @@ func (m *tuiModel) openWorkspace(kind workspacePanelKind, query string) tea.Cmd 
 	if sessionID == "" {
 		return noticeCmd("error", "workspace navigation needs an active session")
 	}
+	m.closeFullscreen()
 	m.workspaceGeneration++
 	ctx, cancel := context.WithCancel(context.Background())
 	view := &workspaceView{
@@ -304,7 +306,6 @@ func (m *tuiModel) openWorkspace(kind workspacePanelKind, query string) tea.Cmd 
 	if kind == workspaceFiles {
 		view.filter = query
 	}
-	m.closeFullscreen()
 	m.full = view
 	return view.openCmd()
 }
@@ -313,11 +314,11 @@ func (v *workspaceView) openCmd() tea.Cmd {
 	return func() tea.Msg {
 		msg := workspaceOpenedMsg{view: v, sessionID: v.sessionID, generation: v.generation}
 		if v.kind == workspaceSearch {
-			msg.matches, msg.truncated, msg.err = v.runtime.search(v.ctx, v.literal)
+			msg.matches, msg.status, msg.err = v.runtime.search(v.ctx, v.literal)
 			return msg
 		}
 		msg.snapshot, msg.err = v.runtime.refresh(v.ctx)
-		msg.truncated = msg.snapshot.Truncated
+		msg.status = workspace.SearchStatus{Truncated: msg.snapshot.Truncated, Skipped: msg.snapshot.Skipped}
 		return msg
 	}
 }
@@ -431,7 +432,9 @@ func (m *tuiModel) onWorkspaceOpened(msg workspaceOpenedMsg) tea.Cmd {
 	v := msg.view
 	v.loading = ""
 	v.err = msg.err
-	v.truncated = msg.truncated
+	v.truncated = msg.status.Truncated
+	v.skipped = msg.status.Skipped
+	v.oversized = msg.status.Oversized
 	if msg.err != nil {
 		return nil
 	}
@@ -461,6 +464,8 @@ func (m *tuiModel) onWorkspaceFiltered(msg workspaceFilteredMsg) tea.Cmd {
 		msg.matches = msg.matches[:workspaceFileMatches]
 	}
 	v.truncated = v.snapshot.Truncated || filterTruncated
+	v.skipped = v.snapshot.Skipped
+	v.oversized = 0
 	v.rows = make([]workspaceRow, 0, len(msg.matches))
 	for _, match := range msg.matches {
 		v.rows = append(v.rows, workspaceRow{
@@ -512,7 +517,7 @@ func (m *tuiModel) onWorkspaceEditorReady(msg workspaceEditorReadyMsg) tea.Cmd {
 	if len(msg.argv) == 0 {
 		return noticeCmd("error", "editor: no command was configured")
 	}
-	command := exec.Command(msg.argv[0], msg.argv[1:]...)
+	command := sanitizedCommand(msg.argv[0], msg.argv[1:]...)
 	return tea.ExecProcess(command, func(err error) tea.Msg {
 		return workspaceEditorDoneMsg{
 			view: msg.view, sessionID: msg.sessionID, generation: msg.generation, path: msg.path, err: err,
@@ -684,10 +689,17 @@ func (v *workspaceView) close() {
 }
 
 func (m *tuiModel) closeFullscreen() {
+	hadFullscreen := m.full != nil
 	if closer, ok := m.full.(interface{ close() }); ok {
 		closer.close()
 	}
 	m.full = nil
+	if hadFullscreen {
+		// A closed newer surface must continue to invalidate any older async
+		// fullscreen result; nil alone cannot distinguish "never opened" from
+		// "opened and closed before the result arrived."
+		m.workspaceGeneration++
+	}
 }
 
 func (v *workspaceView) clearPreview() {
@@ -777,8 +789,18 @@ func (v *workspaceView) footer(width int, th *theme) string {
 		status = "error: " + workspaceSanitize(v.err.Error())
 	case v.loading != "":
 		status = v.loading
-	case v.truncated:
-		status = "results truncated · refine the filter"
+	case v.truncated || v.skipped > 0 || v.oversized > 0:
+		parts := []string{fmt.Sprintf("%d results · partial", len(v.rows))}
+		if v.truncated {
+			parts = append(parts, "truncated")
+		}
+		if v.oversized > 0 {
+			parts = append(parts, fmt.Sprintf("%d oversized", v.oversized))
+		}
+		if v.skipped > 0 {
+			parts = append(parts, fmt.Sprintf("%d skipped", v.skipped))
+		}
+		status = strings.Join(parts, " · ")
 	default:
 		status = fmt.Sprintf("%d results", len(v.rows))
 	}
@@ -797,6 +819,9 @@ func (v *workspaceView) listView(width, height int, th *theme, withPreview bool)
 		empty := " no files match this filter"
 		if v.kind == workspaceSearch {
 			empty = " no text matches"
+			if v.truncated || v.skipped > 0 || v.oversized > 0 {
+				empty = " no text matches in searched files · partial results"
+			}
 		}
 		return workspaceFill([]string{th.dim.Render(workspaceFit(empty, width))}, width, height)
 	}
@@ -1004,7 +1029,7 @@ func workspaceEditorArgv(path string, position workspace.Position) ([]string, er
 
 // workspaceSplitArgv accepts ordinary quoted editor commands without invoking
 // a shell. It deliberately performs no variable, glob, command, or tilde
-// expansion: the resulting strings are passed straight to exec.Command.
+// expansion: the resulting strings are passed straight to sanitizedCommand.
 func workspaceSplitArgv(command string) ([]string, error) {
 	var (
 		argv  []string

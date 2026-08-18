@@ -11,12 +11,21 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // pathLocks serialize first-party mutations of one resolved path across every
 // registry in the process. A registry-local lock would still allow a delegate
 // or another session rooted at the same workspace to interleave a stale check
 // and publication.
+//
+// The map key is deliberately case-folded on every platform. A resolved path
+// retains the caller's spelling, and case-insensitive filesystems accept two
+// spellings for the same leaf; keying the lease by that spelling would let two
+// registries publish concurrently. Folding everywhere is conservative on a
+// case-sensitive volume (case-distinct files serialize) but does not merge
+// their contents or change which path is validated, opened, checkpointed, or
+// rendered to the user.
 var pathLocks = struct {
 	sync.Mutex
 	locks map[string]*pathLock
@@ -28,11 +37,12 @@ type pathLock struct {
 }
 
 func lockPath(path string) func() {
+	key := mutationLockKey(path)
 	pathLocks.Lock()
-	l := pathLocks.locks[path]
+	l := pathLocks.locks[key]
 	if l == nil {
 		l = &pathLock{}
-		pathLocks.locks[path] = l
+		pathLocks.locks[key] = l
 	}
 	l.refs++
 	pathLocks.Unlock()
@@ -43,10 +53,22 @@ func lockPath(path string) func() {
 		pathLocks.Lock()
 		l.refs--
 		if l.refs == 0 {
-			delete(pathLocks.locks, path)
+			delete(pathLocks.locks, key)
 		}
 		pathLocks.Unlock()
 	}
+}
+
+func mutationLockKey(path string) string {
+	return strings.Map(func(r rune) rune {
+		canonical := r
+		for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+			if folded < canonical {
+				canonical = folded
+			}
+		}
+		return canonical
+	}, filepath.Clean(path))
 }
 
 type diskFile struct {

@@ -20,10 +20,7 @@ func TestSetupLSPFreezesAllSemanticToolsBeforeLazyStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldCandidates := lspCandidates
-	lspCandidates = []struct {
-		marker string
-		detect func() ([]string, bool)
-	}{{marker: marker, detect: func() ([]string, bool) {
+	lspCandidates = []lspCandidateSpec{{marker: marker, detect: func() ([]string, bool) {
 		return []string{filepath.Join(workspace, "fixture-ls"), "--stdio"}, true
 	}}}
 	t.Cleanup(func() { lspCandidates = oldCandidates })
@@ -132,7 +129,11 @@ func TestTypeScriptNativeIsVersionGated(t *testing.T) {
 	if err != nil {
 		t.Skip("tsc did not answer --version")
 	}
-	argv, ok := typescriptNative()
+	argv, detected := typescriptNative()
+	if !detected {
+		t.Fatal("tsc disappeared between LookPath calls")
+	}
+	ok := probeTypeScriptNative(argv)
 	wantNative := strings.Contains(string(out), "Version 7.") ||
 		strings.Contains(string(out), "Version 8.")
 	if ok != wantNative {
@@ -141,4 +142,54 @@ func TestTypeScriptNativeIsVersionGated(t *testing.T) {
 	if ok && (len(argv) != 3 || argv[1] != "--lsp") {
 		t.Fatalf("argv = %v, want the verified --lsp -stdio form", argv)
 	}
+}
+
+func TestSetupLSPDefersExecutableProbeUntilAfterTrust(t *testing.T) {
+	workspace := t.TempDir()
+	marker := "fixture.project"
+	if err := os.WriteFile(filepath.Join(workspace, marker), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	oldCandidates := lspCandidates
+	lspCandidates = []lspCandidateSpec{{
+		marker: marker,
+		detect: func() ([]string, bool) {
+			return []string{filepath.Join(workspace, "fixture-ls")}, true
+		},
+		probe: func([]string) bool {
+			probes++
+			return true
+		},
+	}}
+	t.Cleanup(func() { lspCandidates = oldCandidates })
+
+	store, err := trust.OpenFile(filepath.Join(t.TempDir(), "trust.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := tools.NewRegistry(workspace, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace = registry.Root()
+
+	if _, _, ok := lspCandidate(workspace); !ok {
+		t.Fatal("trust preview lost the non-executing candidate")
+	}
+	if server, note := setupLSP(workspace, store, registry); server != nil || !strings.Contains(note, "/trust grant") {
+		t.Fatalf("untrusted setup = (%v, %q)", server, note)
+	}
+	if probes != 0 {
+		t.Fatalf("untrusted preview executed %d candidate probes", probes)
+	}
+
+	if err := store.Grant(workspace); err != nil {
+		t.Fatal(err)
+	}
+	server, _ := setupLSP(workspace, store, registry)
+	if server == nil || probes != 1 {
+		t.Fatalf("trusted setup server=%v probes=%d, want one deferred probe", server, probes)
+	}
+	server.Close()
 }

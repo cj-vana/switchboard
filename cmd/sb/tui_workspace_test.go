@@ -138,6 +138,27 @@ func TestWorkspaceLiteralSearchAndStaleExternalEdit(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSearchQualifiesEmptyResultsWhenFilesWereNotSearched(t *testing.T) {
+	root := t.TempDir()
+	large := make([]byte, workspace.DefaultSearchBytes+1)
+	copy(large, "needle in oversized text")
+	if err := os.WriteFile(filepath.Join(root, "large.txt"), large, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := workspaceModel(t, root)
+	drainWorkspace(t, m, cmdWorkspaceSearch(m, "needle"))
+	v := activeWorkspaceView(t, m)
+	if len(v.rows) != 0 || v.oversized != 1 {
+		t.Fatalf("partial search state = rows %d, truncated=%v skipped=%d oversized=%d", len(v.rows), v.truncated, v.skipped, v.oversized)
+	}
+	rendered := stripANSI(v.view(110, 8, darkTheme()))
+	for _, want := range []string{"no text matches in searched files", "0 results · partial", "1 oversized"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("partial search did not render %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestWorkspaceBinaryErrorIsVisible(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "image.bin"), []byte{'a', 0, 'b'}, 0o644); err != nil {

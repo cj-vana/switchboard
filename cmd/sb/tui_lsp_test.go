@@ -82,6 +82,17 @@ func lspTestModel(t *testing.T) (*tuiModel, *fakeLSPRuntime, string) {
 	return m, fake, root
 }
 
+func TestOptionalLSPRuntimeDoesNotBoxATypedNil(t *testing.T) {
+	var server *lsp.Server
+	if runtime := optionalLSPRuntime(server); runtime != nil {
+		t.Fatalf("optional runtime = %#v, want a nil interface", runtime)
+	}
+	server = &lsp.Server{Root: t.TempDir()}
+	if runtime := optionalLSPRuntime(server); runtime == nil {
+		t.Fatal("non-nil server disappeared at the TUI boundary")
+	}
+}
+
 func activeLSPView(t *testing.T, m *tuiModel) *lspView {
 	t.Helper()
 	view, ok := m.full.(*lspView)
@@ -186,6 +197,28 @@ func TestLSPOutlineIsAsyncBoundedNavigableAndSuppressesUTF16Columns(t *testing.T
 	view.selected = 0
 	if msg, ok := view.editorCmd()().(noticeMsg); !ok || !strings.Contains(msg.text, "rerun the semantic command") {
 		t.Fatalf("stale result enter = %#v", msg)
+	}
+}
+
+func TestLSPEditorReturnInvalidatesWorkspaceAndSemanticResults(t *testing.T) {
+	m, _, root := lspTestModel(t)
+	path := filepath.Join(root, "main.go")
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmdOutline(m, "main.go")
+	view := activeLSPView(t, m)
+	before := m.workspaceRuntime.epoch.Load()
+
+	cmd := m.onLSPEditorDone(lspEditorDoneMsg{
+		view: view, sessionID: view.sessionID, generation: view.generation,
+		path: "main.go", err: errors.New("editor exited after saving"),
+	})
+	if !view.stale || m.workspaceRuntime.epoch.Load() != before+1 {
+		t.Fatalf("editor return stale=%v epoch=%d, want stale and %d", view.stale, m.workspaceRuntime.epoch.Load(), before+1)
+	}
+	if msg, ok := cmd().(noticeMsg); !ok || msg.level != "error" {
+		t.Fatalf("failed editor return notice = %#v", msg)
 	}
 }
 

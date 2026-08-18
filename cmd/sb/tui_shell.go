@@ -8,16 +8,21 @@ package main
 // turn, which keeps every adapter's view of the conversation well-formed.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/switchboard-code/switchboard/internal/execution"
 )
 
 const (
@@ -57,15 +62,35 @@ type shellResult struct {
 	detail   string
 }
 
+// shellOutput remains safe to snapshot if cancellation reaches the bounded
+// cleanup return before an unkillable or deliberately detached descendant
+// releases os/exec's copy pipe.
+type shellOutput struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (o *shellOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.Write(p)
+}
+
+func (o *shellOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return string(append([]byte(nil), o.buf.Bytes()...))
+}
+
 func classifyShellResult(err, contextErr error) shellResult {
 	if err == nil {
 		return shellResult{kind: shellSucceeded, exitCode: 0}
 	}
 	if errors.Is(contextErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		return shellResult{kind: shellTimedOut}
+		return shellResult{kind: shellTimedOut, detail: shellCancellationLimit()}
 	}
 	if errors.Is(contextErr, context.Canceled) || errors.Is(err, context.Canceled) {
-		return shellResult{kind: shellCancelled}
+		return shellResult{kind: shellCancelled, detail: shellCancellationLimit()}
 	}
 
 	var exitErr *exec.ExitError
@@ -81,11 +106,24 @@ func classifyShellResult(err, contextErr error) shellResult {
 	return shellResult{kind: shellFailed, detail: err.Error()}
 }
 
+func shellCancellationLimit() string {
+	if runtime.GOOS == "windows" {
+		return "only the direct shell was stopped; descendant processes may still be running"
+	}
+	return ""
+}
+
 func (r shellResult) failed() bool {
 	return r.kind != shellSucceeded
 }
 
 func (r shellResult) summary() string {
+	withDetail := func(summary string) string {
+		if r.detail == "" {
+			return summary
+		}
+		return summary + "; " + r.detail
+	}
 	switch r.kind {
 	case shellSucceeded:
 		return "exit 0 (success)"
@@ -94,9 +132,9 @@ func (r shellResult) summary() string {
 	case shellSignaled:
 		return "terminated by signal " + r.signal
 	case shellTimedOut:
-		return "timed out after " + shellTimeout.String()
+		return withDetail("timed out after " + shellTimeout.String())
 	case shellCancelled:
-		return "cancelled by user"
+		return withDetail("cancelled by user")
 	default:
 		if r.detail != "" {
 			return "could not run: " + r.detail
@@ -106,6 +144,10 @@ func (r shellResult) summary() string {
 }
 
 func (r shellResult) contextRecord() string {
+	cleanup := ""
+	if r.detail != "" && (r.kind == shellTimedOut || r.kind == shellCancelled) {
+		cleanup = "; cleanup=direct-shell-only; descendants_may_survive=true"
+	}
 	switch r.kind {
 	case shellSucceeded:
 		return "[shell result: success; exit_code=0]"
@@ -114,9 +156,9 @@ func (r shellResult) contextRecord() string {
 	case shellSignaled:
 		return "[shell result: signal; signal=" + r.signal + "]"
 	case shellTimedOut:
-		return "[shell result: timeout; limit=" + shellTimeout.String() + "]"
+		return "[shell result: timeout; limit=" + shellTimeout.String() + cleanup + "]"
 	case shellCancelled:
-		return "[shell result: cancelled]"
+		return "[shell result: cancelled" + cleanup + "]"
 	default:
 		return "[shell result: error; detail=" + r.detail + "]"
 	}
@@ -171,14 +213,16 @@ func (m *tuiModel) runShell(command string) tea.Cmd {
 		if shell == "" {
 			shell = "/bin/sh"
 		}
-		cmd := exec.CommandContext(ctx, shell, "-c", command)
-		cmd.Dir = workspace
-
 		start := time.Now()
-		out, err := cmd.CombinedOutput()
+		var out shellOutput
+		cmd := exec.Command(shell, "-c", command)
+		cmd.Dir = workspace
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := execution.RunProcess(ctx, cmd)
 		took := time.Since(start)
 
-		text := string(out)
+		text := out.String()
 		if len(text) > shellOutputCap {
 			text = text[:shellOutputCap] + fmt.Sprintf("\n[truncated at %d bytes]", shellOutputCap)
 		}
@@ -226,6 +270,15 @@ func (m *tuiModel) onShellDone(msg shellDoneMsg) tea.Cmd {
 	fmt.Fprintf(&b, "$ %s\n%s", msg.command, strings.TrimRight(msg.output, "\n"))
 	fmt.Fprintf(&b, "\n%s", result.contextRecord())
 	m.pendingShell = append(m.pendingShell, b.String())
+	// A shell command has full user authority and can mutate the tree even when
+	// it exits non-zero or is cancelled halfway through. Its completion is the
+	// first sound point to retire both literal-index and semantic snapshots.
+	if m.workspaceRuntime != nil {
+		m.workspaceRuntime.invalidate()
+	}
+	if view, ok := m.full.(*lspView); ok {
+		view.stale = true
+	}
 	if msg.operation == 0 {
 		return nil
 	}

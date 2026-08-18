@@ -15,6 +15,23 @@ This page distinguishes three different claims:
 
 Those states are intentionally not synonyms.
 
+## Startup diagnostics
+
+Extension discovery can produce more useful detail than a small terminal can
+show before the first prompt. Switchboard therefore renders a risk-first
+summary of at most three 79-column ASCII lines. Routine problems are
+deduplicated into at most five noncritical highlights; every retained
+`fatal`, `critical`, `high`, or `required` failure remains visible. Category
+counts say unique/total, and mandatory duplicates remain separate highlights.
+
+`/doctor extensions` opens the static startup record in both the TUI and REPL.
+It shows every retained diagnostic, terminal-sanitized, in discovery order,
+with duplicates intact. The pre-surface buffer holds 200 entries. If discovery
+produces more, a mandatory high-severity notice gives the exact dropped count
+and says the missing text cannot appear in the drill-down. The report is not a
+live health dashboard: later extension notices still reach the running TUI,
+while the REPL drill-down remains the startup snapshot.
+
 ## Hooks
 
 User hooks are declared in `~/.switchboard/hooks.toml`:
@@ -48,6 +65,25 @@ default. Subagents receive the core tool set, share the primary permission
 engine and approval surface, and keep a separate session log. They cannot
 delegate again, and bridged MCP tools are not copied into their registry.
 
+When one provider response contains only independent `delegate` calls, up to
+four can run at once. Results rejoin the provider loop in original call order.
+A batch that mixes delegates with reads or writes stays serial, as does a batch
+with applicable hooks. First-party writes share the primary turn checkpoint;
+same-path contenders serialize, and a stale contender fails instead of merging
+concurrent content.
+
+`/tasks` is a busy-safe TUI view of the current primary session. It shows each
+task's ID, name, status, serving tier, observed cost and call count, and parent
+and delegate session IDs. `/tasks cancel <id>` stops only that queued or running
+task. It does not cancel siblings. Approval prompts use one serialized lane and
+name the task asking. A partial answer can remain usable even though the task's
+status is `failed`.
+
+The process-wide status history is memory-only and capped at 100 entries. Task
+IDs and status do not survive a restart, but each delegate session remains
+durable for accounting and blame. There is no direct `/task <prompt>` launcher:
+the provider starts delegate calls through the tool surface.
+
 Named agents are Markdown files under `.switchboard/agents/` in a project or
 `~/.switchboard/agents/` for the user:
 
@@ -78,6 +114,29 @@ directory. Repository command files cannot run inline shell during expansion.
 Repository instructions use the first nonempty root file in this order:
 `AGENTS.md`, then `CLAUDE.md`. `/init` asks the agent to create or revise
 `AGENTS.md`; an existing `CLAUDE.md` does not change that target.
+
+## Language servers
+
+Language-server support is a built-in project integration, not an imported
+plugin component. A server becomes available only when the project mapping,
+installed executable, and Switchboard workspace trust agree. The current
+mappings are `gopls` for Go, the TypeScript 7 compiler's native server for
+TypeScript, `pyright` for Python, and `clangd` for projects with a
+`compile_commands.json`.
+
+The provider receives a frozen set of semantic model tools at session assembly.
+The TUI exposes the same server through `/outline`, `/symbols`, `/problems`,
+`/definition`, and `/references`. `/lsp` reports configuration and advertised
+capabilities without starting the process. Outline, symbol, definition, and
+reference queries start it lazily; `/problems` reads published diagnostics
+without starting it.
+
+Diagnostics are an honest partial view of what the server has published. The
+Problems panel labels freshness and coverage, and an empty view does not claim
+that the whole workspace is clean. Results outside the workspace remain
+copy-only. Native plugin LSP declarations are still inventory-only, as shown in
+the plugin table below; recognizing their manifest field does not attach them
+to this built-in integration.
 
 ## Skills
 

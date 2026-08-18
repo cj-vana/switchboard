@@ -230,6 +230,27 @@ func TestProviderCredentialsAreNotInherited(t *testing.T) {
 	}
 }
 
+func TestGenericCredentialsAreNotInherited(t *testing.T) {
+	t.Setenv("AUTH", "generic-auth-secret")
+	t.Setenv("SESSION_ID", "generic-session-secret")
+	t.Setenv("DATABASE_URL", "postgres://generic-database-secret")
+	t.Setenv("SB_HARMLESS", "visible")
+
+	res, err := Run(context.Background(), Command{
+		Argv:  []string{"echo \"auth=[${AUTH}] session=[${SESSION_ID}] database=[${DATABASE_URL}] other=[${SB_HARMLESS}]\""},
+		Shell: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Output, "generic-") {
+		t.Errorf("a model-requested command inherited a generic credential: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "other=[visible]") {
+		t.Errorf("the rest of the environment must pass through: %q", res.Output)
+	}
+}
+
 func TestConfinedLoopbackEnvironmentCannotInheritOrReintroduceProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
 	t.Setenv("npm_config_proxy", "http://127.0.0.1:8889")

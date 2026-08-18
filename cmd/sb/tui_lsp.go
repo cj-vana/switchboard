@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,6 +31,13 @@ type lspRuntime interface {
 	DefinitionAtSymbol(context.Context, string, int, string) ([]lsp.Location, error)
 	ReferencesAtSymbol(context.Context, string, int, string) ([]lsp.Location, error)
 	Close()
+}
+
+func optionalLSPRuntime(server *lsp.Server) lspRuntime {
+	if server == nil {
+		return nil
+	}
+	return server
 }
 
 type lspResolver interface {
@@ -688,7 +694,7 @@ func (m *tuiModel) onLSPEditorReady(msg lspEditorReadyMsg) tea.Cmd {
 	if msg.view.stale {
 		return noticeCmd("warn", "the workspace changed before the editor could open; rerun the semantic command")
 	}
-	command := exec.Command(msg.argv[0], msg.argv[1:]...)
+	command := sanitizedCommand(msg.argv[0], msg.argv[1:]...)
 	return tea.ExecProcess(command, func(err error) tea.Msg {
 		return lspEditorDoneMsg{view: msg.view, sessionID: msg.sessionID, generation: msg.generation, path: msg.path, err: err}
 	})
@@ -698,6 +704,13 @@ func (m *tuiModel) onLSPEditorDone(msg lspEditorDoneMsg) tea.Cmd {
 	if !m.lspViewMatches(msg.view, msg.sessionID, msg.generation) {
 		return nil
 	}
+	// Returning from an external editor is an invalidation boundary even when
+	// the process reports an error: it may have saved before failing. The file
+	// index and every location in this semantic result must be treated as old.
+	if m.workspaceRuntime != nil {
+		m.workspaceRuntime.invalidate()
+	}
+	msg.view.stale = true
 	if msg.err != nil {
 		return noticeCmd("error", "editor: "+msg.err.Error())
 	}

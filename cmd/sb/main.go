@@ -327,6 +327,13 @@ func run() error {
 		Hooks:       hookSet,
 		Checkpoints: undoRec,
 	}
+	// Even the initial process binding goes through the session boundary: a
+	// resumed continuity capsule hydrates its todo list, while a fresh or
+	// tombstoned session explicitly starts with none. The same operation drops
+	// any registry read authority before the first turn can observe it.
+	if err := loop.BindSession(sess); err != nil {
+		return fmt.Errorf("restoring session context: %w", err)
+	}
 
 	// The ceiling gates the loop before each call, whatever surface drives
 	// it; /budget adjusts the shared state mid-session.
@@ -430,9 +437,9 @@ func run() error {
 	// renderer is driven from the loop's goroutine, and a client's read
 	// loop writing to it concurrently would race. Later notes buffer,
 	// capped, and are simply not the REPL's concern.
-	for _, n := range mcpEnv.attach(nil) {
-		out.Notice(n.level, n.text)
-	}
+	startupNotes, droppedStartupNotes := mcpEnv.attachCounted(nil)
+	r.startupNotes = aggregateStartupNotes(startupNotes, droppedStartupNotes)
+	writeStartupNoteReport(out, r.startupNotes)
 
 	if opts.prompt != "" {
 		// The gate has no one to ask on this surface, so a key-shaped string

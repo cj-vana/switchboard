@@ -7,7 +7,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -150,7 +149,7 @@ func (m *tuiModel) openEditor() tea.Cmd {
 	tmp.Close()
 
 	parts := strings.Fields(editor) // "code --wait" is a legitimate $EDITOR
-	cmd := exec.Command(parts[0], append(parts[1:], tmp.Name())...)
+	cmd := sanitizedCommand(parts[0], append(parts[1:], tmp.Name())...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorDoneMsg{path: tmp.Name(), err: err}
 	})

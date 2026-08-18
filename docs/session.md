@@ -1,7 +1,10 @@
 # Sessions and command reference
 
-Switchboard's default interactive surface is a terminal UI. The line-oriented
-REPL remains available with `-repl`, and `-p` runs one headless turn.
+Switchboard's default interactive surface is the full terminal workbench. The
+line-oriented REPL remains available with `-repl` for constrained terminals and
+script-oriented use, and `-p` runs one headless turn. The REPL is deliberately
+smaller: its `/help` lists only the commands it implements. Fullscreen file,
+change-review, task, and language-server views are TUI-only.
 
 ## TUI state
 
@@ -13,7 +16,7 @@ important decoration disappears first when the terminal becomes narrow.
 
 Tool rails and route records expand with Ctrl+O or a mouse click. Ctrl+F
 searches the transcript from newest match to oldest and marks every match in
-the margin.
+the margin. Ctrl+P opens a searchable palette over the TUI command registry.
 
 ## Input
 
@@ -26,6 +29,7 @@ the margin.
 | Ctrl+G | Opens the current prompt in `$VISUAL`, falling back to `$EDITOR` |
 | Ctrl+R | Searches prompt history for the workspace |
 | Ctrl+F | Searches the transcript |
+| Ctrl+P | Opens the searchable command palette |
 
 If the target cannot accept an image, Switchboard refuses the attachment and
 states the missing capability. It does not send an image to a target that may
@@ -46,6 +50,9 @@ delegated task, or race branch, no listener exists. `ask` then tells the model
 to choose and state an assumption instead of waiting. Free-text answers are
 scanned for credentials before they enter the log.
 
+Tool approvals from parallel delegates take one serialized lane and name the
+task asking, so prompts do not overlap or lose their owner.
+
 ## Common commands
 
 | Command | Purpose |
@@ -62,6 +69,8 @@ scanned for credentials before they enter the log.
 | `/estimate <prompt>` | Estimate the next assembled request on every tier |
 | `/cache` | Show the cache belief used by routing |
 | `/doctor` | Run startup, credential, sandbox, tool, and MCP checks |
+| `/doctor extensions` | Inspect every retained startup extension diagnostic in discovery order |
+| `/tasks [cancel <id>]` | Inspect current-session delegate work or cancel one queued or running task |
 | `/setup` | Reopen provider setup |
 | `/mode <plan|default|acceptEdits|auto|yolo|bypass>` | Change the permission policy |
 | `/sandbox on|off|auto|status` | Change or inspect command confinement for this process |
@@ -70,6 +79,52 @@ scanned for credentials before they enter the log.
 
 Routing, budget, cache, and cost semantics are detailed in
 [Routing and the model ladder](routing.md).
+
+Startup extension notices use a bounded risk-first summary. In both the TUI and
+REPL, `/doctor extensions` opens the retained, sanitized record with duplicates
+intact. It is a startup snapshot, not a live health dashboard. Buffer overflow
+is never silent: the summary reports the exact dropped count and says that the
+dropped text is unavailable. See [Startup diagnostics](extensions.md#startup-diagnostics).
+
+`/tasks` is a busy-safe TUI command, not a direct task launcher. It reports the
+ID, name, status, tier, live call count and observed cost, and parent and
+delegate session IDs for this primary session. The process-wide history is
+capped at 100, and its
+IDs live only in the current process, although delegate session logs remain
+durable. Targeted cancel does not cancel sibling tasks. The full batch rules are
+in [Delegation and named agents](extensions.md#delegation-and-named-agents).
+
+## Workspace workbench
+
+The TUI keeps basic code navigation close to the running session:
+
+| Command | Behavior |
+| --- | --- |
+| `/files [query]` | Quick-open workspace files from a revision-aware index, with source preview, filtering, copy, and `$VISUAL` or `$EDITOR` handoff |
+| `/search <literal>` | Search bounded workspace text and inspect exact file-and-line matches |
+| `/diff` | Show the working tree against `HEAD`, including staged, unstaged, and untracked files, without changing the Git index |
+| `/review [turn]` | Review the exact recorded write/edit mutations for one agent turn without changing files or checkpoint state |
+| `/lsp` | Report configured language-server state and advertised capabilities without starting a process |
+| `/outline <path>` | Browse semantic declarations in one source file |
+| `/symbols <query>` | Search semantic declarations across the workspace |
+| `/problems [path]` | Browse published diagnostics with freshness and coverage labels |
+| `/definition ...` and `/references ...` | Browse semantic locations and open workspace results in an editor |
+
+File and text results carry a content revision. If the file changes between
+the result and the editor handoff, Switchboard refuses the stale action and
+asks you to reopen the view. External language-server locations are copy-only;
+the workbench does not open a file outside the workspace.
+
+Workspace search labels partial evidence and counts truncated, skipped, or
+oversized files. No matches in the files it could search is not presented as no
+matches in the whole workspace. If `/diff` reaches its patch cap, it follows
+the truncation marker with a bounded, sorted inventory of paths not fully shown
+and the remaining count.
+
+`/problems` consumes diagnostics the server has pushed for documents it knows
+about. Rows are labeled fresh, stale, unversioned, or pending; the panel labels
+its push coverage partial. An empty Problems view does not prove the workspace
+is clean. Use the repository's verifier for that claim.
 
 ## Advisor and compaction
 
@@ -105,21 +160,80 @@ Forking does not rewrite the original log. The copied message prefix remains
 byte-identical, so a provider that still holds it may serve the branch from
 cache. Files are not rewound by a fork.
 
-`/retry` uses a fork at the last turn's opening and replays the already expanded
-opening bytes. The discarded answer remains resumable with a `user_corrected`
-label. File changes recorded by write and edit are reverted first. Shell side
-effects remain. A tier argument runs the replay there and then returns.
+`/retry` uses a fork at the last turn's opening and replays the exact recorded
+message, including image and reference metadata. The discarded answer remains
+resumable with a `user_corrected` label. File changes recorded by write and edit
+are restored first. A partial or failed restore refuses the replay and remains
+retryable until it is explicitly handled. Shell side effects remain. A tier
+argument runs the replay there and then returns.
+
+### Continuity capsules
+
+The session log can carry a bounded continuity capsule beside the append-only
+conversation. The production loop records a successful todo state and derives
+its next action. Capsule content is normalized, size-limited, and scanned for
+credentials before it is written.
+
+After a restart or session swap, the newest undelivered valid capsule is stamped
+into the next user opening before routing, estimation, and provider send, then
+consumed. Pending and delivered state survives the swap, so an already-delivered
+capsule is not injected again. It stays hidden from the visible transcript; the
+prompt, history label, and retry label remain the text the user wrote. The swap
+also restores active todos and revokes old file-read authority. Fork and retry
+preserve a capsule only when its recorded message boundary belongs to the branch.
+
+Compaction carries the live recorded todo state and derived next action when
+present. It records immediate parent lineage and stamps the capsule once into
+the compact seed without duplicating it in the generated summary. The next real
+user opening is therefore clean.
+
+A capsule is advisory. It tells the next model what the previous context
+believed, but it does not grant file-read authority, relax permissions, or
+replace verification. The model is told to check the workspace before writing.
 
 ## File history and verification
 
 `/changes` lists files captured by write and edit, grouped by the turn that
 changed them. It does not claim to see shell-command side effects.
 
+`/review [turn]` is the TUI's read-only view of that checkpoint evidence. Bare
+`/review` means the currently open user turn only; a no-op reports that it has
+no recorded mutations and never falls back to an older turn. A positive decimal
+selects a retained mutation turn, one-based and oldest first. The view covers
+agent `write` and `edit` calls only, not shell commands, hooks, MCP tools, or
+manual changes. `/diff` remains the repository-wide view against `HEAD`.
+
+Before current bytes appear, Switchboard rechecks existence, mode, size,
+digest, the target identity, and the captured parent and ancestor identities.
+A stale, unsafe, or redirected path is refused without disclosing its current
+bytes. Created, deleted, truncated, empty, mode-only, and binary states are
+named explicitly. Oversized pre-images are unavailable; a post-image beyond
+the load budget is marked unverified instead of getting a content or digest
+claim.
+
+One load covers at most 256 selected-turn paths and 256 KiB of aggregate
+content, with an exact omitted-path count. Rendering stops at 1,200 lines or
+256 KiB and drops whole file sections rather than cutting a diff hunk. The
+fullscreen view is physically bounded at 80x24, terminal-sanitized, and bound
+to the launching session, workspace generation, checkpoint revision, selected
+turn, and command invocation, so a late result is discarded. It is unavailable
+while an agent runs and has no rollback, apply, editor, per-file, or per-hunk
+action. It does not touch the checkpoint, Git index, or worktree.
+
 `/undo <path>` restores one file to its state before the newest turn that
 captured it. The checkpoint is consumed only after a successful restore.
 `/undo` restores every captured file from the newest turn. Conversation
 messages remain unchanged to preserve the sent prefix and its cache identity.
 A restored file must be read again before a later edit.
+
+Write and edit compare the expected file state immediately before publishing a
+complete replacement atomically, and preserve the file's mode. Undo makes the
+same pre-publication check against the current bytes, mode, and parent directory
+identity captured for the mutation. A mismatch already present makes the
+checkpoint stale; undo reports the path and leaves both the current file and
+checkpoint intact. The comparison and final rename are not one atomic pathname
+CAS, so a simultaneous external replacement at that seam cannot be excluded.
+Oversized files are named as skipped rather than presented as recoverable.
 
 `/blame <path>` and `sb blame <path>` replay recorded write and edit operations
 against the current file. Each explained line includes the turn, tier, target,
@@ -200,18 +314,21 @@ scan outbound URLs and queries for known credential forms. See
 [Security](security.md).
 
 If `ast-grep` is installed, session assembly adds `astgrep` for syntax-tree
-search. Install it on macOS with `brew install ast-grep`. Inside verified
-confinement it runs as a read effect. Without confinement, it is classified as
-execution and follows the active permission mode. Switchboard does not ship a
-semantic code index; an external index is a service destination and belongs
-behind MCP.
+search. Install it on macOS with `brew install ast-grep`. It is always an
+execution effect because a PATH-resolved binary can write, even when its query
+looks read-only. Verified confinement can limit that process, but does not
+reclassify it; the active permission mode still applies. Switchboard's own
+bounded workspace index supplies file names and literal text, not semantic
+inference. Language-server requests supply semantic results; an external hosted
+index is a service destination and belongs behind MCP.
 
-Language-server tools join when the project type, installed server, and
-workspace trust agree. Supported mappings are `gopls` for Go, the TypeScript 7
-compiler's native server for TypeScript, `pyright` for Python, and `clangd`
-when `compile_commands.json` supplies flags. `definition` and `references`
-accept a file, line, and symbol and return exact file-and-line results. The
-server starts on first use.
+Language-server tools and TUI views join when the project type, installed
+server, and workspace trust agree. Supported mappings are `gopls` for Go, the
+TypeScript 7 compiler's native server for TypeScript, `pyright` for Python, and
+`clangd` when `compile_commands.json` supplies flags. `definition` and
+`references` accept a file, line, and symbol and return exact file-and-line
+results. Outline, symbol, definition, and reference requests start the server
+lazily; `/lsp` status and `/problems` do not.
 
 On macOS, the optional `computer` tool controls applications through the
 Accessibility API. Its permission model and tested limits are in

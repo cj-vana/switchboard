@@ -28,7 +28,10 @@ func (r *stubReviewer) Review(ctx context.Context, req ReviewRequest) (ReviewRes
 
 func autoEngine(t *testing.T, reviewer Reviewer) (*Engine, *execution.Controller) {
 	t.Helper()
-	controller := execution.NewDefaultController(verifiedSandbox)
+	controller, err := execution.NewController(verifiedSandbox, execution.SandboxOn)
+	if err != nil {
+		t.Fatal(err)
+	}
 	engine := NewEngineWithExecution(ModeAuto, controller)
 	engine.SetReviewer(reviewer)
 	return engine, controller
@@ -54,8 +57,26 @@ func TestAutoApprovesWritesAndReviewsCommands(t *testing.T) {
 	if out.Decision != Allow || out.Review == nil || out.Review.Decision != ReviewAllow {
 		t.Fatalf("outcome = %+v, want durable allow review", out)
 	}
-	if !reviewer.last.FullReach || !reviewer.last.Network {
-		t.Errorf("review packet hid effective host/network reach: %+v", reviewer.last)
+	if reviewer.last.FullReach || reviewer.last.Network {
+		t.Errorf("confined review packet claimed host/network reach: %+v", reviewer.last)
+	}
+}
+
+func TestAutoKeepsHostDirectWorkspaceExecutionWithTheHuman(t *testing.T) {
+	reviewer := &stubReviewer{result: ReviewResult{Decision: ReviewAllow, Reviewer: "t1", Reason: "ordinary test command"}}
+	engine := NewEngineWithExecution(ModeAuto, execution.NewDefaultController(verifiedSandbox))
+	engine.SetReviewer(reviewer)
+	human := &stubAsker{resp: Response{Approved: false}}
+
+	ok, out, err := engine.Resolve(context.Background(), human, exec())
+	if err != nil || ok {
+		t.Fatalf("host-direct auto command: ok=%v out=%+v err=%v", ok, out, err)
+	}
+	if reviewer.calls != 0 || human.calls != 1 || out.ResolvedBy != ResolvedByHuman {
+		t.Fatalf("reviewer=%d human=%d out=%+v", reviewer.calls, human.calls, out)
+	}
+	if !out.FullReach || !out.SandboxAbsent || !strings.Contains(out.Reason, "workspace-controlled code") {
+		t.Fatalf("host-direct warning was not truthful: %+v", out)
 	}
 }
 

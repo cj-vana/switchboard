@@ -16,6 +16,7 @@
 /.planning/
 /.forge/
 /.codex/
+/.netlify/
 
 .DS_Store
 /eval-runs.jsonl

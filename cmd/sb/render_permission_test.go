@@ -4,7 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +16,50 @@ import (
 	"github.com/switchboard-code/switchboard/internal/provider"
 	"github.com/switchboard-code/switchboard/internal/tools"
 )
+
+type blockingAnswerReader struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	answer  []byte
+}
+
+func (r *blockingAnswerReader) Read(p []byte) (int, error) {
+	r.once.Do(func() { close(r.entered) })
+	<-r.release
+	if len(r.answer) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.answer)
+	r.answer = r.answer[n:]
+	return n, nil
+}
+
+type overlapDetectWriter struct {
+	active  atomic.Int32
+	overlap atomic.Bool
+	mu      sync.Mutex
+	buf     bytes.Buffer
+}
+
+func (w *overlapDetectWriter) Write(p []byte) (int, error) {
+	if w.active.Add(1) != 1 {
+		w.overlap.Store(true)
+	}
+	defer w.active.Add(-1)
+	// Widen the underlying-write window so a missing renderer lock is a
+	// deterministic failure instead of depending on the race detector alone.
+	time.Sleep(200 * time.Microsecond)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *overlapDetectWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
 
 func TestPermissionRememberHintMatchesRememberScope(t *testing.T) {
 	execHint := permissionRememberHint(permission.Request{Tool: "exec", Effect: permission.EffectExecute})
@@ -32,6 +80,17 @@ func TestDescribeRequestEscapesExternalControlSequences(t *testing.T) {
 	got := describeRequest(permission.Request{Effect: permission.EffectExternal, Detail: "\x1b[2JAPPROVED\x07"})
 	if strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, `\x1b`) {
 		t.Fatalf("unsafe external request description %q", got)
+	}
+}
+
+func TestExecuteDescriptionKeepsTaskAttribution(t *testing.T) {
+	got := describeRequest(permission.Request{
+		Effect: permission.EffectExecute,
+		Argv:   []string{"go", "test", "./..."},
+		Detail: "[task-007 verify linux]",
+	})
+	if got != "[task-007 verify linux] · go test ./..." {
+		t.Fatalf("description = %q", got)
 	}
 }
 
@@ -56,6 +115,126 @@ func TestREPLModelAndNoticeTextCannotWriteTerminalControls(t *testing.T) {
 	got := buf.String()
 	if strings.ContainsAny(got, "\x1b\x07\r") || !strings.Contains(got, `\x1b`) {
 		t.Fatalf("REPL rendered unsafe model/notice text: %q", got)
+	}
+}
+
+func TestConcurrentObserverWritesUseOneRendererTransaction(t *testing.T) {
+	w := &overlapDetectWriter{}
+	r := &renderer{w: bufio.NewWriter(w), atLineTop: true}
+
+	const count = 24
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			marker := fmt.Sprintf("observer-%02d", i)
+			switch i % 4 {
+			case 0:
+				r.TextDelta(marker + "\n")
+			case 1:
+				r.ThinkingDelta(marker + "\n")
+			case 2:
+				r.Notice("warn", marker)
+			default:
+				r.ToolStart(provider.ToolUse{Name: marker}, permission.Request{Detail: marker})
+			}
+		}()
+	}
+	wg.Wait()
+	r.flush()
+
+	if w.overlap.Load() {
+		t.Fatal("renderer allowed concurrent writes to its buffered output")
+	}
+	got := w.String()
+	for i := 0; i < count; i++ {
+		marker := fmt.Sprintf("observer-%02d", i)
+		if strings.Count(got, marker) == 0 {
+			t.Fatalf("concurrent output lost %q:\n%s", marker, got)
+		}
+	}
+}
+
+func TestTerminalApprovalOwnsRendererUntilAnswer(t *testing.T) {
+	input := &blockingAnswerReader{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		answer:  []byte("y\n"),
+	}
+	var buf bytes.Buffer
+	r := &renderer{w: bufio.NewWriter(&buf), atLineTop: true}
+	asker := terminalAsker{in: bufio.NewReader(input), out: r}
+
+	type askResult struct {
+		response permission.Response
+		err      error
+	}
+	askDone := make(chan askResult, 1)
+	go func() {
+		response, err := asker.Ask(context.Background(), permission.Request{
+			Tool: "exec", Effect: permission.EffectExecute,
+			Argv: []string{"go", "test", "./..."}, Detail: "[task-004 verify]",
+		}, permission.Outcome{Decision: permission.Ask, Reason: "runs a command"})
+		askDone <- askResult{response: response, err: err}
+	}()
+	<-input.entered // the prompt is flushed and the asker is waiting on stdin
+	if r.mu.TryLock() {
+		r.mu.Unlock()
+		t.Fatal("approval released the renderer while still waiting for its answer")
+	}
+
+	noticeStarted := make(chan struct{})
+	noticeDone := make(chan struct{})
+	go func() {
+		close(noticeStarted)
+		r.Notice("warn", "task-005 sibling finished")
+		close(noticeDone)
+	}()
+	<-noticeStarted
+	select {
+	case <-noticeDone:
+		t.Fatal("sibling output painted inside an active approval prompt")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(input.release)
+	result := <-askDone
+	if result.err != nil || !result.response.Approved {
+		t.Fatalf("approval result = %+v, %v", result.response, result.err)
+	}
+	<-noticeDone
+
+	got := buf.String()
+	promptAt := strings.Index(got, "[task-004 verify]")
+	noticeAt := strings.Index(got, "task-005 sibling finished")
+	if promptAt < 0 || noticeAt < 0 || noticeAt < promptAt {
+		t.Fatalf("renderer did not preserve prompt-before-sibling order: %q", got)
+	}
+}
+
+func TestInterleavedDelegateEndRailsKeepTaskAttribution(t *testing.T) {
+	var buf bytes.Buffer
+	r := &renderer{w: bufio.NewWriter(&buf), atLineTop: true}
+	firstCall := provider.ToolUse{ID: "task-011/read-a", Name: "read"}
+	firstReq := permission.Request{Detail: "[task-011 inspect api] /workspace/a.go"}
+	secondCall := provider.ToolUse{ID: "task-012/read-b", Name: "read"}
+	secondReq := permission.Request{Detail: "[task-012 inspect ui] /workspace/b.go"}
+
+	// Starts overlap and completions arrive in the opposite order.
+	r.ToolStart(firstCall, firstReq)
+	r.ToolStart(secondCall, secondReq)
+	r.ToolEnd(secondCall, secondReq, tools.Result{Content: "ui result"}, 2*time.Millisecond)
+	r.ToolEnd(firstCall, firstReq, tools.Result{Content: "api result"}, 3*time.Millisecond)
+
+	got := buf.String()
+	for _, want := range []string{
+		"[task-012 inspect ui] · ok in 2ms: ui result",
+		"[task-011 inspect api] · ok in 3ms: api result",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interleaved end rails lost %q:\n%s", want, got)
+		}
 	}
 }
 

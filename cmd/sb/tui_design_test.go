@@ -331,12 +331,18 @@ func TestContextSplitsTheZones(t *testing.T) {
 func TestUndoPathRestoresOneFile(t *testing.T) {
 	m := testModel(t)
 	m.app.undo = checkpoint.NewRecorder()
-	m.app.workspace = t.TempDir()
+	m.app.workspace = m.app.loop.Tools.Root()
 	path := m.app.workspace + "/main.go"
 	os.WriteFile(path, []byte("before"), 0o644)
+	if result := runSurfaceTool(t, m.app.loop.Tools, "read", map[string]any{"path": "main.go"}); result.IsError {
+		t.Fatalf("fixture read failed: %s", result.Content)
+	}
 	m.app.undo.Begin("the turn")
 	m.app.undo.Record(path)
 	os.WriteFile(path, []byte("after"), 0o644)
+	semantic := &lspView{}
+	m.full = semantic
+	workspaceEpoch := m.workspaceRuntime.epoch.Load()
 
 	cmdUndo(m, "main.go")
 	if got, _ := os.ReadFile(path); string(got) != "before" {
@@ -345,6 +351,14 @@ func TestUndoPathRestoresOneFile(t *testing.T) {
 	joined := strings.Join(m.tr.flat, "\n")
 	if !strings.Contains(joined, "restored main.go") {
 		t.Fatalf("the restore was not reported:\n%s", joined)
+	}
+	if got := m.workspaceRuntime.epoch.Load(); got != workspaceEpoch+1 || !semantic.stale {
+		t.Fatalf("undo left final-code caches live: epoch=%d want=%d lsp-stale=%v", got, workspaceEpoch+1, semantic.stale)
+	}
+	if result := runSurfaceTool(t, m.app.loop.Tools, "edit", map[string]any{
+		"path": "main.go", "old_string": "before", "new_string": "again",
+	}); !result.IsError {
+		t.Fatal("undo left the model's pre-undo read authority live")
 	}
 
 	m.tr.reset()
@@ -355,6 +369,29 @@ func TestUndoPathRestoresOneFile(t *testing.T) {
 	}
 	if joined := strings.Join(m.tr.flat, "\n"); !strings.Contains(joined, "no turn captured") {
 		t.Fatalf("an uncaptured path did not say so:\n%s", joined)
+	}
+}
+
+func TestUndoTurnInvalidatesWorkspaceAndSemanticCaches(t *testing.T) {
+	m := testModel(t)
+	m.app.undo = checkpoint.NewRecorder()
+	m.app.workspace = m.app.loop.Tools.Root()
+	path := m.app.workspace + "/main.go"
+	os.WriteFile(path, []byte("before"), 0o644)
+	m.app.undo.Begin("the turn")
+	m.app.undo.Record(path)
+	os.WriteFile(path, []byte("after"), 0o644)
+	semantic := &lspView{}
+	m.full = semantic
+	workspaceEpoch := m.workspaceRuntime.epoch.Load()
+
+	if cmd := cmdUndo(m, ""); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	if got := m.workspaceRuntime.epoch.Load(); got != workspaceEpoch+1 || !semantic.stale {
+		t.Fatalf("whole-turn undo left final-code caches live: epoch=%d want=%d lsp-stale=%v", got, workspaceEpoch+1, semantic.stale)
 	}
 }
 

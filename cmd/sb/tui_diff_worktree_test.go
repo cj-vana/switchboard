@@ -101,9 +101,28 @@ func TestOpenDiffNonRepositoryRetainsGitDiagnostic(t *testing.T) {
 }
 
 func TestRenderSCMDiffMarksTruncationAndNonTextChanges(t *testing.T) {
-	truncated := renderSCMDiff(scm.DiffResult{Text: []byte("partial"), Truncated: true})
+	truncated := renderSCMDiff(scm.DiffResult{
+		Text:      []byte("partial"),
+		Truncated: true,
+		Omitted: []scm.PathState{
+			{Path: "zzz-last.txt", Untracked: true},
+			{Path: "aaa-partial.txt", Tracked: true, Unstaged: true},
+		},
+	})
 	if !strings.Contains(truncated, "diff truncated at 1 MiB") {
 		t.Fatalf("truncated diff has no explicit marker: %q", truncated)
+	}
+	for _, want := range []string{
+		"files not fully shown (2)",
+		"unstaged  aaa-partial.txt",
+		"untracked  zzz-last.txt",
+	} {
+		if !strings.Contains(truncated, want) {
+			t.Fatalf("truncated diff inventory is missing %q: %q", want, truncated)
+		}
+	}
+	if strings.Index(truncated, "aaa-partial.txt") > strings.Index(truncated, "zzz-last.txt") {
+		t.Fatalf("truncated diff inventory is not deterministic: %q", truncated)
 	}
 
 	withoutPatch := renderSCMDiff(scm.DiffResult{Files: []scm.PathState{{
@@ -112,6 +131,79 @@ func TestRenderSCMDiffMarksTruncationAndNonTextChanges(t *testing.T) {
 	}}})
 	if strings.Contains(withoutPatch, "working tree clean") || !strings.Contains(withoutPatch, "untracked  empty.txt") {
 		t.Fatalf("non-text change was rendered dishonestly: %q", withoutPatch)
+	}
+}
+
+func TestOpenDiffNamesPartialAndLaterMixedFilesAfterCap(t *testing.T) {
+	root := initTUIDiffRepo(t)
+	writeTUIDiffFile(t, root, "aaa-large.txt", []byte("base\n"))
+	writeTUIDiffFile(t, root, "middle-tracked.txt", []byte("base\n"))
+	commitTUIDiffFiles(t, root)
+
+	writeTUIDiffFile(t, root, "aaa-large.txt", []byte(strings.Repeat(strings.Repeat("x", 2048)+"\n", 600)))
+	writeTUIDiffFile(t, root, "middle-tracked.txt", []byte("changed\n"))
+	writeTUIDiffFile(t, root, "zzz-image.bin", []byte{0, 1, 2, 3, 0xff, 0xfe})
+	wantIndex := tuiDiffIndexChecksum(t, root)
+
+	msg := runOpenDiff(t, root)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	if got := tuiDiffIndexChecksum(t, root); got != wantIndex {
+		t.Fatalf("/diff changed the Git index: got %x, want %x", got, wantIndex)
+	}
+	text := plainTUIDiff(msg)
+	for _, want := range []string{
+		"diff truncated at 1 MiB",
+		"files not fully shown (3)",
+		"aaa-large.txt",
+		"middle-tracked.txt",
+		"untracked  zzz-image.bin",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("capped mixed diff is missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderDiffOmittedIsBoundedDeterministicAndTerminalSafe(t *testing.T) {
+	files := make([]scm.PathState, 200)
+	for i := range files {
+		files[i] = scm.PathState{
+			Path:      itoa(199-i) + "\n\x1b]52;c;spoof\a\u202e-" + strings.Repeat("long-name-", 80) + ".txt",
+			Untracked: true,
+		}
+	}
+
+	first := renderDiffOmitted(files)
+	reversed := append([]scm.PathState(nil), files...)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+	second := renderDiffOmitted(reversed)
+	if first != second {
+		t.Fatal("omitted inventory depends on input order")
+	}
+	if len(first) > tuiDiffInventoryMaxBytes {
+		t.Fatalf("omitted inventory is %d bytes, cap %d", len(first), tuiDiffInventoryMaxBytes)
+	}
+	rendered := renderSCMDiff(scm.DiffResult{
+		Text:      []byte(strings.Repeat("x", tuiDiffPatchMaxBytes)),
+		Truncated: true,
+		Omitted:   files,
+	})
+	if len(rendered) > tuiDiffMaxBytes {
+		t.Fatalf("rendered diff is %d bytes, cap %d", len(rendered), tuiDiffMaxBytes)
+	}
+	for _, unsafe := range []string{"\n\x1b]52;c;spoof", "\a", "\u202e"} {
+		if strings.Contains(first, unsafe) {
+			t.Fatalf("omitted inventory retained terminal control %q: %q", unsafe, first)
+		}
+	}
+	for _, want := range []string{"files not fully shown (200)", "total not fully shown", `\x0a\x1b]52;c;spoof\x07\u202e-`} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("bounded inventory is missing %q: %q", want, first)
+		}
 	}
 }
 

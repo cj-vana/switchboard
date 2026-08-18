@@ -26,7 +26,24 @@ sb completion fish
 ```
 
 Each generated script includes its shell-specific install command in the
-header. Completion entries are tested against the real command dispatcher.
+header. Bash, zsh, and fish completion follow the same closed grammar as the
+real command dispatcher, including leading global flags, nested plugin and MCP
+actions, terminal flags, and `--`.
+
+Help is static and available before Switchboard reads configuration, opens a
+session, discovers extensions, checks for updates, or probes a provider:
+
+```sh
+sb help
+sb help plugins
+sb help plugins enable
+sb plugins enable --help
+```
+
+`-h`, `--help`, and the legacy `-help` spelling are equivalent. A command-line
+parse error prints root usage and exits 2. Ordinary command failures exit 1;
+user cancellation exits 130. Asking for help exits successfully even when the
+local configuration or extension inventory is broken.
 
 ## Updates
 
@@ -57,6 +74,7 @@ These commands remain available later:
 | `/models` | Browse models and bind tiers |
 | `/login` and `/logout` | Manage provider credentials |
 | `/doctor` or `sb doctor` | Probe providers, credentials, sandbox support, conditional tools, and MCP servers |
+| `/doctor extensions` | Inspect retained startup extension diagnostics in discovery order |
 
 `doctor` uses the same provider probes as session startup. A failed row includes
 the next action when one is known. On Linux, sandbox support requires a
@@ -65,6 +83,10 @@ binary and chain must have no group/other write bits and must not be writable
 by the invoking user through effective permissions such as ACLs. A user-owned
 or user-writable resolved binary is reported as unavailable; install bubblewrap
 through a trusted system package.
+
+`/doctor extensions` is a static startup record in both the TUI and REPL, not a
+live health check. Its bounded buffer and overflow behavior are documented in
+[Native extension compatibility](extensions.md#startup-diagnostics).
 
 ## Config file
 
@@ -126,15 +148,15 @@ approver = "t1"
 
 The advisor watches for stuck-agent signals. The summarizer handles manual and
 automatic compaction regardless of the active tier. In `auto` permission mode,
-`approver` selects the tier or direct target that reviews eligible commands.
-Without the slot, Switchboard tries the ladder from its lowest tier. The
+`approver` selects the tier or direct target that reviews eligible commands,
+but only while verified command confinement is active. Without the slot,
+Switchboard tries the ladder from its lowest tier. With confinement off or
+unavailable, execute asks the user because workspace builds can run code. The
 reviewer receives a bounded command-policy packet and can allow, deny, or
-escalate. Errors or invalid results go to the user, or deny the command when no
-listener exists. Reviewer calls are budgeted and recorded as approval work.
-Shell or inline-interpreter code, sensitive commands, and ordinary commands
-under macOS shared host-loopback confinement skip model review and ask the
-user. Windows command execution also stays human-gated because descendant
-cleanup is not guaranteed.
+escalate; its calls are budgeted and recorded as approval work. An explicit
+full-network request can remain eligible under verified confinement. Shell or
+inline-interpreter code, sensitive commands, shared host-loopback commands,
+external tools, and Windows execution stay human-gated.
 
 `/theme`, `/update`, `/compact`, and `/budget` update persistent settings.
 `/think` changes reasoning effort for the running process; use `/models` to

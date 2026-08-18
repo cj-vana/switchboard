@@ -83,8 +83,8 @@ func TestDecodeInitializeResultNumericSyncKinds(t *testing.T) {
 		want SyncOptions
 	}{
 		{name: "none", kind: 0, want: SyncOptions{Change: SyncNone}},
-		{name: "full", kind: 1, want: SyncOptions{OpenClose: true, Change: SyncFull}},
-		{name: "incremental", kind: 2, want: SyncOptions{OpenClose: true, Change: SyncIncremental}},
+		{name: "full", kind: 1, want: SyncOptions{Change: SyncFull}},
+		{name: "incremental", kind: 2, want: SyncOptions{Change: SyncIncremental}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -138,7 +138,6 @@ func TestDecodeInitializeResultRejectsMalformedOrUnsupportedValues(t *testing.T)
 		{name: "null encoding", raw: `{"capabilities":{"positionEncoding":null}}`, part: "positionEncoding"},
 		{name: "invalid sync kind", raw: `{"capabilities":{"textDocumentSync":3}}`, part: "invalid change kind"},
 		{name: "fractional sync kind", raw: `{"capabilities":{"textDocumentSync":1.5}}`, part: "change must be"},
-		{name: "change without open close", raw: `{"capabilities":{"textDocumentSync":{"change":1}}}`, part: "requires openClose"},
 		{name: "bad save", raw: `{"capabilities":{"textDocumentSync":{"save":"yes"}}}`, part: "save must be"},
 		{name: "bad provider", raw: `{"capabilities":{"definitionProvider":"yes"}}`, part: "definitionProvider"},
 		{name: "bad resolve", raw: `{"capabilities":{"workspaceSymbolProvider":{"resolveProvider":{}}}}`, part: "resolveProvider"},
@@ -149,6 +148,28 @@ func TestDecodeInitializeResultRejectsMalformedOrUnsupportedValues(t *testing.T)
 			_, err := decodeInitializeResult(json.RawMessage(tt.raw))
 			if err == nil || !strings.Contains(err.Error(), tt.part) {
 				t.Fatalf("error = %v, want one containing %q", err, tt.part)
+			}
+		})
+	}
+}
+
+func TestDecodeInitializeResultKeepsOpenCloseAndChangeIndependent(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sync string
+		want SyncOptions
+	}{
+		{name: "change only", sync: `{"change":2}`, want: SyncOptions{Change: SyncIncremental}},
+		{name: "open close only", sync: `{"openClose":true}`, want: SyncOptions{OpenClose: true}},
+		{name: "both", sync: `{"openClose":true,"change":1}`, want: SyncOptions{OpenClose: true, Change: SyncFull}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := decodeInitializeResult(json.RawMessage(`{"capabilities":{"textDocumentSync":` + test.sync + `}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Sync != test.want {
+				t.Fatalf("sync = %#v, want %#v", got.Sync, test.want)
 			}
 		})
 	}

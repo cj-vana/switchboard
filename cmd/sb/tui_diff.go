@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -18,7 +20,15 @@ import (
 	"github.com/switchboard-code/switchboard/internal/terminaltext"
 )
 
-const tuiDiffMaxBytes = 1 << 20
+const (
+	tuiDiffMaxBytes              = 1 << 20
+	tuiDiffInventoryMaxBytes     = 16 << 10
+	tuiDiffInventoryMaxPaths     = 64
+	tuiDiffInventoryPathMaxBytes = 512
+	// Leave room inside the one-MiB render envelope for the truncation note
+	// and the bounded inventory. The patch cap remains the only input to Git.
+	tuiDiffPatchMaxBytes = tuiDiffMaxBytes - tuiDiffInventoryMaxBytes - 256
+)
 
 // diffView is the /diff fullscreen. The diff is highlighted once when it
 // loads — §14's "rendered once and cached" — and scrolling is a slice over
@@ -29,8 +39,10 @@ type diffView struct {
 }
 
 type diffLoadedMsg struct {
-	lines []string
-	err   error
+	sessionID  string
+	generation uint64
+	lines      []string
+	err        error
 }
 
 // openDiff diffs the workspace against HEAD. This is the harness running a
@@ -51,7 +63,7 @@ func openDiff(workspace string, dark bool) tea.Cmd {
 		}
 		result, err := repo.DiffHEAD(ctx, scm.DiffOptions{
 			Paths:    paths,
-			MaxBytes: tuiDiffMaxBytes,
+			MaxBytes: tuiDiffPatchMaxBytes,
 		})
 		if err != nil {
 			return diffLoadedMsg{err: err}
@@ -92,6 +104,7 @@ func renderSCMDiff(result scm.DiffResult) string {
 			text += "\n"
 		}
 		text += "… diff truncated at 1 MiB; some changes are not shown …\n"
+		text += renderDiffOmitted(result.Omitted)
 	}
 	if strings.TrimSpace(text) != "" {
 		return text
@@ -113,6 +126,63 @@ func renderSCMDiff(result scm.DiffResult) string {
 		fmt.Fprintf(&b, "  %s  %s\n", diffStateLabel(file), file.Path)
 	}
 	return b.String()
+}
+
+func renderDiffOmitted(files []scm.PathState) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	// SCM already returns path-sorted status, but sorting a copy here makes
+	// this renderer deterministic for every caller and leaves its input alone.
+	ordered := append([]scm.PathState(nil), files...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Path == ordered[j].Path {
+			return ordered[i].OriginalPath < ordered[j].OriginalPath
+		}
+		return ordered[i].Path < ordered[j].Path
+	})
+
+	header := fmt.Sprintf("files not fully shown (%d):\n", len(ordered))
+	var body strings.Builder
+	shown := 0
+	for shown < len(ordered) && shown < tuiDiffInventoryMaxPaths {
+		line := fmt.Sprintf("  %s  %s\n", diffStateLabel(ordered[shown]), diffInventoryPath(ordered[shown]))
+		nextShown := shown + 1
+		summary := ""
+		if nextShown < len(ordered) {
+			summary = fmt.Sprintf("  … %d more path(s) not listed; %d total not fully shown …\n", len(ordered)-nextShown, len(ordered))
+		}
+		if len(header)+body.Len()+len(line)+len(summary) > tuiDiffInventoryMaxBytes {
+			break
+		}
+		body.WriteString(line)
+		shown = nextShown
+	}
+
+	var b strings.Builder
+	b.Grow(len(header) + body.Len() + 80)
+	b.WriteString(header)
+	b.WriteString(body.String())
+	if shown < len(ordered) {
+		fmt.Fprintf(&b, "  … %d more path(s) not listed; %d total not fully shown …\n", len(ordered)-shown, len(ordered))
+	}
+	return b.String()
+}
+
+func diffInventoryPath(file scm.PathState) string {
+	path := terminaltext.Escape(file.Path)
+	if file.OriginalPath != "" && file.OriginalPath != file.Path {
+		path = terminaltext.Escape(file.OriginalPath) + " -> " + path
+	}
+	if len(path) <= tuiDiffInventoryPathMaxBytes {
+		return path
+	}
+	cut := tuiDiffInventoryPathMaxBytes - len("…")
+	for cut > 0 && !utf8.RuneStart(path[cut]) {
+		cut--
+	}
+	return path[:cut] + "…"
 }
 
 func diffStateLabel(file scm.PathState) string {

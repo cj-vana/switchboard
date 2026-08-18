@@ -42,8 +42,8 @@ With no configuration, `sb` opens a setup checklist:
 
 Setup can use an existing Codex CLI login through a credential helper. Keys go
 to the OS credential service, not `config.toml`. Run `/setup` to reopen the
-checklist, `/models` to add tiers, and `/doctor` when a provider or tool is not
-working.
+checklist, `/models` to add tiers, `/doctor` when a provider or tool is not
+working, and `/doctor extensions` to expand retained startup diagnostics.
 
 ## The ladder
 
@@ -75,21 +75,20 @@ automatic routing. `/t3 fix the flaky test` uses a tier for one prompt.
 See [Routing and the model ladder](docs/routing.md) for escalation, fallbacks,
 cache accounting, budgets, races, and the learned-router gate.
 
-## In a session
+## The workbench
 
-| Input or command | Purpose |
+The TUI is the full coding workbench: source navigation, change review,
+verification, and the model ladder in one terminal.
+
+| Need | Surface |
 | --- | --- |
-| `@path` | Attach a workspace file |
-| `!cmd` | Run a shell command and attach its output to the next turn |
-| `/why` | Explain the active route and prior moves |
-| `/context` | Show estimated context composition |
-| `/compact preview` | Preview a context summary before applying it |
-| `/budget 2.50` | Set a persistent dollar ceiling |
-| `/watch go test ./...` | Run a verifier after edit rounds and report changed results |
-| `/changes` and `/undo` | Review or restore file changes captured by write and edit |
-| `/race <prompt>` | Compare two tiers on the same read-only prompt |
-| `/fork`, `/pin`, `/retry` | Branch or replay session history without rewriting the original log |
-| `/skills`, `/agents`, `/mcp`, `/plugins` | Inspect extension inventory and state |
+| Open and search code | Ctrl+P opens the command palette; `/files` and `/search` provide revision-checked results and label partial coverage |
+| Navigate semantics | `/outline`, `/symbols`, `/definition`, and `/references` use a trusted, installed language server; `/problems` labels diagnostic freshness and partial coverage |
+| Review code changes | `/diff` shows staged, unstaged, and untracked work plus a bounded omitted-path inventory; `/review [turn]` shows one turn's recorded mutations |
+| Edit against known state | Writes publish atomically. Edit and undo compare the expected file state immediately before publication and refuse a mismatch already present |
+| Verify and recover | `/watch`, `/bisect`, `/undo`, `/fork`, and `/retry` keep test evidence and recovery attached to the session record |
+| Explain the route | `/why`, `/estimate`, `/budget`, `/race`, and `/blame` connect model choice, cost, and surviving code |
+| Continue after a boundary | Bounded, redacted continuity capsules carry recorded todo state and the next action once across restart, fork, retry, or compaction without rewriting the visible conversation |
 
 Prompt history persists per workspace. Messages entered during a turn queue
 until it completes. Ctrl+G opens the prompt in `$VISUAL` or `$EDITOR`, Ctrl+R
@@ -100,6 +99,9 @@ The complete command and tool reference is in
 [Sessions and command reference](docs/session.md).
 
 ## Scripting
+
+The line-oriented `-repl` is deliberately smaller, and `-p` is headless. REPL
+`/help` omits TUI-only file, change-review, task, and language-server views.
 
 Run one turn without a TUI:
 
@@ -126,8 +128,8 @@ in [Sessions and command reference](docs/session.md#scripting).
 | MCP | Switchboard config plus explicitly activated Codex and Claude config; trusted plugin MCP; stdio and Streamable HTTP |
 | Plugins | Local inventory, offline install, independent enablement, digest-bound executable trust; skills and compatible MCP assemble |
 | Hooks | User hooks and trusted repository hooks at tool-call seams |
-| Delegation | One subagent level, optional named agent definitions, shared permission engine |
-| Language servers | Trusted projects can use installed `gopls`, TypeScript 7, `pyright`, or `clangd` servers |
+| Delegation | One subagent level, optional named agents, and up to four independent calls in one provider-launched delegate batch; shared permissions and labeled approvals |
+| Language servers | Trusted projects can use installed `gopls`, TypeScript 7, `pyright`, or `clangd` through model tools and TUI semantic views |
 | Computer use | macOS Accessibility control with per-application approval |
 
 Native state never grants Switchboard authority by itself. MCP definitions need
@@ -142,12 +144,9 @@ documented separately in [Computer use](docs/computer.md).
 
 ## Credentials
 
-Credential lookup uses environment variables, configured helpers, OAuth, then
-the OS credential service. Outbound prompts, attachments, command output, web
-requests, and computer-use text are checked for known credential formats.
-
-See [Security](docs/security.md) for credential storage, prompt redaction,
-workspace trust, external tools, and the OpenAI subscription OAuth warning.
+Credentials can come from environment variables, helpers, OAuth, or the OS
+credential service. [Security](docs/security.md) covers storage, outbound secret
+checks, workspace trust, external tools, and subscription OAuth.
 
 ## The sandbox
 
@@ -157,6 +156,12 @@ Inside a session, `/sandbox on|off|auto|status` changes or reports the current
 posture.
 `on` refuses to activate when verification is unavailable; `auto` uses verified
 confinement when present and otherwise stays visibly off.
+
+Permission mode `auto` delegates an eligible command decision to the low-cost
+reviewer only while verified confinement is active. Host-direct execution asks
+the human because a workspace build can run arbitrary code. A confined,
+explicit full-network request can still be reviewed; shared loopback, opaque or
+interpreter commands, sensitive commands, and external tools stay human-gated.
 
 Permission mode is separate. `bypass` is prompt-free only when verified
 confinement isolates both host network and host IPC; neither current production
@@ -176,10 +181,12 @@ two routing targets. See
 
 ## Where this stands
 
-Version 1.1 includes the provider loop, deterministic per-turn router, TUI,
-session log, cost and cache accounting, permission and trust model, modern and
-legacy MCP runtime, native skills, manual Claude commands, plugin skills and
-trusted plugin MCP, delegation, and computer use.
+Version 1.2 adds the searchable workbench, exact read-only Git diff and
+turn-scoped agent review, semantic navigation and diagnostics, atomic
+revision-checked edits and undo, durable continuity capsules, visible parallel
+delegate tasks, static CLI help and completion, and bounded startup diagnostics.
+The model ladder, accounting, trust model, extensions, and computer use remain.
+See the [1.2 release notes](docs/release-1.2.md).
 
 The learned router is intentionally absent. The current evaluation does not
 contain a clean choice between multiple useful tiers. The gate and evidence

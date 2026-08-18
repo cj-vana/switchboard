@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/switchboard-code/switchboard/internal/childenv"
 )
 
 const maxLSPMessageBytes = 16 << 20
@@ -108,8 +110,7 @@ func startWithProblems(ctx context.Context, argv []string, root string, problems
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, fmt.Errorf("language server command is empty")
 	}
-	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...)
-	cmd.Dir = root
+	cmd := languageServerCommand(argv, root)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -131,6 +132,13 @@ func startWithProblems(ctx context.Context, argv []string, root string, problems
 		return nil, err
 	}
 	return c, nil
+}
+
+func languageServerCommand(argv []string, root string) *exec.Cmd {
+	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...)
+	cmd.Dir = root
+	cmd.Env = childenv.Current()
+	return cmd
 }
 
 // newClient wires arbitrary pipes. Tests use it without initialize, so it
@@ -475,10 +483,30 @@ func (c *Client) syncDocumentLocked(path string, data []byte, capabilities Capab
 	path = filepath.Clean(path)
 	uri := pathToURI(path)
 	state := c.documents[path]
-	if !capabilities.Sync.OpenClose {
+	if !capabilities.Sync.OpenClose && capabilities.Sync.Change == SyncNone && !capabilities.Sync.Save {
 		return nil
 	}
-	if state == nil || !state.open {
+	if state == nil {
+		if !capabilities.Sync.OpenClose {
+			// A server may advertise change synchronization without asking for
+			// didOpen/didClose. A full-content initial change works for either
+			// full or incremental synchronization and supplies the exact query
+			// snapshot without inventing open/close support the server never
+			// claimed.
+			if capabilities.Sync.Change != SyncNone {
+				if err := c.notify("textDocument/didChange", map[string]any{
+					"textDocument":   map[string]any{"uri": uri, "version": 1},
+					"contentChanges": []map[string]any{{"text": string(data)}},
+				}); err != nil {
+					return err
+				}
+			}
+			c.documents[path] = &documentState{
+				version: 1, savedVersion: 1, text: append([]byte(nil), data...),
+			}
+			c.problems.invalidate(uri, 1)
+			return nil
+		}
 		if err := c.notify("textDocument/didOpen", map[string]any{
 			"textDocument": map[string]any{
 				"uri": uri, "languageId": languageOf(path), "version": 1, "text": string(data),
@@ -496,7 +524,7 @@ func (c *Client) syncDocumentLocked(path string, data []byte, capabilities Capab
 		return c.retrySaveLocked(path, data, state, capabilities)
 	}
 	if capabilities.Sync.Change == SyncNone {
-		return fmt.Errorf("%s changed after it was opened, but the server advertises no textDocument/didChange support", path)
+		return fmt.Errorf("%s changed after its synchronization baseline, but the server advertises no textDocument/didChange support", path)
 	}
 
 	nextVersion := state.version + 1

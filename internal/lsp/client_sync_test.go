@@ -61,6 +61,28 @@ func TestInitializeStoresDecodedCapabilities(t *testing.T) {
 	}
 }
 
+func TestLanguageServerCommandWithholdsAmbientCredentials(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "provider-secret")
+	t.Setenv("AUTH", "generic-secret")
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/credential-capability")
+	t.Setenv("LSP_VISIBLE", "ordinary-value")
+
+	root := t.TempDir()
+	command := languageServerCommand([]string{"fixture-ls", "--stdio"}, root)
+	if command.Dir != root {
+		t.Fatalf("language-server directory = %q, want %q", command.Dir, root)
+	}
+	environment := strings.Join(command.Env, "\n")
+	for _, secret := range []string{"provider-secret", "generic-secret", "credential-capability"} {
+		if strings.Contains(environment, secret) {
+			t.Errorf("language-server environment retained %q", secret)
+		}
+	}
+	if !strings.Contains(environment, "LSP_VISIBLE=ordinary-value") {
+		t.Errorf("language-server command dropped ordinary environment: %q", environment)
+	}
+}
+
 func TestDefinitionAtSymbolSynchronizesTheExactUTF16Snapshot(t *testing.T) {
 	c, server, root := newScriptedServer(t)
 	path := filepath.Join(root, "a.go")
@@ -214,6 +236,66 @@ func TestIncrementalSyncReplacesTheWholeOldUTF16Range(t *testing.T) {
 	server.send(t, map[string]any{"jsonrpc": "2.0", "id": request["id"], "result": nil})
 	if err := awaitTestError(t, second); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChangeOnlySyncNeverInventsOpenOrCloseNotifications(t *testing.T) {
+	c, server, root := newScriptedServer(t)
+	path := filepath.Join(root, "a.go")
+	c.setCapabilities(Capabilities{
+		PositionEncoding: PositionEncodingUTF16,
+		Sync:             SyncOptions{Change: SyncFull},
+		Definition:       true,
+	})
+
+	first := asyncDefinition(c, path)
+	change := server.recv(t)
+	assertMethod(t, change, "textDocument/didChange")
+	params := frameParams(t, change)
+	if got := params["textDocument"].(map[string]any)["version"]; got != float64(1) {
+		t.Fatalf("initial change-only version = %v, want 1", got)
+	}
+	request := server.recv(t)
+	assertMethod(t, request, "textDocument/definition")
+	server.send(t, map[string]any{"jsonrpc": "2.0", "id": request["id"], "result": nil})
+	if err := awaitTestError(t, first); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "package a\nvar Changed = true\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := asyncDefinition(c, path)
+	change = server.recv(t)
+	assertMethod(t, change, "textDocument/didChange")
+	params = frameParams(t, change)
+	if got := params["textDocument"].(map[string]any)["version"]; got != float64(2) {
+		t.Fatalf("second change-only version = %v, want 2", got)
+	}
+	if got := params["contentChanges"].([]any)[0].(map[string]any)["text"]; got != content {
+		t.Fatalf("change-only text = %q, want %q", got, content)
+	}
+	request = server.recv(t)
+	assertMethod(t, request, "textDocument/definition")
+	server.send(t, map[string]any{"jsonrpc": "2.0", "id": request["id"], "result": nil})
+	if err := awaitTestError(t, second); err != nil {
+		t.Fatal(err)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		c.Close()
+		close(closed)
+	}()
+	shutdown := server.recv(t)
+	assertMethod(t, shutdown, "shutdown")
+	server.send(t, map[string]any{"jsonrpc": "2.0", "id": shutdown["id"], "result": nil})
+	assertMethod(t, server.recv(t), "exit")
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("change-only client did not close")
 	}
 }
 

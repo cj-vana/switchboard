@@ -60,10 +60,20 @@ func (r *renderer) style(code, s string) string {
 	return code + s + reset
 }
 
-func (r *renderer) flush() { r.w.Flush() }
+// The *Locked helpers are the only code that touches the buffered writer or
+// its layout state. Callers that need one indivisible terminal transaction —
+// notably approval prompts — hold mu and use these directly. The small public
+// helpers take the lock for legacy REPL call sites that write outside a turn.
+func (r *renderer) flushLocked() { _ = r.w.Flush() }
+
+func (r *renderer) flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flushLocked()
+}
 
 // section separates a new kind of output from whatever came before it.
-func (r *renderer) section(kind string) {
+func (r *renderer) sectionLocked(kind string) {
 	if r.lastKind == kind {
 		return
 	}
@@ -77,7 +87,7 @@ func (r *renderer) section(kind string) {
 	r.lastKind = kind
 }
 
-func (r *renderer) write(s string) {
+func (r *renderer) writeLocked(s string) {
 	if s == "" {
 		return
 	}
@@ -85,7 +95,7 @@ func (r *renderer) write(s string) {
 	r.atLineTop = strings.HasSuffix(s, "\n")
 }
 
-func (r *renderer) line(s string) {
+func (r *renderer) lineLocked(s string) {
 	if !r.atLineTop {
 		r.w.WriteByte('\n')
 	}
@@ -94,27 +104,37 @@ func (r *renderer) line(s string) {
 	r.atLineTop = true
 }
 
+func (r *renderer) line(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lineLocked(s)
+}
+
 func (r *renderer) ThinkingDelta(text string) {
-	r.section("thinking")
-	r.write(r.style(dim, terminaltext.Display(text)))
-	r.flush()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sectionLocked("thinking")
+	r.writeLocked(r.style(dim, terminaltext.Display(text)))
+	r.flushLocked()
 }
 
 func (r *renderer) TextDelta(text string) {
-	r.section("text")
-	r.write(terminaltext.Display(text))
-	r.flush()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sectionLocked("text")
+	r.writeLocked(terminaltext.Display(text))
+	r.flushLocked()
 }
 
 func (r *renderer) ToolStart(call provider.ToolUse, req permission.Request) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.section("tool")
-	r.line(r.style(bold, call.Name) + " " + r.style(dim, describeRequest(req)))
-	r.flush()
+	r.sectionLocked("tool")
+	r.lineLocked(r.style(bold, call.Name) + " " + r.style(dim, describeRequest(req)))
+	r.flushLocked()
 }
 
-func (r *renderer) ToolEnd(_ provider.ToolUse, _ permission.Request, res tools.Result, took time.Duration) {
+func (r *renderer) ToolEnd(call provider.ToolUse, req permission.Request, res tools.Result, took time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	status := "ok in " + formatDuration(took)
@@ -126,24 +146,46 @@ func (r *renderer) ToolEnd(_ provider.ToolUse, _ permission.Request, res tools.R
 	if detail != "" {
 		status += ": " + detail
 	}
-	if res.IsError {
-		r.line("  " + r.style(red, status))
-	} else {
-		r.line("  " + r.style(dim, status))
+	if task := delegateCompletionLabel(call, req); task != "" {
+		status = task + " · " + status
 	}
-	r.flush()
+	if res.IsError {
+		r.lineLocked("  " + r.style(red, status))
+	} else {
+		r.lineLocked("  " + r.style(dim, status))
+	}
+	r.flushLocked()
+}
+
+// delegateCompletionLabel correlates an end rail with the attributed start
+// without repeating a model-controlled path or command. Forwarded delegate
+// IDs have a process-owned task prefix; ordinary top-level calls are unchanged.
+func delegateCompletionLabel(call provider.ToolUse, req permission.Request) string {
+	taskID, _, delegated := strings.Cut(call.ID, "/")
+	if !delegated || !strings.HasPrefix(taskID, "task-") {
+		return ""
+	}
+	detail := strings.TrimSpace(req.Detail)
+	if strings.HasPrefix(detail, "[") {
+		if end := strings.IndexByte(detail, ']'); end >= 0 {
+			return boundedApprovalText(terminaltext.Escape(detail[:end+1]), 80)
+		}
+	}
+	return boundedApprovalText(terminaltext.Escape("["+taskID+"]"), 80)
 }
 
 func (r *renderer) ToolBatchEnd(context.Context) {}
 
 func (r *renderer) Notice(level, text string) {
-	r.section("notice")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sectionLocked("notice")
 	prefix := "  note: "
 	if level == "warn" || level == "error" {
 		prefix = "  " + level + ": "
 	}
-	r.line(r.style(dim, prefix+terminaltext.Display(text)))
-	r.flush()
+	r.lineLocked(r.style(dim, prefix+terminaltext.Display(text)))
+	r.flushLocked()
 }
 
 func (r *renderer) TurnUsage(session.Usage) {}
@@ -151,17 +193,23 @@ func (r *renderer) TurnUsage(session.Usage) {}
 // endTurn closes out whatever the turn was writing so the next prompt starts
 // on a clean line.
 func (r *renderer) endTurn() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.atLineTop {
 		r.w.WriteByte('\n')
 		r.atLineTop = true
 	}
 	r.lastKind = ""
-	r.flush()
+	r.flushLocked()
 }
 
 func describeRequest(req permission.Request) string {
 	if req.Effect == permission.EffectExecute {
-		return tools.Describe(req.Argv, req.Shell)
+		command := tools.Describe(req.Argv, req.Shell)
+		if req.Detail != "" {
+			return terminaltext.Escape(req.Detail) + " · " + command
+		}
+		return command
 	}
 	if req.Detail != "" {
 		return terminaltext.Escape(req.Detail)
@@ -234,28 +282,34 @@ type terminalAsker struct {
 
 func (a *terminalAsker) Ask(_ context.Context, req permission.Request, out permission.Outcome) (permission.Response, error) {
 	r := a.out
-	r.section("prompt")
-	r.line(r.style(bold, "approve "+terminaltext.Escape(req.Tool)) + " " + approvalDescription(req))
-	r.line(r.style(dim, "  "+approvalReason(out.Reason)))
+	// Hold the renderer for the complete prompt/read transaction. A sibling
+	// delegate may finish a tool or emit a fallback notice while the user is
+	// deciding; letting that output paint inside the prompt can make the visible
+	// command disagree with the answer the input is about.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sectionLocked("prompt")
+	r.lineLocked(r.style(bold, "approve "+terminaltext.Escape(req.Tool)) + " " + approvalDescription(req))
+	r.lineLocked(r.style(dim, "  "+approvalReason(out.Reason)))
 
 	// Design principle 4: a prompt is not containment, and the moment the user
 	// approves is the moment that has to be plain.
 	if out.SandboxAbsent {
-		r.line(r.style(dim, "  FULL HOST ACCESS: this command is not sandboxed; it can access files outside the workspace and the network"))
+		r.lineLocked(r.style(dim, "  FULL HOST ACCESS: this command is not sandboxed; it can access files outside the workspace and the network"))
 	}
 	if req.Effect == permission.EffectExecute && req.Network {
-		r.line(r.style(dim, "  FULL NETWORK ACCESS REQUESTED: this command can send workspace data off this machine"))
+		r.lineLocked(r.style(dim, "  FULL NETWORK ACCESS REQUESTED: this command can send workspace data off this machine"))
 	}
-	r.line("  [y] once   [a] " + permissionRememberHint(req) + "   [n] no")
+	r.lineLocked("  [y] once   [a] " + permissionRememberHint(req) + "   [n] no")
 	r.w.WriteString("  > ")
 	r.atLineTop = false
-	r.flush()
+	r.flushLocked()
 
 	answer, err := a.in.ReadString('\n')
 	if err != nil {
 		if err == io.EOF {
 			// No one is there to answer, so nothing is approved.
-			r.line("")
+			r.lineLocked("")
 			return permission.Response{}, nil
 		}
 		return permission.Response{}, err
@@ -292,30 +346,34 @@ type terminalQuestioner struct {
 
 func (a *terminalQuestioner) AskUser(_ context.Context, q tools.Question) (tools.Answer, error) {
 	r := a.out
-	r.section("question")
-	r.line(r.style(bold, q.Question))
+	// Questions own stdin just like permission prompts, so keep their full
+	// render/read cycle exclusive too.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sectionLocked("question")
+	r.lineLocked(r.style(bold, q.Question))
 	for i, opt := range q.Options {
 		line := "  [" + strconv.Itoa(i+1) + "] " + opt.Label
 		if opt.Detail != "" {
 			line += "  " + r.style(dim, opt.Detail)
 		}
-		r.line(line)
+		r.lineLocked(line)
 	}
 	hint := "  a number chooses; anything else is your own answer; enter alone declines"
 	if q.Multi {
 		hint = "  numbers choose, space-separated; anything else is your own answer; enter alone declines"
 	}
-	r.line(r.style(dim, hint))
+	r.lineLocked(r.style(dim, hint))
 	r.w.WriteString("  > ")
 	r.atLineTop = false
-	r.flush()
+	r.flushLocked()
 
 	answer, err := a.in.ReadString('\n')
 	if err != nil {
 		if err == io.EOF {
 			// No one is there to answer, which is a decline, not a crash:
 			// the model hears it and continues on its own judgment.
-			r.line("")
+			r.lineLocked("")
 			return tools.Answer{Declined: true}, nil
 		}
 		return tools.Answer{}, err

@@ -405,6 +405,9 @@ func (e *Engine) modeDefault(mode Mode, req Request) Outcome {
 		if e.capability.Platform == "windows" {
 			return Outcome{Decision: Ask, Reason: "Windows cannot yet guarantee descendant process cleanup, so auto requires your approval instead of model review"}
 		}
+		if !e.sandboxActive(req) {
+			return Outcome{Decision: Ask, Reason: "host-direct commands can execute workspace-controlled code with full account and network reach, so auto keeps them with you; the command reviewer is available only under verified confinement"}
+		}
 		if sensitive, _ := SensitiveRequest(req); sensitive {
 			return Outcome{Decision: Ask, Reason: "this command looks credential-bearing, so auto keeps its metadata away from the model reviewer and asks you"}
 		}
@@ -609,6 +612,14 @@ func (e *Engine) reviewEligible(ctx context.Context, req Request) bool {
 		return false
 	}
 	if e.capability.Platform == "windows" {
+		return false
+	}
+	// A command such as `go test`, `npm test`, or `make` can execute files the
+	// primary model just wrote. The bounded review packet deliberately contains
+	// no workspace contents, so a reviewer cannot safely approve that code with
+	// full host reach. Keep unconfined execution with the human; auto review is
+	// available only when a verified profile contains the interpreted files.
+	if !e.sandboxActive(req) {
 		return false
 	}
 	// Shell and inline interpreter programs are opaque policy payloads:

@@ -46,11 +46,11 @@ point into it, and this file restates the constraints that bind the code.
     internal/watch/      the /watch verifier: the user's own command, run at
                          a turn's seams when the checkpoint recorder says
                          files changed, reporting only the delta
-    internal/lsp/        a deliberately narrow LSP client: initialize,
-                         didOpen, definition, references; the tools take
-                         {path, line, symbol} and resolve the column
-    internal/checkpoint/ per-turn file snapshots behind /undo; files are
-                         restored, messages never are
+    internal/lsp/        a deliberately bounded LSP client: initialize,
+                         document sync, cancellation, document and workspace
+                         symbols, definition, references, pushed diagnostics
+    internal/checkpoint/ per-turn file snapshots behind /undo and the bounded,
+                         read-only /review; restores never rewrite messages
     internal/blame/      line-level provenance behind /blame: replays the
                          write and edit calls the session logs carry and
                          aligns them against the file on disk; a line the
@@ -354,11 +354,24 @@ in mid-turn.
 unverified, automatic execution is disabled rather than approximated by
 prompting (design principle 4, §11).
 
+Permission `auto` may delegate an execute decision to the approver only while
+the command will run inside active verified confinement. Host-direct execution
+asks the human because a workspace build can run arbitrary code. A confined
+explicit `NetworkFull` request can remain reviewable; shared host loopback,
+opaque shell or interpreter code, sensitive commands, and external effects
+stay human-gated. `yolo` remains the explicit unconfined grant.
+
+Agent exec, LSP and provider probes, and editor launches use the central
+scrubbed child environment. Explicit user `!` shell and custom-command launches
+retain the ambient environment on purpose. Do not broaden the first claim to
+every child process or silently narrow the second; those are different trust
+postures.
+
 The same rule prices a first-party subprocess tool. `astgrep` wraps the
-user's own ast-grep binary, and its permission effect follows confinement:
-inside a demonstrated sandbox the call is read-effect and runs wrapped —
-the confinement consulted is the confinement applied — while without one it
-is execute-effect and approved per call. It is never read-effect unwrapped.
+user's own ast-grep binary and is always `EffectExecute`, including inside
+verified confinement: a PATH-resolved binary can write within the sandbox.
+Confinement limits the process when configured, but never reclassifies it as a
+read effect; the active permission mode still decides whether it may run.
 The binary is looked up once at session assembly (`cmd/sb/astgrep.go`), so
 the frozen zone never changes shape mid-session, and the tool is absent
 rather than broken on a machine without it. `CoreNames()` deliberately
@@ -451,18 +464,23 @@ the user's own, because the code it chews is the repository's: building
 the module graph runs what the workspace directs (toolchain directives,
 plugins), unconfined — confinement would deny the caches and network a
 server needs. Opening a repository is not permission to run what its
-module implies. The client (`internal/lsp`) is deliberately narrow —
-initialize, didOpen, definition, references — and answers every
-server-initiated request with null rather than leaving the server waiting
-on a client that has no configuration to give. The candidate table in
-`cmd/sb/lsp.go` holds only servers verified live on a real workspace
-(gopls, TypeScript 7's native `tsc --lsp`, pyright), which is the §5.2
-profile rule applied to language servers: the TS5-era wrapper is absent
-because no TS5 existed on the verification machine to run it against, not
-because it was forgotten. The tools' {path, line, symbol} input shape
-exists because models copy file:line reliably and invent column numbers
-freely. Server start is lazy; tool presence is decided at assembly, which
-is what the frozen zone requires.
+module implies. The client (`internal/lsp`) is deliberately bounded:
+initialize, open/change/save/close document synchronization, cancellation,
+document and workspace symbols, definition, references, and pushed
+diagnostics. It
+answers configuration with per-item null defaults, reports the single
+workspace folder, acknowledges work-progress creation, and rejects unsupported
+server requests. The candidate table in `cmd/sb/lsp.go` holds only servers
+verified live on a real workspace
+(gopls, TypeScript 7's native `tsc --lsp`, pyright, and clangd when a
+compile_commands.json supplies flags), which is the §5.2 profile rule applied
+to language servers. The definition and reference tools take
+{path, line, symbol} because models copy file:line reliably and invent column
+numbers freely; outline, workspace-symbol, and Problems surfaces use the same
+client without pretending pushed diagnostics cover the whole workspace.
+Server start is lazy for outline, symbol, definition, and reference queries;
+status and Problems do not start it. Tool presence is decided at assembly,
+which is what the frozen zone requires.
 
 **MCP discovery is once, at session assembly.** Tool definitions sit in the
 frozen zone (§6.1), so a server that changes its tool list mid-session is
@@ -645,6 +663,17 @@ change, per turn, and a restored file already forces a re-read through the
 stale check, while the conversation that produced the change stays exactly
 as sent. Do not add an undo path that mutates already-sent messages.
 
+`/review [turn]` is presentation over that evidence, never another restore
+path. Bare review binds only the open turn; a positive one-based number binds a
+retained mutation turn. Selection and asynchronous display stay conditional on
+the session, workspace generation, recorder revision, selected turn, and
+invocation. Load at most 256 paths and 256 KiB of aggregate content, then render
+at most 1,200 lines and 256 KiB without cutting a file section. Current bytes
+appear only after the recorder revalidates the committed fingerprint and target,
+parent, and ancestor identities. A refusal never falls back to reading the path.
+The view has no rollback, apply, editor, index, worktree, or checkpoint action;
+`/diff` remains the repository-against-HEAD surface.
+
 An unchanged file is not read into the context twice. A full, uncapped
 read arms a per-file record, and a later full read of byte-identical
 content answers with a short marker instead of the bytes, which is §6.7's
@@ -693,12 +722,13 @@ a turn; a retry that replayed one would replay a fragment.
 session, and every constraint follows from one of two facts. Fact one: the
 arms' requests share the session's prefix, so an arm reuses the primary's
 system blocks and a `Registry.Branch` of its registry — same schema bytes,
-own copy of the §6.7 read state, because two arms racing one prompt read
-the same files and a read that armed the skip in one context must not
-answer with a marker in the other. Fact two: two branches ran and one will
-be discarded, so neither may act — each arm gets a fresh plan-mode
-permission engine, which denies every non-read effect before rules or
-remembered answers are consulted, in every session mode, bypass included;
+but empty §6.7 file-version and read-skip authority. Read provenance cannot
+be transferred safely from the primary or another arm; each arm must establish
+its own reads, and a read in one must not arm a skip in the other. Fact two:
+two branches ran and one will be discarded, so neither may act — each arm
+gets a fresh plan-mode permission engine, which denies every non-read effect
+before rules or remembered answers are consulted, in every session mode,
+bypass included;
 the delegate tool is schema-kept and Plan-refused because its subagents
 would run under the primary's engine, not the arm's. The verdict is §8.4's
 strongest label class — a paired, human-judged comparison, with a tie

@@ -97,6 +97,12 @@ type Loop struct {
 	// standing policy, so they run without prompting.
 	Hooks *hooks.Set
 
+	// ToolExecutionGate, when non-nil, serializes the complete pre-hook, tool,
+	// post-hook transaction across loops that share it. Parallel delegates use
+	// one when hooks are active: hooks are arbitrary commands, and locking each
+	// hook separately would still let another task run between pre and post.
+	ToolExecutionGate *ExecutionGate
+
 	// Checkpoints, when non-nil, opens an undo scope per turn; the registry
 	// captures into it before each mutation. The interface keeps the
 	// recorder's package out of the loop's imports.
@@ -645,12 +651,34 @@ func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse, observer O
 	// serialize when hooks are present so two pre/post hooks cannot race each
 	// other or the tool whose result they annotate.
 	parallel := l.Hooks.Empty()
+	parallelReads := false
+	parallelKey := ""
 	for _, j := range jobs {
 		if !j.ready {
 			continue
 		}
 		pending = append(pending, j)
-		if tool, ok := l.Tools.Get(j.use.Name); !ok || !tool.ParallelSafe() {
+		tool, ok := l.Tools.Get(j.use.Name)
+		if !ok {
+			parallel = false
+			continue
+		}
+		if tool.ParallelSafe() {
+			parallelReads = true
+			if parallelKey != "" {
+				parallel = false
+			}
+			continue
+		}
+		grouped, ok := tool.(tools.ParallelBatchTool)
+		if !ok || grouped.ParallelBatchKey() == "" || parallelReads {
+			parallel = false
+			continue
+		}
+		key := grouped.ParallelBatchKey()
+		if parallelKey == "" {
+			parallelKey = key
+		} else if parallelKey != key {
 			parallel = false
 		}
 	}
@@ -687,6 +715,16 @@ func (l *Loop) execute(ctx context.Context, j *toolJob, observer Observer) {
 	started := time.Now()
 
 	var res tools.Result
+	if l.ToolExecutionGate != nil {
+		release, err := l.ToolExecutionGate.Acquire(ctx)
+		if err != nil {
+			res = tools.Result{Content: err.Error(), IsError: true}
+			j.result = &res
+			observer.ToolEnd(j.use, j.plan.Request, res, time.Since(started))
+			return
+		}
+		defer release()
+	}
 	if msg, blocked := l.Hooks.PreTool(ctx, j.plan.Request); blocked {
 		// Blocked after approval, before effect: the hook's answer goes back
 		// as a tool error so the model reads why instead of guessing.

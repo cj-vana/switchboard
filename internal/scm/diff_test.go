@@ -167,11 +167,53 @@ func TestDiffHEADBoundedOutput(t *testing.T) {
 	if !result.Truncated || len(result.Sections) != 1 || !result.Sections[0].Truncated {
 		t.Fatalf("bounded diff metadata = %+v", result)
 	}
+	if len(result.Omitted) != 1 || result.Omitted[0].Path != "large.txt" {
+		t.Fatalf("omitted files = %+v, want the partially rendered file", result.Omitted)
+	}
 	if _, err := openTestRepo(t, root).DiffHEAD(context.Background(), DiffOptions{MaxBytes: MaxDiffBytes + 1}); err == nil {
 		t.Fatal("oversized MaxBytes was accepted")
 	}
 	if _, err := openTestRepo(t, root).DiffHEAD(context.Background(), DiffOptions{MaxBytes: -1}); err == nil {
 		t.Fatal("negative MaxBytes was accepted")
+	}
+}
+
+func TestDiffHEADInventoriesPartialAndLaterFilesAtOutputCap(t *testing.T) {
+	root := initTestRepo(t)
+	writeTestFile(t, root, ".gitignore", []byte("ignored.log\n"))
+	writeTestFile(t, root, "aaa-large.txt", []byte("base\n"))
+	writeTestFile(t, root, "middle-tracked.txt", []byte("base\n"))
+	commitTestFiles(t, root, "base")
+
+	writeTestFile(t, root, "aaa-large.txt", bytes.Repeat([]byte("changed line\n"), 256))
+	writeTestFile(t, root, "middle-tracked.txt", []byte("changed\n"))
+	writeTestFile(t, root, "zzz-image.bin", []byte{0, 1, 2, 3, 0xff, 0xfe})
+	writeTestFile(t, root, "ignored.log", []byte("not part of the diff\n"))
+	wantIndex := indexChecksum(t, root)
+
+	result, err := openTestRepo(t, root).DiffHEAD(context.Background(), DiffOptions{MaxBytes: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := indexChecksum(t, root); got != wantIndex {
+		t.Fatalf("index checksum changed: got %x, want %x", got, wantIndex)
+	}
+	if !result.Truncated {
+		t.Fatalf("large diff was not truncated: %+v", result)
+	}
+	want := []string{"aaa-large.txt", "middle-tracked.txt", "zzz-image.bin"}
+	if len(result.Omitted) != len(want) {
+		t.Fatalf("omitted files = %+v, want %q", result.Omitted, want)
+	}
+	for i, path := range want {
+		if result.Omitted[i].Path != path {
+			t.Fatalf("omitted[%d] = %q, want %q", i, result.Omitted[i].Path, path)
+		}
+	}
+	for _, file := range result.Omitted {
+		if file.Ignored || file.Path == "ignored.log" {
+			t.Fatalf("ignored file entered omitted inventory: %+v", result.Omitted)
+		}
 	}
 }
 

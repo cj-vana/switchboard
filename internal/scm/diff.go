@@ -45,6 +45,7 @@ type DiffResult struct {
 	Files     []PathState
 	Text      []byte
 	Sections  []DiffSection
+	Omitted   []PathState // complete patches absent because Text reached its cap
 	Truncated bool
 }
 
@@ -74,13 +75,14 @@ func (r *Repository) DiffHEAD(ctx context.Context, opts DiffOptions) (DiffResult
 		result.Base = "empty tree"
 	}
 
-	for _, state := range states {
+	for i, state := range states {
 		if state.Ignored {
 			continue
 		}
 		remaining := limit - len(result.Text)
 		if remaining <= 0 {
 			result.Truncated = true
+			result.Omitted = appendChanged(result.Omitted, states[i:]...)
 			break
 		}
 
@@ -114,10 +116,23 @@ func (r *Repository) DiffHEAD(ctx context.Context, opts DiffOptions) (DiffResult
 		}
 		if truncated {
 			result.Truncated = true
+			// The first entry can have a partial section. It belongs in the
+			// omitted inventory because its complete patch is not present.
+			result.Omitted = append(result.Omitted, state)
+			result.Omitted = appendChanged(result.Omitted, states[i+1:]...)
 			break
 		}
 	}
 	return result, nil
+}
+
+func appendChanged(dst []PathState, states ...PathState) []PathState {
+	for _, state := range states {
+		if !state.Ignored {
+			dst = append(dst, state)
+		}
+	}
+	return dst
 }
 
 func diffLimit(requested int) (int, error) {

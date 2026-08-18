@@ -579,6 +579,32 @@ func TestModeCycleMovesAndReports(t *testing.T) {
 	}
 }
 
+func TestAutoModeCopyKeepsHostDirectCommandsWithTheHuman(t *testing.T) {
+	m := testModel(t)
+	cmdMode(m, "auto")
+	copy := stripANSI(strings.Join(m.tr.flat, "\n"))
+	for _, want := range []string{"active verified sandbox", "cheap approver", "host-direct", "ask you"} {
+		if !strings.Contains(copy, want) {
+			t.Fatalf("auto-mode notice omitted %q:\n%s", want, copy)
+		}
+	}
+
+	cmdMode(m, "")
+	picker, ok := m.dlg.(*pickerDialog)
+	if !ok {
+		t.Fatalf("bare /mode dialog = %T", m.dlg)
+	}
+	for _, item := range picker.items {
+		if item.id == string(permission.ModeAuto) {
+			if !strings.Contains(item.desc, "confined commands") || !strings.Contains(item.desc, "host-direct commands ask you") {
+				t.Fatalf("auto-mode picker description = %q", item.desc)
+			}
+			return
+		}
+	}
+	t.Fatal("mode picker omitted auto")
+}
+
 func TestModeCycleRefusesWhileTurnIsBusy(t *testing.T) {
 	m := testModel(t)
 	m.busy = true

@@ -60,6 +60,18 @@ type Tool interface {
 	Plan(input json.RawMessage) (Plan, error)
 }
 
+// ParallelBatchTool is the narrow exception to ParallelSafe's read-only
+// rule. Tools with the same non-empty key may overlap with each other, but
+// never with ordinary parallel-safe reads or with a different keyed tool.
+//
+// Delegate uses this because two independent subagents may work concurrently,
+// while either one may issue writes internally. Treating delegate as generally
+// parallel-safe would let an opaque write race a top-level read in the same
+// provider batch and make call order observable.
+type ParallelBatchTool interface {
+	ParallelBatchKey() string
+}
+
 // Registry holds the tool suite for one workspace.
 type Registry struct {
 	root       string

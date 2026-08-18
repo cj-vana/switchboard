@@ -72,13 +72,16 @@ type turnDoneMsg struct {
 }
 type turnPlanMsg struct {
 	generation uint64
-	prompt     string
-	images     []provider.Image
-	tier       config.Tier
-	client     provider.Provider
-	note       string
-	plan       turnPlan
-	err        error
+	opening    provider.Message
+	// prompt/images are display-only projections kept for UI diagnostics and
+	// tests. Routing and sending use opening exclusively.
+	prompt string
+	images []provider.Image
+	tier   config.Tier
+	client provider.Provider
+	note   string
+	plan   turnPlan
+	err    error
 }
 type tierNowMsg struct {
 	line string
@@ -142,13 +145,16 @@ type sessionSwapMsg struct {
 }
 type overrideProbeMsg struct {
 	generation uint64
-	prompt     string
-	images     []provider.Image
-	tier       config.Tier
-	client     provider.Provider
-	note       string
-	plan       turnPlan
-	err        error
+	opening    provider.Message
+	// prompt/images never reconstruct the outbound message; opening is the
+	// single routing and provider value.
+	prompt string
+	images []provider.Image
+	tier   config.Tier
+	client provider.Provider
+	note   string
+	plan   turnPlan
+	err    error
 }
 type updateCheckMsg struct {
 	latest string
@@ -379,7 +385,7 @@ func runTUI(
 		obs:         obs,
 		trust:       trustStore,
 		mcp:         mcpEnv,
-		lsp:         lspServer,
+		lsp:         optionalLSPRuntime(lspServer),
 		lspNote:     lspNote,
 		undo:        undoRec,
 		agents:      agents,
@@ -418,13 +424,11 @@ func runTUI(
 	// not consuming messages yet; whatever a server says later arrives as a
 	// notice through the observer, which is how the user learns a server
 	// died an hour into the session.
-	for _, n := range mcpEnv.attach(func(n mcpNote) { obs.Notice(n.level, n.text) }) {
-		if n.level == "" {
-			m.addInfo("  " + n.text)
-		} else {
-			m.addNotice(n.level, n.text)
-		}
-	}
+	startupNotes, droppedStartupNotes := mcpEnv.attachCounted(func(n mcpNote) {
+		obs.Notice(n.level, n.text)
+	})
+	app.startupNotes = aggregateStartupNotes(startupNotes, droppedStartupNotes)
+	addStartupNoteReport(m, app.startupNotes)
 	if routeDec != nil {
 		m.addRoute(routeSummary(*routeDec), describeRoute(*routeDec))
 	}
@@ -756,11 +760,27 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case diffLoadedMsg:
+		if msg.generation != 0 && (msg.generation != m.workspaceGeneration || msg.sessionID != currentSessionID(m) || m.full != nil) {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.addNotice("error", "diff failed: "+msg.err.Error())
 			return m, nil
 		}
 		m.full = &diffView{lines: msg.lines}
+		return m, nil
+
+	case turnReviewLoadedMsg:
+		if msg.generation != 0 && (msg.generation != m.workspaceGeneration || msg.sessionID != currentSessionID(m) ||
+			msg.turnEpoch != m.turnGeneration || m.busy || m.turnPlanning || m.full != nil ||
+			msg.bound && (msg.recorder == nil || !msg.recorder.ReviewCursorValid(msg.cursor))) {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.addNotice("error", "review failed: "+msg.err.Error())
+			return m, nil
+		}
+		m.full = &turnReviewView{index: msg.index, label: msg.label, lines: msg.lines}
 		return m, nil
 
 	case shellDoneMsg:
@@ -1132,16 +1152,19 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 func (m *tuiModel) launchOverrideTurn(prompt string, images []provider.Image, tier config.Tier) tea.Cmd {
 	ctx, generation := m.startPlanning()
 	sticky := m.app.sticky
+	unstamped := turnOpening(prompt, images)
 	return func() tea.Msg {
 		result := overrideProbeMsg{generation: generation, prompt: prompt, images: images}
 		if err := ctx.Err(); err != nil {
 			result.err = err
 			return result
 		}
-		opening := provider.UserText(prompt)
-		for _, image := range images {
-			opening.Content = append(opening.Content, image)
+		opening, err := stampTurnOpening(m.app.loop.Session, unstamped)
+		if err != nil {
+			result.err = err
+			return result
 		}
+		result.opening = opening
 		plan := prospectiveTurnPlan(m.app.loop, sticky, opening, m.app.workspace)
 		result.plan = plan
 		rank := m.app.rankOf(tier)
@@ -1255,16 +1278,19 @@ func (m *tuiModel) launchTurn(prompt string, images []provider.Image) tea.Cmd {
 	currentTier := m.app.tier
 	binding := m.app.loop.Binding()
 	sticky := m.app.sticky
+	unstamped := turnOpening(prompt, images)
 	return func() tea.Msg {
 		result := turnPlanMsg{generation: generation, prompt: prompt, images: images}
 		if err := ctx.Err(); err != nil {
 			result.err = err
 			return result
 		}
-		opening := provider.UserText(prompt)
-		for _, image := range images {
-			opening.Content = append(opening.Content, image)
+		opening, err := stampTurnOpening(m.app.loop.Session, unstamped)
+		if err != nil {
+			result.err = err
+			return result
 		}
+		result.opening = opening
 		if _, onLadder := m.app.config.Tier(currentTier.ID); !onLadder {
 			result.plan = prospectiveTurnPlan(m.app.loop, sticky, opening, m.app.workspace)
 			probed, client := currentTier, binding.Provider
@@ -1356,8 +1382,8 @@ func (m *tuiModel) onTurnPlan(msg turnPlanMsg) tea.Cmd {
 		}
 	}
 	m.turnPlanning = false
-	m.beginTurn(msg.prompt)
-	m.launchModelTurn(msg.prompt, msg.images)
+	m.beginTurn(msg.opening.AuthoredText())
+	m.launchModelTurn(msg.opening)
 	return m.spin.Tick
 }
 
@@ -1376,8 +1402,8 @@ func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
 	}
 	m.applyOverrideBinding(msg)
 	m.turnPlanning = false
-	m.beginTurn(msg.prompt)
-	m.launchModelTurn(msg.prompt, msg.images)
+	m.beginTurn(msg.opening.AuthoredText())
+	m.launchModelTurn(msg.opening)
 	return m.spin.Tick
 }
 
@@ -1436,7 +1462,7 @@ func (m *tuiModel) beginTurn(prompt string) {
 	m.app.watchSt.beginTurn(m.turnCtx)
 }
 
-func (m *tuiModel) launchModelTurn(prompt string, images []provider.Image) {
+func (m *tuiModel) launchModelTurn(opening provider.Message) {
 	decision := m.app.route
 	if decision != nil {
 		copy := *decision
@@ -1455,21 +1481,18 @@ func (m *tuiModel) launchModelTurn(prompt string, images []provider.Image) {
 		decision:   decision,
 		features:   features,
 	}
-	go m.runTurn(m.turnCtx, prompt, images, run)
+	go m.runTurn(m.turnCtx, opening, run)
 }
 
 // runTurn drives one turn on its own goroutine. Everything it reports arrives
 // as messages; the session stays the only thing it writes.
-func (m *tuiModel) runTurn(ctx context.Context, prompt string, images []provider.Image, run turnExecution) {
+func (m *tuiModel) runTurn(ctx context.Context, opening provider.Message, run turnExecution) {
+	prompt := opening.AuthoredText()
 	if run.watcher != nil {
 		run.watcher.StartTurn()
 	}
 	if run.advisor != nil {
 		run.advisor.StartTurn(prompt)
-	}
-	opening := provider.UserText(prompt)
-	for _, img := range images {
-		opening.Content = append(opening.Content, img)
 	}
 	err := m.app.loop.TurnMessage(ctx, opening)
 
@@ -1771,7 +1794,16 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 		m.addNotice("error", "session runtime binding was not saved: "+err.Error())
 		return m.nextQueuedTurn()
 	}
-	m.app.loop.Session = msg.sess
+	if err := m.app.loop.BindSession(msg.sess); err != nil {
+		if msg.operation != 0 {
+			m.finishOperation(msg.operation, false)
+		}
+		if msg.sess != old {
+			_ = msg.sess.Close()
+		}
+		m.addNotice("error", "session context was not restored: "+err.Error())
+		return m.nextQueuedTurn()
+	}
 	if m.app.caches != nil {
 		m.app.caches.Reset(msg.tier.Target, cacheFor(msg.tier.Target, m.app.catalog))
 	}
@@ -1782,10 +1814,9 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	if !msg.keepFold {
 		m.app.watchSt.takeFold()
 	}
-	// The swapped-in context has read nothing, whatever the registry
-	// remembers from the old one: reads must happen again before writes,
-	// the same contract resume enforces by starting a fresh process.
-	m.app.loop.Tools.ForgetAllVersions()
+	// BindSession made the context switch indivisible: it restored the new
+	// session's todos and dropped every prior-session file-read token before
+	// publishing the session to the loop.
 	m.tr.reset()
 	// A new log is a new day for the routing dots and the clock; a resumed
 	// session's earlier moves live in its record, not the bar.
@@ -1846,13 +1877,19 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 // a session looks like continuing it rather than opening an empty window.
 func (m *tuiModel) replayHistory(state session.State) {
 	for _, msg := range state.Messages {
+		if msg.Role == provider.RoleUser {
+			// A continuity capsule is provider-visible metadata, not something
+			// the user typed. Render the authored projection once so a stamped
+			// opening neither leaks the hidden block nor splits multi-text input
+			// into several apparent turns.
+			if text := msg.AuthoredText(); text != "" {
+				m.addUser(text)
+			}
+		}
 		for _, b := range msg.Content {
 			switch b := b.(type) {
 			case provider.Text:
-				switch msg.Role {
-				case provider.RoleUser:
-					m.addUser(b.Text)
-				case provider.RoleAssistant:
+				if msg.Role == provider.RoleAssistant {
 					e := m.tr.add(&entry{kind: kindAssistant, text: b.Text})
 					m.tr.finalize(e)
 				}
