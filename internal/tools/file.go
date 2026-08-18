@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/switchboard-code/switchboard/internal/permission"
@@ -163,19 +163,25 @@ func (t *writeTool) Plan(input json.RawMessage) (Plan, error) {
 
 	return Plan{
 		Request: permission.Request{Tool: t.Name(), Effect: permission.EffectWrite, Path: t.r.display(abs)},
-		Run: func(context.Context) (Result, error) {
-			if res, ok := t.r.checkStale(abs, true); !ok {
+		Run: func(ctx context.Context) (Result, error) {
+			tx, res, ok := t.r.prepareFileMutation(abs, true)
+			if !ok {
 				return res, nil
 			}
-			t.r.recordUndo(abs)
-			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-				return errorf("cannot create directory for %s: %v", t.r.display(abs), err)
+			defer tx.close()
+
+			content := []byte(in.Content)
+			mode := fs.FileMode(0o644)
+			if tx.before.existed {
+				mode = tx.before.mode
+				if string(tx.before.content) == in.Content {
+					return Result{Content: fmt.Sprintf("%s already has the requested contents; no changes made", t.r.display(abs))}, nil
+				}
 			}
-			if err := os.WriteFile(abs, []byte(in.Content), 0o644); err != nil {
+			if err := tx.publish(ctx, content, mode, nil); err != nil {
 				return errorf("cannot write %s: %v", t.r.display(abs), err)
 			}
-			t.r.versions.record(abs, hashContent([]byte(in.Content)))
-			return Result{Content: fmt.Sprintf("wrote %s (%d bytes)", t.r.display(abs), len(in.Content))}, nil
+			return Result{Content: fmt.Sprintf("wrote %s (%d bytes)", t.r.display(abs), len(content))}, nil
 		},
 	}, nil
 }
@@ -231,23 +237,19 @@ func (t *editTool) Plan(input json.RawMessage) (Plan, error) {
 
 	return Plan{
 		Request: permission.Request{Tool: t.Name(), Effect: permission.EffectWrite, Path: t.r.display(abs)},
-		Run: func(context.Context) (Result, error) {
-			return t.edit(abs, in)
+		Run: func(ctx context.Context) (Result, error) {
+			return t.edit(ctx, abs, in)
 		},
 	}, nil
 }
 
-func (t *editTool) edit(abs string, in editInput) (Result, error) {
-	if res, ok := t.r.checkStale(abs, false); !ok {
+func (t *editTool) edit(ctx context.Context, abs string, in editInput) (Result, error) {
+	tx, res, ok := t.r.prepareFileMutation(abs, false)
+	if !ok {
 		return res, nil
 	}
-	t.r.recordUndo(abs)
-
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return errorf("cannot read %s: %v", t.r.display(abs), err)
-	}
-	content := string(data)
+	defer tx.close()
+	content := string(tx.before.content)
 
 	count := strings.Count(content, in.OldString)
 	switch {
@@ -266,52 +268,16 @@ func (t *editTool) edit(abs string, in editInput) (Result, error) {
 		updated = strings.Replace(content, in.OldString, in.NewString, 1)
 	}
 
-	info, err := os.Stat(abs)
-	if err != nil {
-		return errorf("cannot stat %s: %v", t.r.display(abs), err)
+	if updated == content {
+		return Result{Content: fmt.Sprintf("%s already has the requested contents; no changes made", t.r.display(abs))}, nil
 	}
-	if err := os.WriteFile(abs, []byte(updated), info.Mode().Perm()); err != nil {
+	if err := tx.publish(ctx, []byte(updated), tx.before.mode, nil); err != nil {
 		return errorf("cannot write %s: %v", t.r.display(abs), err)
 	}
-	t.r.versions.record(abs, hashContent([]byte(updated)))
 
 	replaced := 1
 	if in.ReplaceAll {
 		replaced = count
 	}
 	return Result{Content: fmt.Sprintf("edited %s (%d replacement(s))", t.r.display(abs), replaced)}, nil
-}
-
-// checkStale enforces the read-before-write contract. It returns false along
-// with the message to hand back to the model.
-//
-// Line-number addressing is excluded from this suite for the same reason this
-// check exists: anything that touches the workspace concurrently invalidates
-// the agent's picture of the file, and a positional edit corrupts it silently
-// where a content check refuses (§10.2).
-func (r *Registry) checkStale(abs string, allowMissing bool) (Result, bool) {
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		if os.IsNotExist(err) && allowMissing {
-			return Result{}, true
-		}
-		res, _ := errorf("cannot read %s: %v", r.display(abs), err)
-		return res, false
-	}
-
-	current := hashContent(data)
-	recorded, ok := r.versions.get(abs)
-	if !ok {
-		res, _ := errorf("%s exists but has not been read in this session. Read it first so "+
-			"the change is made against its current contents.", r.display(abs))
-		return res, false
-	}
-	if recorded != current {
-		// Drop the stale version so the next attempt cannot succeed without a
-		// fresh read.
-		r.versions.forget(abs)
-		res, _ := errorf("%s changed since it was read. Read it again before writing.", r.display(abs))
-		return res, false
-	}
-	return Result{}, true
 }

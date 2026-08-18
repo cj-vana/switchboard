@@ -1,10 +1,13 @@
 package checkpoint
 
 import (
+	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, content string) {
@@ -311,5 +314,329 @@ func TestStateBeforeTakesTheOldestPreimageInRange(t *testing.T) {
 	}
 	if before2[late].Existed {
 		t.Error("before turn 2, late.go had not been created")
+	}
+}
+
+func TestAbortPreparedCaptureLeavesNoCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	write(t, path, "before\n")
+
+	r := NewRecorder()
+	r.Begin("failed edit")
+	r.RecordState(path, true, 0o644, []byte("before\n"))
+	r.Abort(path)
+
+	if turns := r.Turns(); len(turns) != 0 {
+		t.Fatalf("aborted mutation created a checkpoint: %+v", turns)
+	}
+	if snapshots := r.Snapshots(); len(snapshots) != 0 {
+		t.Fatalf("aborted mutation appeared in review evidence: %+v", snapshots)
+	}
+}
+
+func TestCommittedEditsKeepFirstPreimageAndAdvancePostimage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	write(t, path, "v1")
+	r := NewRecorder()
+	r.Begin("two edits")
+
+	r.RecordState(path, true, 0o644, []byte("v1"))
+	write(t, path, "v2")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("v2")))
+	r.RecordState(path, true, 0o644, []byte("v2"))
+	write(t, path, "v3")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("v3")))
+
+	snapshots := r.Snapshots()
+	if len(snapshots) != 1 || len(snapshots[0].Files) != 1 {
+		t.Fatalf("snapshots=%+v", snapshots)
+	}
+	if got := string(snapshots[0].Files[0].Before.Content); got != "v1" {
+		t.Fatalf("first preimage was replaced by intra-turn churn: %q", got)
+	}
+	if got := snapshots[0].Files[0].After.Digest; got != sha256.Sum256([]byte("v3")) {
+		t.Fatalf("postimage did not advance to v3: %x", got)
+	}
+	if _, _, _, failed, _, err := r.Undo(); err != nil || len(failed) != 0 {
+		t.Fatalf("undo: failed=%v err=%v", failed, err)
+	}
+	if got := readBack(t, path); got != "v1" {
+		t.Fatalf("undo restored %q, want v1", got)
+	}
+}
+
+func TestAbortLaterEditKeepsEarlierCommittedCapture(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	write(t, path, "v1")
+	r := NewRecorder()
+	r.Begin("one success, one failure")
+	r.RecordState(path, true, 0o644, []byte("v1"))
+	write(t, path, "v2")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("v2")))
+	r.RecordState(path, true, 0o644, []byte("v2"))
+	r.Abort(path)
+
+	if _, _, _, failed, _, err := r.Undo(); err != nil || len(failed) != 0 {
+		t.Fatalf("undo: failed=%v err=%v", failed, err)
+	}
+	if got := readBack(t, path); got != "v1" {
+		t.Fatalf("undo restored %q, want v1", got)
+	}
+}
+
+func waitForTransitionWaiter(t *testing.T, r *Recorder) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		waiters := r.transitionWaiters
+		r.mu.Unlock()
+		if waiters > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("transition never reached the in-flight transaction barrier")
+}
+
+func TestUndoWaitsForTwoPhaseCommit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	write(t, path, "before")
+	r := NewRecorder()
+	r.Begin("in flight")
+	r.RecordState(path, true, 0o644, []byte("before"))
+
+	type undoResult struct {
+		restored []string
+		failed   []string
+		err      error
+	}
+	done := make(chan undoResult, 1)
+	go func() {
+		restored, _, _, failed, _, err := r.Undo()
+		done <- undoResult{restored: restored, failed: failed, err: err}
+	}()
+	waitForTransitionWaiter(t, r)
+	select {
+	case got := <-done:
+		t.Fatalf("undo crossed an active RecordState before Commit: %+v", got)
+	default:
+	}
+
+	write(t, path, "after")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("after")))
+	select {
+	case got := <-done:
+		if got.err != nil || len(got.failed) != 0 || len(got.restored) != 1 || got.restored[0] != path {
+			t.Fatalf("undo after commit: %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("undo did not resume after Commit")
+	}
+	if got := readBack(t, path); got != "before" {
+		t.Fatalf("file=%q, want committed mutation restored", got)
+	}
+	if snapshots := r.Snapshots(); len(snapshots) != 0 {
+		t.Fatalf("successful undo failed to consume the capture: %+v", snapshots)
+	}
+}
+
+func TestBeginWaitsForTwoPhaseCommitAndKeepsEvidenceAttached(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	write(t, path, "before")
+	r := NewRecorder()
+	r.Begin("first")
+	r.RecordState(path, true, 0o644, []byte("before"))
+
+	done := make(chan struct{})
+	go func() {
+		r.Begin("second")
+		close(done)
+	}()
+	waitForTransitionWaiter(t, r)
+	select {
+	case <-done:
+		t.Fatal("Begin crossed an active RecordState before Commit")
+	default:
+	}
+
+	write(t, path, "after")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("after")))
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Begin did not resume after Commit")
+	}
+	snapshots := r.Snapshots()
+	if len(snapshots) != 1 || snapshots[0].Label != "first" || snapshots[0].Open || len(snapshots[0].Files) != 1 {
+		t.Fatalf("commit detached from its original turn: %+v", snapshots)
+	}
+	if snapshots[0].Files[0].After.Digest != sha256.Sum256([]byte("after")) {
+		t.Fatalf("committed post-image was lost: %+v", snapshots[0].Files[0].After)
+	}
+	if _, _, _, failed, label, err := r.Undo(); err != nil || len(failed) != 0 || label != "first" {
+		t.Fatalf("undo after Begin: label=%q failed=%v err=%v", label, failed, err)
+	}
+	if got := readBack(t, path); got != "before" {
+		t.Fatalf("file=%q, want before", got)
+	}
+}
+
+func TestUndoRefusesExternalChangeAndRetainsCapture(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	write(t, path, "before\n")
+
+	r := NewRecorder()
+	r.Begin("successful edit")
+	r.RecordState(path, true, 0o644, []byte("before\n"))
+	write(t, path, "after\n")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("after\n")))
+	write(t, path, "external\n")
+
+	restored, _, _, failed, _, err := r.Undo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != 0 || len(failed) != 1 || !strings.Contains(failed[0], ErrStale.Error()) {
+		t.Fatalf("restored=%v failed=%v, want a stale refusal", restored, failed)
+	}
+	if got := readBack(t, path); got != "external\n" {
+		t.Fatalf("stale undo overwrote external content: %q", got)
+	}
+	if details := r.Details(); len(details) != 1 || len(details[0].Paths) != 1 {
+		t.Fatalf("failed restore was consumed: %+v", details)
+	}
+
+	// Returning the path to the recorded post-image makes the retained
+	// capture retryable.
+	write(t, path, "after\n")
+	if _, _, _, failed, _, err := r.Undo(); err != nil || len(failed) != 0 {
+		t.Fatalf("retry failed: failed=%v err=%v", failed, err)
+	}
+	if got := readBack(t, path); got != "before\n" {
+		t.Fatalf("retry restored %q, want before", got)
+	}
+}
+
+func TestWholeTurnPartialFailureRemainsRetryable(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	write(t, a, "a before")
+	write(t, b, "b before")
+
+	r := NewRecorder()
+	r.Begin("two files")
+	for path, before := range map[string]string{a: "a before", b: "b before"} {
+		r.RecordState(path, true, 0o644, []byte(before))
+		after := before + " after"
+		write(t, path, after)
+		r.Commit(path, true, 0o644, sha256.Sum256([]byte(after)))
+	}
+	write(t, b, "external")
+
+	restored, _, _, failed, _, err := r.Undo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != 1 || restored[0] != a || len(failed) != 1 {
+		t.Fatalf("restored=%v failed=%v", restored, failed)
+	}
+	if details := r.Details(); len(details) != 1 || len(details[0].Paths) != 1 || details[0].Paths[0] != b {
+		t.Fatalf("successful and failed restores were not consumed independently: %+v", details)
+	}
+
+	write(t, b, "b before after")
+	if restored, _, _, failed, _, err = r.Undo(); err != nil || len(failed) != 0 || len(restored) != 1 || restored[0] != b {
+		t.Fatalf("retry: restored=%v failed=%v err=%v", restored, failed, err)
+	}
+	if got := readBack(t, b); got != "b before" {
+		t.Fatalf("b = %q after retry", got)
+	}
+}
+
+func TestUndoRestoresExactModeAndBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "script")
+	if err := os.WriteFile(path, []byte("before\r\nwithout-final-newline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRecorder()
+	r.Begin("rewrite")
+	r.RecordState(path, true, 0o755, []byte("before\r\nwithout-final-newline"))
+	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("after\n")))
+	if _, _, _, failed, _, err := r.Undo(); err != nil || len(failed) != 0 {
+		t.Fatalf("undo: failed=%v err=%v", failed, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "before\r\nwithout-final-newline" {
+		t.Fatalf("content=%q err=%v", got, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode=%o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestUndoFileReturnsStaleSentinelAndRetainsCapture(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target")
+	write(t, path, "before")
+	r := NewRecorder()
+	r.Begin("edit")
+	r.RecordState(path, true, 0o644, []byte("before"))
+	write(t, path, "after")
+	r.Commit(path, true, 0o644, sha256.Sum256([]byte("after")))
+	write(t, path, "other")
+
+	if _, _, err := r.UndoFile(path); !errors.Is(err, ErrStale) {
+		t.Fatalf("UndoFile error=%v, want ErrStale", err)
+	}
+	if details := r.Details(); len(details) != 1 {
+		t.Fatalf("stale UndoFile consumed capture: %+v", details)
+	}
+}
+
+func TestSnapshotsCloneSuccessfulEvidence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target")
+	write(t, path, "before")
+	r := NewRecorder()
+	r.Begin("edit")
+	r.RecordState(path, true, 0o644, []byte("before"))
+	if got := r.Snapshots(); len(got) != 0 {
+		t.Fatalf("prepared mutation appeared successful: %+v", got)
+	}
+	write(t, path, "after")
+	digest := sha256.Sum256([]byte("after"))
+	r.Commit(path, true, 0o644, digest)
+
+	got := r.Snapshots()
+	if len(got) != 1 || !got[0].Open || len(got[0].Files) != 1 {
+		t.Fatalf("snapshots=%+v", got)
+	}
+	file := got[0].Files[0]
+	if string(file.Before.Content) != "before" || file.After.Digest != digest {
+		t.Fatalf("snapshot=%+v", file)
+	}
+	got[0].Files[0].Before.Content[0] = 'X'
+	if again := r.Snapshots(); string(again[0].Files[0].Before.Content) != "before" {
+		t.Fatal("snapshot content aliases recorder state")
 	}
 }
