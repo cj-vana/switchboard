@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"unicode"
@@ -240,7 +241,16 @@ func (d *pickerDialog) view(width int, th *theme) string {
 		}
 		b.WriteString(row + "\n")
 	}
-	b.WriteString(th.faint.Render(" type to filter · ↑↓ choose · enter select · esc cancel"))
+	// A list cut off at the viewport with nothing to say so reads as the
+	// whole list, and the row someone came for sits below the fold unfound.
+	if rest := len(matches) - end; rest > 0 {
+		b.WriteString(th.dim.Render(fmt.Sprintf("   ↓ %d more", rest)) + "\n")
+	}
+	hint := " type to filter · ↑↓ choose · enter select · esc cancel"
+	if len(matches) > maxRows {
+		hint = fmt.Sprintf(" %d-%d of %d · %s", start+1, end, len(matches), strings.TrimSpace(hint))
+	}
+	b.WriteString(th.faint.Render(hint))
 	return b.String()
 }
 

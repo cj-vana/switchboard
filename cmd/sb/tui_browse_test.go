@@ -392,9 +392,10 @@ func authServer(t *testing.T, token string, models ...string) string {
 func TestASurfaceThatRefusesOffersTheCredentialThere(t *testing.T) {
 	m := modelsTestModel(t)
 	addr := authServer(t, "sk-test", "unsloth/Qwen3.8-27B-GGUF")
-	m.app.config.SetProviderBaseURL(
-		config.ProviderSurfaceKey("openaicompat", "generic"), addr)
 
+	// The reported path exactly: nothing configured, so the address is given
+	// first and the credential has to be asked for after it, without the user
+	// having to know it was needed.
 	var opened pickerMsg
 	msg := walk(t, cmdModels(m, ""),
 		func(p pickerMsg) string {
@@ -405,8 +406,10 @@ func TestASurfaceThatRefusesOffersTheCredentialThere(t *testing.T) {
 			return rowID(t, p, "store a credential…")
 		},
 		func(tp textPromptMsg) string {
-			t.Fatalf("a refusal should ask for a key, not text: %q", tp.title)
-			return ""
+			if !strings.HasPrefix(tp.title, "server address") {
+				t.Fatalf("a refusal should ask for a key, not %q", tp.title)
+			}
+			return addr
 		})
 
 	// The row that explains the empty list has to name the reason.
@@ -518,5 +521,71 @@ func TestAResumedNoticeDoesNotAdvanceTheWizard(t *testing.T) {
 	}
 	if m.quitting {
 		t.Fatal("a resumed notice bound the rung instead of waiting for the flow")
+	}
+}
+
+// The reported failure was not a missing feature: the row existed and sat
+// below a viewport that gave no sign anything was under it, so the list read
+// as complete and the endpoint looked unreachable.
+func TestThePickerSaysWhenRowsAreBelowTheFold(t *testing.T) {
+	var items []pickerItem
+	for i := 0; i < 14; i++ {
+		items = append(items, pickerItem{id: string(rune('a' + i)), label: "row-" + string(rune('a'+i))})
+	}
+	d := &pickerDialog{title: "pick", items: items}
+
+	view := d.view(80, darkTheme())
+	if !strings.Contains(view, "4 more") {
+		t.Errorf("a truncated list must say how much is hidden:\n%s", view)
+	}
+	if !strings.Contains(view, "1-10 of 14") {
+		t.Errorf("a truncated list must say where in it you are:\n%s", view)
+	}
+
+	// A list that fits says none of this.
+	short := &pickerDialog{title: "pick", items: items[:3]}
+	if v := short.view(80, darkTheme()); strings.Contains(v, "more") || strings.Contains(v, " of ") {
+		t.Errorf("a complete list should not claim to be cut off:\n%s", v)
+	}
+}
+
+// A surface with nothing to show has something to do; one whose models are
+// already in the list above does not. Ordering by that keeps the row someone
+// actually needs off the bottom of a long list.
+func TestSurfacesNeedingWorkComeBeforeOnesAlreadyListed(t *testing.T) {
+	m := modelsTestModel(t)
+	m.app.config.SetProviderBaseURL(
+		config.ProviderSurfaceKey("openaicompat", "generic"),
+		compatServer(t, "served-model"))
+
+	p, ok := cmdModels(m, "")().(pickerMsg)
+	if !ok {
+		t.Fatal("/models did not open a picker")
+	}
+	pos := map[string]int{}
+	for i, it := range p.items {
+		pos[it.label] = i
+	}
+
+	connected, ok := pos["openaicompat/generic…"]
+	if !ok {
+		t.Fatal("the connected surface lost its row")
+	}
+	for _, unconnected := range []string{"openai/subscription…", "openaicompat/ollama…"} {
+		at, ok := pos[unconnected]
+		if !ok {
+			t.Fatalf("no row for %s", unconnected)
+		}
+		if at > connected {
+			t.Errorf("%s still needs connecting and should sort above %s, which is already listed",
+				unconnected, "openaicompat/generic…")
+		}
+	}
+
+	// The connected row says so rather than repeating a bare address.
+	for _, it := range p.items {
+		if it.label == "openaicompat/generic…" && !strings.Contains(it.desc, "listed above") {
+			t.Errorf("a listed surface should say its models are already offered: %q", it.desc)
+		}
 	}
 }

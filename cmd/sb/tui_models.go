@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,30 +85,65 @@ func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalo
 	// and for a plan or a compatible server the two have almost nothing in
 	// common. A surface that is not connected yet contributes nothing here
 	// and keeps its browse row, which is where it gets connected.
-	for _, listed := range listConnectedSurfaces(ctx, reg, cat, cfg) {
-		for _, name := range listed.models {
-			c := modelChoice{
-				ref:          listed.surface.provider + "/" + name,
-				provider:     listed.surface.provider,
-				surface:      listed.surface.surface,
-				desc:         listed.surface.desc,
-				effortLevels: listed.surface.effortLevels,
+	surfaces := browsableSurfaces(cat, cfg, localErr)
+	asked := listConnectedSurfaces(ctx, reg, cfg, surfaces)
+	for _, c := range surfaces {
+		for _, name := range asked[surfaceKey(c)].models {
+			bound := modelChoice{
+				ref:          c.provider + "/" + name,
+				provider:     c.provider,
+				surface:      c.surface,
+				desc:         c.desc,
+				effortLevels: c.effortLevels,
 			}
-			add(c.ref+" "+c.surface, c, c.ref, c.desc)
+			add(bound.ref+" "+bound.surface, bound, bound.ref, bound.desc)
 		}
 	}
 
-	for _, c := range browsableSurfaces(cat, cfg, localErr) {
-		add(browsePrefix+c.provider+"/"+c.surface, c, c.provider+"/"+c.surface+"…",
-			c.desc+" · pick from what this server serves")
+	// Surfaces that produced nothing come first. They are the ones with
+	// something left to do — an address to give, a key to store — and burying
+	// them under the models of a surface already listed above is how the row
+	// someone needs ends up out of sight.
+	priced := map[string]int{}
+	for _, info := range cat.Entries() {
+		priced[info.Provider+"/"+info.Surface]++
+	}
+	for _, want := range []bool{false, true} {
+		for _, c := range surfaces {
+			status := asked[surfaceKey(c)]
+			shown := len(status.models) + priced[surfaceKey(c)]
+			if (shown > 0) != want {
+				continue
+			}
+			add(browsePrefix+c.provider+"/"+c.surface, c, c.provider+"/"+c.surface+"…",
+				browseDesc(c, status, shown))
+		}
 	}
 	return items, choices
 }
 
-// surfaceModels is one surface's live answer.
+func surfaceKey(c modelChoice) string { return c.provider + "/" + c.surface }
+
+// browseDesc says what this surface answered a moment ago, because "refused
+// without a key" and "not pointed anywhere yet" send the user to different
+// rows once they open it.
+func browseDesc(c modelChoice, status surfaceModels, shown int) string {
+	switch {
+	case shown > 0:
+		return fmt.Sprintf("%s · %d listed above", c.desc, shown)
+	case refusedForAuth(status.err):
+		return c.desc + " · refused without a credential; store one here"
+	case status.err != nil:
+		return c.desc + " · " + firstLine(status.err.Error())
+	}
+	return c.desc + " · pick from what this server serves"
+}
+
+// surfaceModels is one surface's live answer, including the refusal, which is
+// as informative as a list and is what the row above it has to report.
 type surfaceModels struct {
-	surface modelChoice
-	models  []string
+	models []string
+	err    error
 }
 
 // listConnectedSurfaces asks every surface that can answer right now what it
@@ -115,8 +151,7 @@ type surfaceModels struct {
 // three servers in sequence would spend it; only where a credential already
 // resolves, because the alternative is a request that is certain to be
 // refused and a wait for it on every open.
-func listConnectedSurfaces(ctx context.Context, reg *providers, cat *catalog.Catalog, cfg *config.Config) []surfaceModels {
-	candidates := browsableSurfaces(cat, cfg, nil)
+func listConnectedSurfaces(ctx context.Context, reg *providers, cfg *config.Config, candidates []modelChoice) map[string]surfaceModels {
 	out := make([]surfaceModels, len(candidates))
 
 	var wg sync.WaitGroup
@@ -131,21 +166,16 @@ func listConnectedSurfaces(ctx context.Context, reg *providers, cat *catalog.Cat
 		go func(i int, c modelChoice) {
 			defer wg.Done()
 			names, err := listSurfaceModels(ctx, reg, c.provider, c.surface)
-			if err != nil {
-				return
-			}
-			out[i] = surfaceModels{surface: c, models: names}
+			out[i] = surfaceModels{models: names, err: err}
 		}(i, c)
 	}
 	wg.Wait()
 
-	listed := out[:0]
-	for _, s := range out {
-		if len(s.models) > 0 {
-			listed = append(listed, s)
-		}
+	byKey := make(map[string]surfaceModels, len(candidates))
+	for i, c := range candidates {
+		byKey[surfaceKey(c)] = out[i]
 	}
-	return listed
+	return byKey
 }
 
 // surfaceConnected reports whether a surface can be asked for its models
@@ -192,6 +222,16 @@ func browsableSurfaces(cat *catalog.Catalog, cfg *config.Config, localErr error)
 			desc: "server not answering; set its address or start it",
 		})
 	}
+	// Not in the catalog, and it cannot be: the generic profile is the floor
+	// of assumed capability for a server nobody has characterized, so there is
+	// no price sheet to publish for it and pretending otherwise would price
+	// every request at zero. It sits here, next to the other row that connects
+	// a server rather than naming a vendor, because it is the only way to
+	// reach an endpoint nothing else in this list can name.
+	add(modelChoice{
+		provider: openaicompat.Name, surface: genericCompat,
+		desc: "any OpenAI-compatible server, at " + orNone(cfg.ProviderForTarget(openaicompat.Name, genericCompat).BaseURL),
+	})
 	for _, info := range cat.Surfaces() {
 		add(modelChoice{
 			provider:     info.Provider,
@@ -200,14 +240,6 @@ func browsableSurfaces(cat *catalog.Catalog, cfg *config.Config, localErr error)
 			effortLevels: info.EffortLevels,
 		})
 	}
-	// Not in the catalog, and it cannot be: the generic profile is the floor
-	// of assumed capability for a server nobody has characterized, so there is
-	// no price sheet to publish for it and pretending otherwise would price
-	// every request at zero.
-	add(modelChoice{
-		provider: openaicompat.Name, surface: genericCompat,
-		desc: "OpenAI-compatible server at " + orNone(cfg.ProviderForTarget(openaicompat.Name, genericCompat).BaseURL),
-	})
 	return out
 }
 
