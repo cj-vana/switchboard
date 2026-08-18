@@ -278,6 +278,9 @@ type tuiModel struct {
 	dlg  dialog
 	full fullscreen
 
+	workspaceRuntime    *workspaceRuntime
+	workspaceGeneration uint64
+
 	pendingAsk chan permission.Response
 
 	// pendingQuestion is the ask tool's open question, held so a quit can
@@ -502,16 +505,17 @@ func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiMo
 	}
 	app.runtimeMu.Unlock()
 	m := &tuiModel{
-		app:       app,
-		th:        th,
-		md:        md,
-		ta:        ta,
-		spin:      spinner.New(spinner.WithSpinner(spinner.Dot)),
-		tierLine:  app.tierLine(),
-		mode:      app.loop.Perms.Mode(),
-		history:   loadHistory(app.workspace),
-		custom:    loadCustomCommands(app.workspace),
-		sessionAt: time.Now(),
+		app:              app,
+		th:               th,
+		md:               md,
+		ta:               ta,
+		spin:             spinner.New(spinner.WithSpinner(spinner.Dot)),
+		tierLine:         app.tierLine(),
+		mode:             app.loop.Perms.Mode(),
+		history:          loadHistory(app.workspace),
+		custom:           loadCustomCommands(app.workspace),
+		sessionAt:        time.Now(),
+		workspaceRuntime: newWorkspaceRuntime(app.workspace),
 	}
 	m.histIdx = len(m.history)
 	m.tr = newTranscript(100, th, md)
@@ -533,8 +537,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if m.full != nil {
-			m.full.mouse(msg)
-			return m, nil
+			return m, m.full.mouse(msg)
 		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
@@ -621,6 +624,31 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pickerMsg:
 		m.dlg = &pickerDialog{title: msg.title, items: msg.items, onPick: msg.action}
+		return m, nil
+
+	case workspaceOpenedMsg:
+		return m, m.onWorkspaceOpened(msg)
+
+	case workspaceFilteredMsg:
+		return m, m.onWorkspaceFiltered(msg)
+
+	case workspacePreviewMsg:
+		return m, m.onWorkspacePreview(msg)
+
+	case workspaceCopiedMsg:
+		m.onWorkspaceCopied(msg)
+		return m, nil
+
+	case workspaceEditorReadyMsg:
+		return m, m.onWorkspaceEditorReady(msg)
+
+	case workspaceEditorDoneMsg:
+		return m, m.onWorkspaceEditorDone(msg)
+
+	case workspaceInvalidatedMsg:
+		if m.workspaceRuntime != nil {
+			m.workspaceRuntime.invalidate()
+		}
 		return m, nil
 
 	case secretPromptMsg:
@@ -757,7 +785,7 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 	if m.full != nil {
 		close, cmd := m.full.key(msg)
 		if close {
-			m.full = nil
+			m.closeFullscreen()
 		}
 		return cmd
 	}
@@ -1678,6 +1706,8 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 		m.addNotice("error", "session change returned no session")
 		return m.nextQueuedTurn()
 	}
+	m.closeFullscreen()
+	m.workspaceGeneration++
 	old := m.app.loop.Session
 	runtimeBinding := session.RuntimeBinding{Tier: msg.tier.ID, Target: msg.tier.Target.ID(), Pinned: msg.pinned}
 	if msg.preserveRuntimeTarget {

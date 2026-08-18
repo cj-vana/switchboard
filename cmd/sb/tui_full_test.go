@@ -22,7 +22,10 @@ func (p *fullscreenProbe) key(msg tea.KeyMsg) (bool, tea.Cmd) {
 	return p.close, p.cmd
 }
 
-func (p *fullscreenProbe) mouse(msg tea.MouseMsg) { p.gotMouse = msg }
+func (p *fullscreenProbe) mouse(msg tea.MouseMsg) tea.Cmd {
+	p.gotMouse = msg
+	return p.cmd
+}
 
 func (p *fullscreenProbe) view(width, height int, th *theme) string {
 	p.viewW, p.viewH, p.viewTheme = width, height, th
@@ -62,13 +65,13 @@ func TestFullscreenOwnsKeyAndCanReturnCommand(t *testing.T) {
 
 func TestFullscreenOwnsMouseAndView(t *testing.T) {
 	th := darkTheme()
-	probe := &fullscreenProbe{}
+	probe := &fullscreenProbe{cmd: func() tea.Msg { return struct{}{} }}
 	m := &tuiModel{full: probe, width: 91, height: 27, th: th}
 
 	msg := tea.MouseMsg{Button: tea.MouseButtonWheelDown}
 	updated, cmd := m.Update(msg)
-	if updated != m || cmd != nil {
-		t.Fatalf("mouse update = (%T, %v), want original model and nil command", updated, cmd)
+	if updated != m || cmd == nil {
+		t.Fatalf("mouse update = (%T, %v), want original model and panel command", updated, cmd)
 	}
 	if probe.gotMouse.Button != tea.MouseButtonWheelDown {
 		t.Fatalf("fullscreen mouse button = %v, want wheel down", probe.gotMouse.Button)
@@ -125,7 +128,9 @@ func TestDiffViewFullscreenAdapterPreservesInputBehavior(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := &diffView{offset: tt.start}
-			d.mouse(tea.MouseMsg{Button: tt.button})
+			if cmd := d.mouse(tea.MouseMsg{Button: tt.button}); cmd != nil {
+				t.Fatalf("mouse command = %v, want nil", cmd)
+			}
 			if d.offset != tt.want {
 				t.Fatalf("mouse offset = %d, want %d", d.offset, tt.want)
 			}

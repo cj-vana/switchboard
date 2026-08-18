@@ -8,6 +8,6 @@ import tea "github.com/charmbracelet/bubbletea"
 // panel can load or apply work without blocking Bubble Tea's update loop.
 type fullscreen interface {
 	key(tea.KeyMsg) (close bool, cmd tea.Cmd)
-	mouse(tea.MouseMsg)
+	mouse(tea.MouseMsg) tea.Cmd
 	view(width, height int, th *theme) string
 }

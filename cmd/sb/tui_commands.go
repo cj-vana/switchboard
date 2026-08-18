@@ -75,6 +75,8 @@ func commands() []commandItem {
 		{name: "skills", desc: "discovered instruction packs, origins, and invocation status", busySafe: true, run: cmdSkills},
 		{name: "skill", usage: "<canonical-selector> [args]", desc: "invoke one instruction pack explicitly", run: cmdSkill},
 		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
+		{name: "files", usage: "[query]", desc: "quick-open workspace files with a revision-aware source lens", busySafe: true, run: cmdFiles},
+		{name: "search", usage: "<literal>", desc: "search workspace text and inspect exact source locations", busySafe: true, run: cmdWorkspaceSearch},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
 		{name: "blame", usage: "[path[:line]]", desc: "which recorded turn wrote each line, on which rung and model; bare, the workspace's yield", busySafe: true, run: cmdBlame},
@@ -130,7 +132,7 @@ var helpGroups = []struct {
 }{
 	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
-	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
+	{"files and work", []string{"files", "search", "diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
 	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }

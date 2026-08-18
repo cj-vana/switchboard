@@ -184,13 +184,14 @@ func (d *diffView) key(msg tea.KeyMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-func (d *diffView) mouse(msg tea.MouseMsg) {
+func (d *diffView) mouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		d.scroll(-3)
 	case tea.MouseButtonWheelDown:
 		d.scroll(3)
 	}
+	return nil
 }
 
 func (d *diffView) scroll(n int) {

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -110,19 +111,29 @@ func (a *tuiApp) displayPath(abs string) string {
 
 // tuiObserver is the loop's Observer, forwarding into the Bubble Tea program.
 // Called from the loop's goroutine; Send queues without blocking.
-type tuiObserver struct{ p *tea.Program }
+type tuiObserver struct {
+	p              *tea.Program
+	workspaceDirty atomic.Bool
+}
 
 func (o *tuiObserver) ThinkingDelta(text string) { o.p.Send(deltaMsg{thinking: true, text: text}) }
 func (o *tuiObserver) TextDelta(text string)     { o.p.Send(deltaMsg{text: text}) }
 func (o *tuiObserver) ToolStart(call provider.ToolUse, req permission.Request) {
+	if req.Effect == permission.EffectWrite || req.Effect == permission.EffectExecute {
+		o.workspaceDirty.Store(true)
+	}
 	o.p.Send(toolStartMsg{id: call.ID, name: call.Name, req: req})
 }
 func (o *tuiObserver) ToolEnd(call provider.ToolUse, _ permission.Request, res tools.Result, took time.Duration) {
 	o.p.Send(toolEndMsg{id: call.ID, name: call.Name, res: res, took: took})
 }
-func (o *tuiObserver) ToolBatchEnd(context.Context) {}
-func (o *tuiObserver) Notice(level, text string)    { o.p.Send(noticeMsg{level: level, text: text}) }
-func (o *tuiObserver) TurnUsage(u session.Usage)    { o.p.Send(usageMsg{u: u}) }
+func (o *tuiObserver) ToolBatchEnd(context.Context) {
+	if o.p != nil && o.workspaceDirty.Swap(false) {
+		o.p.Send(workspaceInvalidatedMsg{})
+	}
+}
+func (o *tuiObserver) Notice(level, text string) { o.p.Send(noticeMsg{level: level, text: text}) }
+func (o *tuiObserver) TurnUsage(u session.Usage) { o.p.Send(usageMsg{u: u}) }
 
 // tuiAsker resolves a permission Ask against a dialog in the TUI. The loop
 // blocks here until the user answers or the turn is cancelled; a program that
