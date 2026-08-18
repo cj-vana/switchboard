@@ -159,6 +159,13 @@ func (c *Config) ApplyProfile(name string) error {
 
 type ProviderSettings struct {
 	BaseURL string
+
+	// ContextWindow is how many tokens this endpoint will accept, for a
+	// target whose window nothing else can report. The chat-completions
+	// format has no field for it and the catalog cannot price a server it has
+	// never seen, so on a compatible endpoint the number is the user's to
+	// state. Zero means unknown, which is not the same as unlimited.
+	ContextWindow int
 }
 
 // ProviderFor returns the settings for a provider, which is the zero value when
@@ -175,12 +182,24 @@ func (c *Config) ProviderFor(name string) ProviderSettings {
 // compatibility endpoint and openaicompat/generic is whatever the user pointed
 // it at, and redirecting one must not silently redirect the other.
 func (c *Config) ProviderForTarget(name, surface string) ProviderSettings {
-	if surface != "" {
-		if s, ok := c.Providers[ProviderSurfaceKey(name, surface)]; ok && s.BaseURL != "" {
-			return s
-		}
+	wide := c.Providers[name]
+	if surface == "" {
+		return wide
 	}
-	return c.Providers[name]
+	scoped, ok := c.Providers[ProviderSurfaceKey(name, surface)]
+	if !ok {
+		return wide
+	}
+	// Each field falls back on its own. A surface that states only its window
+	// still inherits the provider-wide address, and stating only an address
+	// does not erase a window set beside it.
+	if scoped.BaseURL == "" {
+		scoped.BaseURL = wide.BaseURL
+	}
+	if scoped.ContextWindow == 0 {
+		scoped.ContextWindow = wide.ContextWindow
+	}
+	return scoped
 }
 
 // ProviderSurfaceKey is the config key one surface's endpoint is written
@@ -192,15 +211,28 @@ func ProviderSurfaceKey(name, surface string) string { return name + "/" + surfa
 // setting that says nothing.
 func (c *Config) SetProviderBaseURL(key, baseURL string) {
 	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
+	settings := c.Providers[key]
+	settings.BaseURL = strings.TrimSuffix(baseURL, "/")
+	c.setProvider(key, settings)
+}
+
+// SetProviderContextWindow records how large a window this endpoint accepts.
+// Zero forgets it, because an unknown window and a window of zero are the
+// same claim and neither is worth a line in the file.
+func (c *Config) SetProviderContextWindow(key string, tokens int) {
+	settings := c.Providers[key]
+	settings.ContextWindow = tokens
+	c.setProvider(key, settings)
+}
+
+func (c *Config) setProvider(key string, settings ProviderSettings) {
+	if settings == (ProviderSettings{}) {
 		delete(c.Providers, key)
 		return
 	}
 	if c.Providers == nil {
 		c.Providers = map[string]ProviderSettings{}
 	}
-	settings := c.Providers[key]
-	settings.BaseURL = strings.TrimSuffix(baseURL, "/")
 	c.Providers[key] = settings
 }
 
@@ -303,7 +335,8 @@ type updatesEntry struct {
 // so redirecting to something that prices differently is the user asserting
 // they know that.
 type providerEntry struct {
-	BaseURL string `toml:"base_url"`
+	BaseURL       string `toml:"base_url"`
+	ContextWindow int    `toml:"context_window,omitempty"`
 }
 
 // authEntry configures where a provider's credential comes from. It carries no
@@ -411,7 +444,10 @@ func LoadFile(path string) (*Config, error) {
 		c.Auth[k] = s
 	}
 	for k, v := range f.Providers {
-		c.Providers[k] = ProviderSettings{BaseURL: v.BaseURL}
+		if v.ContextWindow < 0 {
+			return nil, fmt.Errorf("%s: providers.%s context_window %d is negative", path, k, v.ContextWindow)
+		}
+		c.Providers[k] = ProviderSettings{BaseURL: v.BaseURL, ContextWindow: v.ContextWindow}
 	}
 	if f.Updates.Check != nil {
 		c.UpdateCheck = *f.Updates.Check

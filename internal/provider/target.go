@@ -323,7 +323,15 @@ type ProbeResult struct {
 	ModelPresent bool
 	Tools        ToolSupport
 	Vision       bool
-	Detail       string
+
+	// ContextWindow is what the server said it will accept for this model,
+	// in tokens, or zero where the protocol offers no way to ask. A live
+	// answer outranks a catalog default for the same reason a probed
+	// capability does: the catalog describes a surface, the server knows the
+	// model that is loaded on it.
+	ContextWindow int
+
+	Detail string
 }
 
 // TokenEstimate reports a count. Exact is false when the number came from a

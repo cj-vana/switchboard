@@ -25,6 +25,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/execution"
 	"github.com/switchboard-code/switchboard/internal/lsp"
 	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
 	"github.com/switchboard-code/switchboard/internal/session"
@@ -224,7 +225,12 @@ type tuiModel struct {
 	turnIn, turnOut int
 	callTokens      int
 	ctxWindow       int
-	updateAvail     string
+
+	// callEstimated marks occupancy that came from the local estimator
+	// because the provider reported none. It is displayed as approximate,
+	// since the estimator is measured to run low (docs/estimator.md).
+	callEstimated bool
+	updateAvail   string
 
 	// moves is every rung the session landed on after a switch, in order:
 	// the status bar's routing-history dots. /why keeps the reasons; this
@@ -555,6 +561,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.tr.setWidth(msg.Width)
 		m.ta.SetWidth(msg.Width - 6) // margin, frame, and padding
+		// A narrower pane rewraps what is already typed, so the prompt has to
+		// be resized against the new width rather than the one it grew under.
+		m.growInput()
 		return m, m.syncTitle()
 
 	case tea.MouseMsg:
@@ -630,6 +639,17 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnIn += msg.u.Usage.InputTokens + msg.u.Usage.CacheWriteTokens
 		m.turnOut += msg.u.Usage.OutputTokens
 		m.callTokens = msg.u.Usage.InputTokens + msg.u.Usage.CacheReadTokens + msg.u.Usage.CacheWriteTokens
+		m.callEstimated = false
+		if m.callTokens == 0 {
+			// The server reported nothing. Not every compatible endpoint
+			// answers with a usage block, and occupancy that stays at zero
+			// reads as an empty window: the meter shows nothing and
+			// auto-compaction, which is gated on it, never fires. An estimate
+			// that is known to run low is a worse number than the provider's
+			// and a far better one than pretending the context is empty.
+			m.callTokens = m.estimatedOccupancy()
+			m.callEstimated = m.callTokens > 0
+		}
 		return m, nil
 
 	case askMsg:
@@ -1587,6 +1607,19 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 	return watchCmd
 }
 
+// estimatedOccupancy is what the next request would carry, counted locally.
+// It is the fallback for a server that reports no usage at all, and it counts
+// the same three zones /context breaks out: the frozen system and tool
+// definitions, plus the conversation that grows.
+func (m *tuiModel) estimatedOccupancy() int {
+	state := m.app.loop.Session.State()
+	return prefix.RequestTokens(provider.Request{
+		System:   m.app.loop.System,
+		Tools:    m.app.loop.Tools.Definitions(),
+		Messages: state.Messages,
+	})
+}
+
 // shouldAutoCompact decides at turn end. callTokens is the size of the last
 // request the provider actually saw — input plus cache reads and writes —
 // which is the honest measure of occupancy, and the reason this waits for a
@@ -2103,8 +2136,27 @@ func (m *tuiModel) refreshCost(state session.State) {
 	}
 }
 
+// refreshCtxWindow settles how much room this target has, from the most
+// direct source that has an answer.
+//
+// The server first: it knows which model is loaded and how much of its window
+// was actually allocated, which the catalog cannot. Then the user, who is the
+// only one who can speak for an endpoint nobody has characterized. The catalog
+// last, and its local surfaces deliberately record zero rather than guess.
+// Zero at the end is unknown, and unknown is reported as unknown: the number
+// gates auto-compaction, so inventing one would compact against a window that
+// does not exist.
 func (m *tuiModel) refreshCtxWindow() {
-	if info, _, ok := m.app.catalog.Lookup(m.app.loop.Binding().Target); ok {
+	target := m.app.loop.Binding().Target
+	if probed := m.app.providers.probedContextWindow(target); probed > 0 {
+		m.ctxWindow = probed
+		return
+	}
+	if declared := m.app.config.ProviderForTarget(target.Provider, target.Surface).ContextWindow; declared > 0 {
+		m.ctxWindow = declared
+		return
+	}
+	if info, _, ok := m.app.catalog.Lookup(target); ok {
 		m.ctxWindow = info.ContextWindow
 		return
 	}

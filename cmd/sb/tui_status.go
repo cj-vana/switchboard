@@ -208,6 +208,14 @@ func (m *tuiModel) sparkline() string {
 func (m *tuiModel) ctxPct() string {
 	pct, ok := m.ctxPercent()
 	if !ok {
+		// An unknown window is not the same as an empty one, and it is the
+		// state that matters most: auto-compaction cannot fire against a
+		// window nobody has stated, so a session on this target runs until
+		// the server refuses. Saying nothing here is what made that silent.
+		if m.ctxWindow <= 0 && m.app.config.CompactAuto {
+			return m.th.onBar(m.th.faint).Render("ctx ") +
+				m.th.onBar(m.th.warn).Render("?")
+		}
 		return ""
 	}
 	style := m.th.accent
@@ -217,8 +225,13 @@ func (m *tuiModel) ctxPct() string {
 	case pct >= 60:
 		style = m.th.warn
 	}
-	return m.th.onBar(m.th.faint).Render("ctx ") +
-		m.th.onBar(style).Render(fmt.Sprintf("%d%%", pct))
+	// A tilde where the provider reported nothing: the number is this
+	// build's own count, and the estimator is measured to run low.
+	shown := fmt.Sprintf("%d%%", pct)
+	if m.callEstimated {
+		shown = "~" + shown
+	}
+	return m.th.onBar(m.th.faint).Render("ctx ") + m.th.onBar(style).Render(shown)
 }
 
 func (m *tuiModel) ctxPercent() (int, bool) {

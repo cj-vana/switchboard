@@ -270,6 +270,27 @@ func TestWebsearchLive(t *testing.T) {
 	}
 }
 
+// Fetch has its own live path, and it is a different one: search talks to a
+// single known backend, while fetch talks to whatever the model names and has
+// to survive a real redirect, a real content type, and a real page.
+func TestWebfetchLive(t *testing.T) {
+	if os.Getenv("SB_LIVE") == "" {
+		t.Skip("SB_LIVE not set")
+	}
+	tool := &webfetchTool{client: newWebClient()}
+	plan, err := tool.Plan(json.RawMessage(`{"url": "https://example.com"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := plan.Run(context.Background())
+	if err != nil || res.IsError {
+		t.Fatalf("live fetch failed: %v %s", err, res.Content)
+	}
+	if !strings.Contains(strings.ToLower(res.Content), "example domain") {
+		t.Fatalf("the page came back without its content:\n%s", res.Content)
+	}
+}
+
 // The doctor probe asks the one question doctor needs answered: will the
 // next search error. A healthy backend and a client-side status both pass;
 // a server fault and a dead network both fail with the reason.

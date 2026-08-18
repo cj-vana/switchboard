@@ -95,11 +95,15 @@ func skillOriginPath(m *tuiModel, sk skills.Skill) string {
 func cmdSkill(m *tuiModel, args string) tea.Cmd {
 	selector, invocationArgs := splitSkillCommand(args)
 	if selector == "" {
-		return noticeCmd("", skillUsage)
+		// A canonical selector is exact on purpose, and exact selectors are
+		// long. Offering them is the difference between a feature that exists
+		// and one that gets used: the picker supplies the selector verbatim,
+		// so nothing about the resolution rule is relaxed to make it typeable.
+		return skillPickerCmd(m)
 	}
 	sk, err := skills.Resolve(m.app.skills, selector)
 	if err != nil {
-		return noticeCmd("error", err.Error())
+		return noticeCmd("error", err.Error()+"\n"+skillUsage)
 	}
 	body, err := skills.RenderExplicit(sk, invocationArgs)
 	if err != nil {
@@ -112,6 +116,53 @@ func cmdSkill(m *tuiModel, args string) tea.Cmd {
 	prompt := "The user explicitly invoked skill " + selector + ". Follow these instructions:\n\n" + body
 	m.addInfo("invoking " + selector + " from " + skillOriginPath(m, sk))
 	return m.startSkillPrompt(display, prompt)
+}
+
+// skillPickerCmd offers everything explicitly invocable right now. A skill
+// blocked or hidden from user invocation is left out rather than listed and
+// then refused, since the picker's whole job is that every row works.
+func skillPickerCmd(m *tuiModel) tea.Cmd {
+	var items []pickerItem
+	for _, sk := range m.app.skills {
+		if sk.UserInvocationDisabled || len(sk.InvocationBlockers) > 0 {
+			continue
+		}
+		desc := strings.Join(strings.Fields(sk.Description), " ")
+		if sk.ArgumentHint != "" {
+			desc = sk.ArgumentHint + " · " + desc
+		}
+		items = append(items, pickerItem{id: sk.Key(), label: sk.Name, desc: desc})
+	}
+	if len(items) == 0 {
+		return noticeCmd("", "no skill can be invoked right now; /skills says why for each")
+	}
+	return func() tea.Msg {
+		return pickerMsg{
+			title: "invoke a skill",
+			items: items,
+			action: func(selector string) tea.Cmd {
+				sk, err := skills.Resolve(m.app.skills, selector)
+				if err != nil {
+					return noticeCmd("error", err.Error())
+				}
+				if sk.ArgumentHint == "" {
+					return cmdSkill(m, selector)
+				}
+				// The pack says it takes arguments, so ask for them rather
+				// than invoking it with none and letting it discover that.
+				return func() tea.Msg {
+					return textPromptMsg{
+						title:      "arguments for " + sk.Name,
+						help:       sk.ArgumentHint + " · enter alone runs it with none",
+						allowEmpty: true,
+						submit: func(value string) tea.Cmd {
+							return cmdSkill(m, strings.TrimSpace(selector+" "+value))
+						},
+					}
+				}
+			},
+		}
+	}
 }
 
 func splitSkillCommand(args string) (selector, rest string) {

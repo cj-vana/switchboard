@@ -150,6 +150,16 @@ func (p *providers) probedCapabilities(target provider.RouteTarget) (provider.Pr
 	return probe, ok
 }
 
+// probedContextWindow reports the window this target's server attested, or
+// zero when it said nothing. A live answer outranks a catalog default for the
+// same reason a probed capability does: the catalog describes a surface, and
+// the server knows which model is loaded on it and how much of it was
+// allocated.
+func (p *providers) probedContextWindow(target provider.RouteTarget) int {
+	probe, _ := p.probedCapabilities(target)
+	return probe.ContextWindow
+}
+
 // baseURL is the configured address for a target's surface, or empty for the
 // adapter's default. It is per surface rather than per provider because one
 // provider can front several servers at once (§4).

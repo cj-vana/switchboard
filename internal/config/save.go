@@ -133,7 +133,7 @@ func (c *Config) render() ([]byte, error) {
 	if len(c.Providers) > 0 {
 		entries := make(map[string]providerEntry, len(c.Providers))
 		for name, p := range c.Providers {
-			entries[name] = providerEntry{BaseURL: p.BaseURL}
+			entries[name] = providerEntry{BaseURL: p.BaseURL, ContextWindow: p.ContextWindow}
 		}
 		if err := encode(&buf, struct {
 			Providers map[string]providerEntry `toml:"providers"`

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -134,13 +135,68 @@ func (m *tuiModel) historyMove(delta int) {
 	m.growInput()
 }
 
-// growInput keeps the prompt between one and six rows.
+// growInput sizes the prompt to what is actually in it.
+//
+// Counting newlines was not the same question: a paragraph typed without ever
+// pressing enter is one logical line and many terminal rows, so the box stayed
+// one row tall and the text scrolled out of sight as it was typed.
 func (m *tuiModel) growInput() {
-	lines := strings.Count(m.ta.Value(), "\n") + 1
-	if lines > 6 {
-		lines = 6
+	rows := inputRows(m.ta)
+	if ceiling := m.inputCeiling(); rows > ceiling {
+		rows = ceiling
 	}
-	m.ta.SetHeight(lines)
+	if rows < 1 {
+		rows = 1
+	}
+	m.ta.SetHeight(rows)
+}
+
+// inputCeiling is how tall the prompt may grow. The transcript is sized from
+// whatever is left, so an unbounded prompt would push the conversation off the
+// screen; a third of the pane keeps both readable, and a small terminal still
+// gets the original six.
+func (m *tuiModel) inputCeiling() int {
+	const (
+		floor   = 6
+		ceiling = 16
+	)
+	if m.height <= 0 {
+		return floor
+	}
+	third := m.height / 3
+	switch {
+	case third < floor:
+		return floor
+	case third > ceiling:
+		return ceiling
+	}
+	return third
+}
+
+// inputRows is how many terminal rows the typed text occupies once wrapped.
+//
+// The count comes from the textarea itself rather than from a second word-wrap
+// implementation here. Model is a value type and LineInfo has a value
+// receiver, so a copy per logical line reports that line's wrapped height
+// using the same rules that will draw it; two implementations of the same wrap
+// would eventually disagree, and the row that disagreed would be the one with
+// the cursor in it.
+func inputRows(ta textarea.Model) int {
+	total := 0
+	for _, line := range strings.Split(ta.Value(), "\n") {
+		probe := ta
+		probe.SetValue(line)
+		probe.CursorEnd()
+		height := probe.LineInfo().Height
+		if height < 1 {
+			height = 1
+		}
+		total += height
+	}
+	if total < 1 {
+		return 1
+	}
+	return total
 }
 
 // --- slash dispatch -----------------------------------------------------------

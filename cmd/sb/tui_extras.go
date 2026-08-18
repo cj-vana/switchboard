@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	"github.com/switchboard-code/switchboard/internal/session"
@@ -53,9 +55,36 @@ func cmdExport(m *tuiModel, args string) tea.Cmd {
 	return noticeCmd("", "exported to "+path)
 }
 
+// setContextWindowCmd records how large a window this target's endpoint
+// accepts. The chat-completions format has no field for it and the catalog
+// cannot describe a server it has never seen, so for a compatible endpoint the
+// number is the user's to state, and stating it is what turns auto-compaction
+// back on.
+func setContextWindowCmd(m *tuiModel, raw string) tea.Cmd {
+	tokens, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || tokens < 0 {
+		return noticeCmd("error", "context window must be a count of tokens, for example /context 32768")
+	}
+	target := m.app.loop.Binding().Target
+	key := config.ProviderSurfaceKey(target.Provider, target.Surface)
+	m.app.config.SetProviderContextWindow(key, tokens)
+	if err := m.app.config.Save(); err != nil {
+		return noticeCmd("error", "saving the context window failed: "+err.Error())
+	}
+	m.refreshCtxWindow()
+	if tokens == 0 {
+		return noticeCmd("", "context window for "+key+" is unset again; auto-compaction is off for it")
+	}
+	return noticeCmd("", fmt.Sprintf("%s accepts %s tokens; auto-compaction fires at %d%% of it",
+		key, compact(tokens), compactThreshold(m.app.config)))
+}
+
 // cmdContext shows where the window is going. The constraint is invisible
 // until it is fatal; a bar makes it something the user can see coming.
-func cmdContext(m *tuiModel, _ string) tea.Cmd {
+func cmdContext(m *tuiModel, args string) tea.Cmd {
+	if tokens := strings.TrimSpace(args); tokens != "" {
+		return setContextWindowCmd(m, tokens)
+	}
 	state := m.app.loop.Session.State()
 	used := m.callTokens
 	window := m.ctxWindow
@@ -72,7 +101,16 @@ func cmdContext(m *tuiModel, _ string) tea.Cmd {
 	} else if window > 0 {
 		fmt.Fprintf(&b, "context window %s; usage is measured on the first turn\n", compact(window))
 	} else {
-		b.WriteString("this target does not report a context window\n")
+		target := m.app.loop.Binding().Target
+		b.WriteString("this target does not report a context window, and none is configured\n")
+		if m.app.config.CompactAuto {
+			// The consequence is the part worth stating. Auto-compaction is
+			// gated on the window, so on this target it is off, and the
+			// session will run until the server refuses a request.
+			b.WriteString("auto-compaction cannot fire without one; /compact summarizes by hand meanwhile\n")
+		}
+		fmt.Fprintf(&b, "/context <tokens> records what %s/%s accepts, for this and every later session\n",
+			target.Provider, target.Surface)
 	}
 
 	// The window's composition, in the estimator's own terms: what the next

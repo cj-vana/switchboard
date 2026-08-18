@@ -416,6 +416,11 @@ type textPromptMsg struct {
 	// submit runs with the trimmed entry. An empty entry cancels, so a
 	// caller never has to decide what an empty string meant.
 	submit func(value string) tea.Cmd
+
+	// allowEmpty makes an empty entry an answer rather than a cancellation,
+	// for the prompt whose field is genuinely optional. An address or a model
+	// id is not; a skill's arguments are.
+	allowEmpty bool
 }
 
 // textDialog takes one line of visible text: a server address, a model id.
@@ -423,10 +428,11 @@ type textPromptMsg struct {
 // dialog that sometimes hides what is typed and sometimes does not is one
 // mistake away from showing a key.
 type textDialog struct {
-	title  string
-	help   string
-	input  textinput.Model
-	submit func(value string) tea.Cmd
+	title      string
+	help       string
+	input      textinput.Model
+	submit     func(value string) tea.Cmd
+	allowEmpty bool
 }
 
 func newTextDialog(msg textPromptMsg) *textDialog {
@@ -435,7 +441,10 @@ func newTextDialog(msg textPromptMsg) *textDialog {
 	ti.SetValue(msg.initial)
 	ti.CursorEnd()
 	ti.Focus()
-	return &textDialog{title: msg.title, help: msg.help, input: ti, submit: msg.submit}
+	return &textDialog{
+		title: msg.title, help: msg.help, input: ti,
+		submit: msg.submit, allowEmpty: msg.allowEmpty,
+	}
 }
 
 func (d *textDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
@@ -444,7 +453,7 @@ func (d *textDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
 		return true, nil
 	case "enter":
 		value := strings.TrimSpace(d.input.Value())
-		if value == "" {
+		if value == "" && !d.allowEmpty {
 			return true, nil
 		}
 		return true, d.submit(value)
@@ -461,7 +470,11 @@ func (d *textDialog) view(width int, th *theme) string {
 		b.WriteString(th.dim.Render(" "+d.help) + "\n")
 	}
 	b.WriteString("\n " + d.input.View() + "\n")
-	b.WriteString(th.faint.Render(" enter save · esc cancel"))
+	footer := " enter save · esc cancel"
+	if d.allowEmpty {
+		footer = " enter continue · esc cancel"
+	}
+	b.WriteString(th.faint.Render(footer))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

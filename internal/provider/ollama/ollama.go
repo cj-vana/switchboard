@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/switchboard-code/switchboard/internal/provider"
@@ -233,7 +235,36 @@ func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provid
 		res.Tools = provider.ToolsNone
 		res.Detail = "model does not advertise tool support"
 	}
+	res.ContextWindow = show.contextWindow()
 	return res, nil
+}
+
+// numCtx reads a num_ctx set in the Modelfile's parameter block. That number
+// is what the server allocates, so it wins over the architecture's maximum:
+// a 262k model served at 8k will refuse a 100k request, and a window that
+// over-reports is worse than none, because everything downstream trusts it.
+var numCtx = regexp.MustCompile(`(?m)^\s*num_ctx\s+(\d+)\s*$`)
+
+// contextWindow reports what this server will accept for the model, or zero
+// when it said nothing this can be read from.
+func (s showResponse) contextWindow() int {
+	if m := numCtx.FindStringSubmatch(s.Parameters); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n
+		}
+	}
+	// Keyed by architecture, so the name is matched by suffix rather than
+	// guessed at: "qwen3.context_length", "llama.context_length", and so on.
+	for key, raw := range s.ModelInfo {
+		if !strings.HasSuffix(key, ".context_length") {
+			continue
+		}
+		var n int
+		if json.Unmarshal(raw, &n) == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {

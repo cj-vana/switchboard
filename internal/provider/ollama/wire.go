@@ -70,6 +70,16 @@ type errorResponse struct {
 
 type showResponse struct {
 	Capabilities []string `json:"capabilities"`
+
+	// ModelInfo is keyed by architecture, so the context length arrives as
+	// "qwen3.context_length" or "llama.context_length" rather than under any
+	// fixed name. Read as raw numbers and matched by suffix.
+	ModelInfo map[string]json.RawMessage `json:"model_info"`
+
+	// Parameters is the Modelfile's parameter block, verbatim. A num_ctx set
+	// there is what the server will actually allocate, which can be well
+	// below what the architecture allows.
+	Parameters string `json:"parameters"`
 }
 
 type tagsResponse struct {

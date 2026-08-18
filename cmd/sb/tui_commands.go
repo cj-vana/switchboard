@@ -61,7 +61,7 @@ func commands() []commandItem {
 		{name: "queue", usage: "[clear]", desc: "what is waiting to run after this turn", busySafe: true, run: cmdQueue},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|preview|auto|at]", desc: "summarize into a fresh context; preview says what that would take", run: cmdCompact},
-		{name: "context", desc: "how much of the window is in use", busySafe: true, run: cmdContext},
+		{name: "context", usage: "[tokens]", desc: "how much of the window is in use; a count records what this target accepts", busySafe: true, run: cmdContext},
 		{name: "init", desc: "write an AGENTS.md for this repository", run: cmdInit},
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},
 		{name: "session", desc: "session id, target, and message count", busySafe: true, run: cmdSession},
