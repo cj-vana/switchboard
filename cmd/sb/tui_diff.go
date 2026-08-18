@@ -3,7 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"os/exec"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,7 +13,12 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/switchboard-code/switchboard/internal/scm"
+	"github.com/switchboard-code/switchboard/internal/terminaltext"
 )
+
+const tuiDiffMaxBytes = 1 << 20
 
 // diffView is the /diff fullscreen. The diff is highlighted once when it
 // loads — §14's "rendered once and cached" — and scrolling is a slice over
@@ -34,19 +40,95 @@ func openDiff(workspace string, dark bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "git", "-C", workspace, "diff", "HEAD", "--").Output()
+
+		repo, err := scm.Discover(ctx, workspace)
 		if err != nil {
 			return diffLoadedMsg{err: err}
 		}
-		const cap = 1 << 20
-		text := string(out)
-		if len(text) > cap {
-			text = text[:cap] + "\n… diff truncated at 1MB …\n"
+		paths, err := workspaceDiffPaths(workspace, repo.Root)
+		if err != nil {
+			return diffLoadedMsg{err: err}
 		}
-		if strings.TrimSpace(text) == "" {
-			text = "working tree clean\n"
+		result, err := repo.DiffHEAD(ctx, scm.DiffOptions{
+			Paths:    paths,
+			MaxBytes: tuiDiffMaxBytes,
+		})
+		if err != nil {
+			return diffLoadedMsg{err: err}
 		}
+		text := terminaltext.Display(renderSCMDiff(result))
 		return diffLoadedMsg{lines: highlightDiff(text, dark)}
+	}
+}
+
+// workspaceDiffPaths keeps /diff scoped to the directory Switchboard opened,
+// even when that directory is nested inside a larger Git worktree. The SCM
+// layer forces literal pathspec semantics before this value reaches Git.
+func workspaceDiffPaths(workspace, repoRoot string) ([]string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace for diff: %w", err)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		abs = resolved
+	}
+	rel, err := filepath.Rel(repoRoot, abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace within Git worktree: %w", err)
+	}
+	if rel == "." {
+		return nil, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, fmt.Errorf("%w: workspace %s", scm.ErrOutsideRepo, workspace)
+	}
+	return []string{filepath.ToSlash(rel)}, nil
+}
+
+func renderSCMDiff(result scm.DiffResult) string {
+	text := string(result.Text)
+	if result.Truncated {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += "… diff truncated at 1 MiB; some changes are not shown …\n"
+	}
+	if strings.TrimSpace(text) != "" {
+		return text
+	}
+
+	changed := make([]scm.PathState, 0, len(result.Files))
+	for _, file := range result.Files {
+		if !file.Ignored {
+			changed = append(changed, file)
+		}
+	}
+	if len(changed) == 0 {
+		return "working tree clean\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("working tree has changes with no textual patch:\n")
+	for _, file := range changed {
+		fmt.Fprintf(&b, "  %s  %s\n", diffStateLabel(file), file.Path)
+	}
+	return b.String()
+}
+
+func diffStateLabel(file scm.PathState) string {
+	switch {
+	case file.Unmerged:
+		return "unmerged"
+	case file.Untracked:
+		return "untracked"
+	case file.Staged && file.Unstaged:
+		return "staged+unstaged"
+	case file.Staged:
+		return "staged"
+	case file.Unstaged:
+		return "unstaged"
+	default:
+		return "changed"
 	}
 }
 
