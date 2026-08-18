@@ -158,7 +158,22 @@ func TestClaudeCommandsFailClosedOnUnsupportedHostBehavior(t *testing.T) {
 	if len(ModelVisible(list)) != 0 {
 		t.Fatalf("a command became model-visible: %+v", ModelVisible(list))
 	}
-	for _, name := range []string{"allowed", "model", "hooks", "shell", "injection", "dynamic", "attachment"} {
+	// allowed-tools is a permission grant rather than a restriction: it
+	// pre-approves tools so the skill's turn is not interrupted. Leaving it
+	// unapplied can only ask more often than the author intended, so the
+	// command stays usable and the difference is recorded on it.
+	allowed := findSkillKey(t, list, "claude:repo:.claude/commands/allowed.md")
+	if len(allowed.InvocationBlockers) != 0 {
+		t.Errorf("a permission grant should not block the command: %+v", allowed.InvocationBlockers)
+	}
+	if len(allowed.Notes) == 0 || !strings.Contains(strings.Join(allowed.Notes, " "), "allowed-tools") {
+		t.Errorf("the unapplied grant has to be recorded, not dropped: %+v", allowed.Notes)
+	}
+	if got, err := RenderExplicit(allowed, ""); err != nil || got != "body" {
+		t.Errorf("allowed render = %q, %v; want the body", got, err)
+	}
+
+	for _, name := range []string{"model", "hooks", "shell", "injection", "dynamic", "attachment"} {
 		sk := findSkillKey(t, list, "claude:repo:.claude/commands/"+name+".md")
 		if len(sk.InvocationBlockers) == 0 {
 			t.Errorf("%s silently dropped unsupported behavior: %+v", name, sk)
@@ -175,7 +190,7 @@ func TestClaudeCommandsFailClosedOnUnsupportedHostBehavior(t *testing.T) {
 		t.Fatalf("safe command render = %q, %v", got, err)
 	}
 	joined := strings.Join(notes, "\n")
-	for _, want := range []string{"allowed-tools", "model", "hooks", "shell", "shell injection", "dynamic context", "file attachment"} {
+	for _, want := range []string{"model", "hooks", "shell", "shell injection", "dynamic context", "file attachment"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("blocked-command diagnostics missing %q:\n%s", want, joined)
 		}

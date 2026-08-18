@@ -17,6 +17,11 @@ type skillMetadata struct {
 	userInvocable          bool
 	modelBlockers          []string
 	invocationBlockers     []string
+
+	// notes record a native control this build does not apply but which is
+	// safe to leave unapplied. Recorded rather than dropped, because the rule
+	// here is that a host control is never silently discarded.
+	notes []string
 }
 
 type documentParseOptions struct {
@@ -94,9 +99,14 @@ func parseDocumentWithParseOptions(fallbackName, content string, options documen
 		// behavior-bearing YAML. The scalar parser cannot resolve merges, so
 		// conservatively retain the skill as blocked instead of silently
 		// discarding a tool, model, or execution constraint.
-		for _, key := range []string{"allowed-tools", "disallowed-tools", "model", "effort", "context", "agent", "background", "hooks", "shell"} {
+		for _, key := range blockingControls {
 			if yamlHasField(front, key) {
 				meta.invocationBlockers = append(meta.invocationBlockers, fmt.Sprintf("unsupported control %q", key))
+			}
+		}
+		for _, key := range grantingControls {
+			if yamlHasField(front, key) {
+				meta.notes = append(meta.notes, fmt.Sprintf("%s is not applied; its tools are asked for instead", key))
 			}
 		}
 		if !options.ignorePaths && yamlHasField(front, "paths") {
@@ -135,6 +145,7 @@ func parseDocumentWithParseOptions(fallbackName, content string, options documen
 		ArgumentNames:          append([]string(nil), meta.argumentNames...),
 		ModelBlockers:          uniqueSorted(meta.modelBlockers),
 		InvocationBlockers:     uniqueSorted(meta.invocationBlockers),
+		Notes:                  uniqueSorted(meta.notes),
 	}
 	if strings.TrimSpace(sk.Name) == "" || strings.ContainsAny(sk.Name, "\r\n") {
 		return Skill{}, false, fmt.Errorf("has an invalid name; names must be non-empty and stay on one line")
@@ -282,12 +293,29 @@ func parseSkillMetadataWithOptions(fallbackName, front string, options documentP
 			// per-file activation context, so explicit invocation stays safe
 			// while model advertisement fails closed.
 			meta.modelBlockers = append(meta.modelBlockers, "unsupported paths activation control")
-		case "allowed-tools", "disallowed-tools", "model", "effort", "context", "agent", "background", "hooks", "shell":
+		case "allowed-tools":
+			// A permission grant, not a restriction: it pre-approves tools so
+			// the skill's turn is not interrupted. Not applying it can only
+			// ask more often than the author intended, never less, so it is
+			// the one native control whose absence is already the safe state
+			// and the skill stays usable.
+			meta.notes = append(meta.notes, key+" is not applied; its tools are asked for instead")
+		case "disallowed-tools", "model", "effort", "context", "agent", "background", "hooks", "shell":
 			meta.invocationBlockers = append(meta.invocationBlockers, fmt.Sprintf("unsupported control %q", key))
 		}
 	}
 	return meta, nil
 }
+
+// blockingControls are native controls whose absence changes behavior in a
+// direction this build cannot vouch for: a restriction it would not enforce,
+// or an execution shape it does not have.
+var blockingControls = []string{"disallowed-tools", "model", "effort", "context", "agent", "background", "hooks", "shell"}
+
+// grantingControls only widen what a skill may do without being asked. Not
+// applying one is the conservative direction, so it costs a note rather than
+// the skill.
+var grantingControls = []string{"allowed-tools"}
 
 func parseYAMLStringList(lines []string, current int, raw string) ([]string, int, error) {
 	raw = strings.TrimSpace(trimYAMLComment(raw))

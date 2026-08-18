@@ -114,6 +114,11 @@ type Skill struct {
 	// explicit /skill command can load them.
 	InvocationBlockers []string
 
+	// Notes name native controls this build does not apply but which are safe
+	// to leave unapplied. The skill loads and runs; the note exists so the
+	// difference from its authoring host is stated rather than discovered.
+	Notes []string
+
 	// rootDir is the resolved resource root captured at discovery. Dir stays
 	// logical for API/display compatibility, while serving cannot be retargeted
 	// later by swapping a skill-directory symlink.

@@ -123,8 +123,26 @@ func TestLoadRetainsInvocationInventoryAndFailsClosed(t *testing.T) {
 	if len(list) != 7 {
 		t.Fatalf("blocked and manual definitions must remain inspectable: %+v, notes %v", list, notes)
 	}
-	if got := skillKeys(ModelVisible(list)); !slices.Equal(got, []string{"claude:repo:.claude/skills/model-only"}) {
+	// tool-control declares allowed-tools, which grants tool permission
+	// rather than withholding it. Not applying a grant asks more often than
+	// the author intended and never less, so the skill stays usable and
+	// visible; the merged-control skill hides a model override behind a YAML
+	// merge key and stays blocked.
+	if got := skillKeys(ModelVisible(list)); !slices.Equal(got, []string{
+		"claude:repo:.claude/skills/model-only",
+		"claude:repo:.claude/skills/tool-control",
+	}) {
 		t.Fatalf("model-visible inventory = %v", got)
+	}
+	controlled := findSkillKey(t, list, "claude:repo:.claude/skills/tool-control")
+	if len(controlled.InvocationBlockers) != 0 {
+		t.Fatalf("a permission grant blocked the skill: %v", controlled.InvocationBlockers)
+	}
+	if len(controlled.Notes) == 0 {
+		t.Fatal("the unapplied grant has to be recorded rather than dropped")
+	}
+	if got, err := RenderExplicit(controlled, ""); err != nil || got != "Review" {
+		t.Fatalf("tool-control render = %q, %v", got, err)
 	}
 
 	manual := findSkillKey(t, list, "claude:repo:.claude/skills/manual")
@@ -141,7 +159,6 @@ func TestLoadRetainsInvocationInventoryAndFailsClosed(t *testing.T) {
 		t.Fatalf("an explicit invocation should not need automatic path activation: %q, %v", got, err)
 	}
 	for _, key := range []string{
-		"claude:repo:.claude/skills/tool-control",
 		"claude:repo:.claude/skills/merged-control",
 		"claude:repo:.claude/skills/dynamic-body",
 		"codex:repo:.agents/skills/dependency",
