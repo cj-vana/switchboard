@@ -1,13 +1,58 @@
 # Confining commands
 
-How Switchboard confines what the agent runs, how each platform earns the right
-to execute without asking, and what the confinement does not protect against.
+How Switchboard confines commands, how the user selects that confinement, and
+what it does not protect against. The sandbox is off by default.
 
 | Platform | Mechanism | Status |
 |---|---|---|
-| macOS | Seatbelt via `sandbox-exec` | Verified; automatic execution available |
-| Linux | bubblewrap | Verified; automatic execution available |
-| Windows | none | Per-action approval only (§21.7) |
+| macOS | Seatbelt via `sandbox-exec` | Available only after a successful host self-test; opt-in |
+| Linux | bubblewrap | Canonical root-owned binary and parent chain, no group/other or invoking-user write access, plus successful host self-test; opt-in |
+| Windows | none | `on` unavailable; `auto` remains off |
+
+On Windows, `auto` permission mode keeps command execution with the human
+because descendant cleanup is not guaranteed. `yolo` grants full host reach
+but warns that descendant processes may survive cancellation.
+
+Linux accepts only a canonical root-owned `bwrap` whose parent directories are
+also root-owned. The executable and chain must have no group/other write bits
+and must not be writable by the invoking user through effective permissions
+such as ACLs. Resolution follows symlinks first, so a PATH or profile entry is
+accepted only when its resolved regular executable and every resolved parent
+back to `/` meet those rules. A user-owned or user-writable install is
+unavailable. Install bubblewrap through a trusted system package. Switchboard
+revalidates the exact executable identity before each confined command.
+
+## Selecting a posture
+
+Start `sb -sandbox` to require verified confinement for the process. Startup
+fails if the host has no verified profile. During a session:
+
+| Command | Result |
+| --- | --- |
+| `/sandbox on` | Require the verified profile; leave the previous selection unchanged if unavailable |
+| `/sandbox off` | Run approved commands directly on the host |
+| `/sandbox auto` | Use verified confinement when available; otherwise remain visibly host-direct |
+| `/sandbox status` | Report the requested mode, effective confinement, and host reach |
+
+The change is immediate and shared with registries already created for the
+session, including delegated work. `[execution] sandbox = "off|on|auto"` sets
+the startup default. A bare `-sandbox` selects `on` for one process;
+`-sandbox=off|on|auto` supplies another process override. A successful
+interactive change updates the user config. If saving fails, the controller
+keeps the live change and reports that the next launch default was not updated.
+Startup rejects `-mode yolo` when the requested sandbox setting is `on` or
+`auto`; select `-sandbox=off` explicitly when the config requests either.
+
+Permission mode is a separate control. `bypass` suppresses command prompts only
+when verified confinement isolates both host network and host IPC. Both current
+production profiles retain some host IPC, and Seatbelt also shares host
+loopback, so bypass asks on both platforms today. `yolo` forces host-direct
+filesystem and network access while retaining the requested sandbox selection,
+which becomes effective again after leaving `yolo`. Default, acceptEdits, and
+auto modes may approve a command while the sandbox is off; the approval
+identifies the full host reach rather than presenting it as confinement. While
+`yolo` is active, `/sandbox on` and `/sandbox auto` are refused; leave `yolo`
+first.
 
 Every rule on both platforms was arrived at by running it. Where one looks
 redundant it is usually load-bearing in a way that is invisible until it is
@@ -22,7 +67,8 @@ Both platforms implement the same promise. A confined command may:
 - read the workspace, the build caches, and per-user toolchain installs;
 - write inside the workspace, the temp directory, and those build caches;
 - execute other programs, allocate terminals, and fork;
-- bind and connect to loopback addresses.
+- bind and connect to loopback addresses, subject to the platform distinction
+  below.
 
 It may not:
 
@@ -30,7 +76,8 @@ It may not:
 - **read anything else under the home directory**, whether or not anyone
   thought to name it;
 - reach the daemon that hands out credentials, or use the ssh agent;
-- reach the network off the machine unless egress was granted for that command.
+- open a direct non-loopback connection unless egress was granted for that
+  command.
 
 ### Reads follow the risk
 
@@ -66,13 +113,11 @@ policy. That is the trade being made on purpose.
 
 ## Verification
 
-Whether confinement is available is not a constant, a build tag, or a
-configuration flag. `Capability` carries a `*Confinement`, which is produced
-only by a self-test that passes on this machine, and that same value is what
-wraps the command. The two cannot disagree, which is the point: a harness that
-believes it is contained while running commands unconfined is exactly the
-failure design principle 4 exists to prevent. `Run` fails closed when it has a
-confinement it cannot apply.
+Whether confinement is available is not a constant, build tag, or user
+selection. `Capability` carries a `*Confinement`, which is produced only by a
+self-test that passes on this machine. The same value wraps the command. The
+two cannot disagree. `Run` fails closed when it has a confinement it cannot
+apply.
 
 The self-test checks the security-critical direction, that things which must be
 refused are refused, plus enough of the allowed direction to catch a profile
@@ -92,18 +137,48 @@ rather than at startup, since it needs compilers the user may not have.
 
 ## Network
 
-Two levels, because §11 requires egress to be granted separately from filesystem
-access.
+Filesystem access and network egress use separate permission decisions.
 
-`NetworkLoopback` is the default: fixture servers on ephemeral loopback ports
-work, and nothing reaches off the machine. This is not a detail. A test suite
-standing up a local server is the single most common thing an agent runs, and a
-sandbox that breaks it is a sandbox nobody keeps on.
+When verified confinement is active, `NetworkLoopback` is the default so
+fixture servers on ephemeral ports still work. Linux runs the command in a
+private network namespace: only that namespace's loopback is available and it
+has no route off the machine. macOS Seatbelt instead permits the host's
+loopback services. Switchboard strips proxy environment variables before
+launch, but an explicitly used local proxy or forwarder can still reach other
+destinations with that service's authority. Treat host-loopback services on
+macOS as a separate trust boundary, not as proof of off-machine isolation.
 
 `NetworkFull` is requested per command through the `network` field on the `exec`
-tool and always requires the user's approval, even where containment is
-verified. The sandbox governs what a command reads and writes; it cannot judge
-whether sending this workspace to the internet is what the user meant.
+tool. The permission decision includes that request. Default, acceptEdits, and
+bypass modes surface it to the user; auto mode includes it in the bounded model
+review. Plan mode denies it. The sandbox governs what a command reads and
+writes; it cannot judge whether sending this workspace to the internet is what
+the user meant.
+
+Under macOS Seatbelt, an ordinary loopback-only command skips auto review and
+asks the user because it can address an existing host service. An explicit
+full-network request remains eligible for auto review because that broader
+reach is stated in the review packet. Linux direct argv remains eligible. Both
+review packets disclose retained host IPC authority. Shell form, inline
+interpreter code, and sensitive commands always skip model review.
+
+## Host services and IPC
+
+Network namespaces and socket rules do not isolate every host-local IPC path.
+The current Seatbelt and bubblewrap profiles expose some Unix-domain services
+needed by supported toolchains or the host. Tested credential services and SSH
+agent sockets remain blocked, but another reachable daemon acts with its own
+authority outside the filesystem policy.
+
+The execution posture therefore marks host IPC as shared on both platforms.
+Auto review receives that fact in its bounded packet. Bypass cannot suppress a
+human prompt until a verified profile isolates both host-local networking and
+IPC.
+
+With the sandbox off, or while `yolo` is active, a command has the host's normal
+network reach regardless of the `network` hint. The permission decision marks
+that full reach explicitly because loopback-only networking cannot be enforced
+without containment.
 
 Neither platform can filter by hostname, so there is no middle ground between
 loopback and open egress. Do not add a per-domain option; it would not be
@@ -141,10 +216,8 @@ and re-run the keychain assertion.
 
 `sandbox-exec` has carried a deprecation warning in the headers since 10.8. It
 emits nothing at runtime and remains what Apple's own software and Chromium use.
-The posture is to depend on it and keep per-action approval as the
-always-available path, which is already how every unverified host behaves. If
-Apple removes it, macOS degrades to the Windows plan-and-approve model with no
-code path rewritten.
+If Apple removes it, the self-test leaves capability unavailable: `on` fails,
+`auto` remains host-direct, and the permission engine still governs commands.
 
 ## Linux
 
@@ -222,8 +295,9 @@ A confined command can write anywhere in it, including files another process may
 later read.
 
 **Nothing here confines the model.** The sandbox constrains commands. It does
-not constrain what the agent reads into context and sends to a provider, which
-is the destination policy's job (§16, principle 6).
+not constrain what the agent reads into context and sends to a provider. The
+outbound policy and credential gate cover that separate boundary; see
+[Security](security.md#outbound-secret-checks).
 
 ## Adding a toolchain
 

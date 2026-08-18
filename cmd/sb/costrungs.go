@@ -17,10 +17,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // costRungsLines renders the counterfactual table. Each rung prices every
@@ -90,7 +90,7 @@ func rungWord(cat *catalog.Catalog, t config.Tier, usages []session.Usage) strin
 		if !ok {
 			return "no price — a recorded call is outside this rung's price bands"
 		}
-		total += cost
+		total = addMoney(total, cost)
 	}
 	return total.String()
 }
@@ -100,7 +100,7 @@ func rungWord(cat *catalog.Catalog, t config.Tier, usages []session.Usage) strin
 // been sent cold.
 func coldUsage(u session.Usage) provider.Usage {
 	return provider.Usage{
-		InputTokens:  u.Usage.InputTokens + u.Usage.CacheReadTokens + u.Usage.CacheWriteTokens,
+		InputTokens:  u.Usage.TotalInputTokens(),
 		OutputTokens: u.Usage.OutputTokens,
 	}
 }
@@ -132,7 +132,7 @@ func asRoutedLine(cat *catalog.Catalog, usages []session.Usage) string {
 			unpriced++
 		default:
 			priced++
-			dollars += catalog.Money(u.CostMicroUSD)
+			dollars = addMoney(dollars, catalog.Money(u.CostMicroUSD))
 		}
 	}
 

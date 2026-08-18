@@ -15,7 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/credential"
 )
 
 // openSecretGate holds an outbound prompt behind the pick. proceed carries
@@ -23,7 +23,13 @@ import (
 // one chokepoint whatever surface the prompt was headed for. The findings
 // render as kind and prefix only; a dialog quoting the key would be the
 // gate committing the leak it exists to stop.
-func (m *tuiModel) openSecretGate(leaks []credential.Leak, prompt string, proceed func(string) tea.Cmd) tea.Cmd {
+func (m *tuiModel) openSecretGate(leaks []credential.Leak, prompt string, proceed func(string) tea.Cmd, onDrop ...func() tea.Cmd) tea.Cmd {
+	drop := func() tea.Cmd {
+		if len(onDrop) > 0 && onDrop[0] != nil {
+			return onDrop[0]()
+		}
+		return nil
+	}
 	found := make([]string, len(leaks))
 	for i, l := range leaks {
 		found[i] = l.String()
@@ -43,8 +49,9 @@ func (m *tuiModel) openSecretGate(leaks []credential.Leak, prompt string, procee
 				return proceed(prompt)
 			}
 			m.addNotice("", "not sent; the prompt was dropped before anything left this machine")
-			return nil
+			return drop()
 		},
+		onCancel: drop,
 	}
 	return nil
 }

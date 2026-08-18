@@ -1,0 +1,262 @@
+{
+  "servers": [
+    {
+      "id": "claude:claude-shared",
+      "name": "claude-shared",
+      "provenance": {
+        "dialect": "claude",
+        "scope": "local",
+        "source": "claude-local-config",
+        "path": "$ROOT/home/.claude.json",
+        "real_path": "$ROOT/home/.claude.json",
+        "config_key": "projects.$WORKSPACE.mcpServers.claude-shared"
+      },
+      "execution_trust_required": true,
+      "trust_root": "$WORKSPACE",
+      "supported": true,
+      "enabled": true,
+      "transport": "stdio",
+      "command": "\u003cnative MCP value redacted\u003e",
+      "args": [
+        "\u003cnative MCP value redacted\u003e"
+      ],
+      "args_set": true,
+      "env": {
+        "TOKEN": "\u003cnative MCP value redacted\u003e"
+      },
+      "env_set": true,
+      "timeouts": {},
+      "tools": {},
+      "approvals": {}
+    },
+    {
+      "id": "claude:shared",
+      "name": "shared",
+      "provenance": {
+        "dialect": "claude",
+        "scope": "project",
+        "source": "claude-project-config",
+        "path": "$WORKSPACE/.mcp.json",
+        "real_path": "$WORKSPACE/.mcp.json",
+        "config_key": "mcpServers.shared"
+      },
+      "execution_trust_required": true,
+      "trust_root": "$WORKSPACE",
+      "supported": true,
+      "enabled": true,
+      "transport": "http",
+      "url": "\u003cnative MCP value redacted\u003e",
+      "headers": {
+        "Authorization": "\u003cnative MCP value redacted\u003e"
+      },
+      "headers_set": true,
+      "timeouts": {},
+      "tools": {},
+      "approvals": {}
+    },
+    {
+      "id": "claude:unsupported",
+      "name": "unsupported",
+      "provenance": {
+        "dialect": "claude",
+        "scope": "project",
+        "source": "claude-project-config",
+        "path": "$WORKSPACE/.mcp.json",
+        "real_path": "$WORKSPACE/.mcp.json",
+        "config_key": "mcpServers.unsupported"
+      },
+      "execution_trust_required": true,
+      "trust_root": "$WORKSPACE",
+      "supported": false,
+      "enabled": true,
+      "transport": "stdio",
+      "command": "\u003cnative MCP value redacted\u003e",
+      "claude_oauth": {
+        "client_id": "\u003cnative MCP value redacted\u003e"
+      },
+      "timeouts": {},
+      "tools": {},
+      "approvals": {}
+    },
+    {
+      "id": "claude:user-only",
+      "name": "user-only",
+      "provenance": {
+        "dialect": "claude",
+        "scope": "user",
+        "source": "claude-user-config",
+        "path": "$ROOT/home/.claude.json",
+        "real_path": "$ROOT/home/.claude.json",
+        "config_key": "mcpServers.user-only"
+      },
+      "execution_trust_required": false,
+      "supported": true,
+      "enabled": true,
+      "transport": "stdio",
+      "command": "\u003cnative MCP value redacted\u003e",
+      "env": {
+        "TOKEN": "\u003cnative MCP value redacted\u003e"
+      },
+      "env_set": true,
+      "timeouts": {},
+      "tools": {},
+      "approvals": {}
+    },
+    {
+      "id": "codex:remote",
+      "name": "remote",
+      "provenance": {
+        "dialect": "codex",
+        "scope": "user",
+        "source": "codex-user-config",
+        "path": "$ROOT/home/.codex/config.toml",
+        "real_path": "$ROOT/home/.codex/config.toml",
+        "config_key": "mcp_servers.remote",
+        "contributing_layers": [
+          {
+            "scope": "user",
+            "source": "codex-user-config",
+            "path": "$ROOT/home/.codex/config.toml",
+            "real_path": "$ROOT/home/.codex/config.toml"
+          }
+        ]
+      },
+      "execution_trust_required": false,
+      "supported": true,
+      "enabled": true,
+      "required": true,
+      "required_set": true,
+      "transport": "http",
+      "environment_id": "local",
+      "url": "\u003cnative MCP value redacted\u003e",
+      "headers": {
+        "X_API_Key": "\u003cnative MCP value redacted\u003e"
+      },
+      "headers_set": true,
+      "header_env": {
+        "Authorization": "REMOTE_AUTH"
+      },
+      "header_env_set": true,
+      "bearer_token_env_var": "BEARER_TOKEN",
+      "bearer_token_env_var_set": true,
+      "auth": "oauth",
+      "auth_defaulted": true,
+      "timeouts": {
+        "tool_seconds": 60,
+        "tool_set": true
+      },
+      "tools": {},
+      "approvals": {}
+    },
+    {
+      "id": "codex:shared",
+      "name": "shared",
+      "provenance": {
+        "dialect": "codex",
+        "scope": "project",
+        "source": "codex-project-config",
+        "path": "$WORKSPACE/.codex/config.toml",
+        "real_path": "$WORKSPACE/.codex/config.toml",
+        "config_key": "mcp_servers.shared",
+        "contributing_layers": [
+          {
+            "scope": "user",
+            "source": "codex-user-config",
+            "path": "$ROOT/home/.codex/config.toml",
+            "real_path": "$ROOT/home/.codex/config.toml"
+          },
+          {
+            "scope": "project",
+            "source": "codex-project-config",
+            "path": "$WORKSPACE/.codex/config.toml",
+            "real_path": "$WORKSPACE/.codex/config.toml"
+          }
+        ]
+      },
+      "execution_trust_required": true,
+      "trust_root": "$WORKSPACE",
+      "supported": true,
+      "enabled": false,
+      "enabled_set": true,
+      "transport": "stdio",
+      "environment_id": "local",
+      "command": "\u003cnative MCP value redacted\u003e",
+      "args": [
+        "\u003cnative MCP value redacted\u003e"
+      ],
+      "args_set": true,
+      "cwd": "\u003cnative MCP value redacted\u003e",
+      "env": {
+        "PROJECT_TOKEN": "\u003cnative MCP value redacted\u003e",
+        "USER_TOKEN": "\u003cnative MCP value redacted\u003e"
+      },
+      "env_set": true,
+      "auth": "oauth",
+      "auth_defaulted": true,
+      "timeouts": {
+        "startup_seconds": 5,
+        "startup_set": true
+      },
+      "tools": {
+        "enabled": [
+          "read"
+        ],
+        "disabled": [
+          "write"
+        ],
+        "enabled_set": true,
+        "disabled_set": true
+      },
+      "approvals": {}
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "codex-layer-stack-unavailable",
+      "path": "codex-effective-config",
+      "message": "direct Codex entries are inventory-only until the authoritative effective layer stack is available"
+    },
+    {
+      "severity": "error",
+      "code": "mixed-transport-fields",
+      "path": "$WORKSPACE/.mcp.json",
+      "entry": "unsupported",
+      "message": "stdio entry also declares HTTP-only fields"
+    },
+    {
+      "severity": "warning",
+      "code": "cross-dialect-name-collision",
+      "entry": "shared",
+      "message": "Codex and Claude declarations share a name; IDs remain dialect-qualified"
+    },
+    {
+      "severity": "warning",
+      "code": "entry-shadowed",
+      "path": "$ROOT/home/.claude.json",
+      "entry": "claude-shared",
+      "message": "whole entry is replaced by the higher-precedence local scope declaration"
+    },
+    {
+      "severity": "warning",
+      "code": "entry-shadowed",
+      "path": "$WORKSPACE/.mcp.json",
+      "entry": "claude-shared",
+      "message": "whole entry is replaced by the higher-precedence local scope declaration"
+    },
+    {
+      "severity": "warning",
+      "code": "foreign-trust-state-ignored",
+      "path": "$ROOT/home/.claude.json",
+      "message": "Claude project trust and remembered server enablement are not imported"
+    }
+  ],
+  "quarantines": [
+    {
+      "dialect": "codex",
+      "precedence": 1073741824,
+      "path": "codex-effective-config",
+      "code": "codex-layer-stack-unavailable"
+    }
+  ]
+}

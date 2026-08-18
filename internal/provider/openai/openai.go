@@ -12,9 +12,9 @@
 package openai
 
 import (
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/provider/openaicompat"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
 const Name = "openai"

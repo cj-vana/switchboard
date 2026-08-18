@@ -27,9 +27,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/watch"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/watch"
 )
 
 // watchInjectLines caps how many new failing lines ride to the model. The
@@ -149,7 +149,7 @@ func (ws *watchState) takeFold() []string {
 // all — must be able to tell a turn's opening from what rode in mid-turn.
 func (a *tuiApp) inject() []provider.Message {
 	var out []provider.Message
-	if adv := a.advisor; adv != nil {
+	if adv := a.currentAdvisor(); adv != nil {
 		out = append(out, adv.Drain()...)
 	}
 	out = append(out, a.watchRound()...)
@@ -177,7 +177,7 @@ func (a *tuiApp) watchRound() []provider.Message {
 		a.p.Send(watchReportMsg{command: w.Command(), rep: rep})
 	}
 	if a.watcher != nil && len(rep.Signatures) > 0 {
-		a.watcher.VerifierFailures(rep.Signatures)
+		a.watcher.VerifierFailures(ctx, rep.Signatures)
 	}
 	if text := watchInjectText(w.Command(), rep); text != "" {
 		return []provider.Message{provider.UserText(text)}

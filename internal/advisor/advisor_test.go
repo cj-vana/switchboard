@@ -2,15 +2,18 @@ package advisor
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // scriptedProvider answers every consult with a fixed text, and records what
@@ -60,6 +63,55 @@ func (s *scriptedStream) Next() (provider.Event, error) {
 }
 func (s *scriptedStream) Close() error { return nil }
 
+type blockingProvider struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingProvider) Name() string { return "blocking" }
+func (p *blockingProvider) Stream(context.Context, provider.RouteTarget, provider.Request) (provider.EventStream, error) {
+	close(p.entered)
+	<-p.release
+	return &scriptedStream{events: []provider.Event{
+		{Type: provider.EventTextDelta, Text: "advice"},
+		{Type: provider.EventDone},
+	}}, nil
+}
+func (p *blockingProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+func (p *blockingProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{}, nil
+}
+
+type meterOrderProvider struct {
+	beforeStream func() error
+	usage        provider.Usage
+	streamErr    error
+}
+
+func (p *meterOrderProvider) Name() string { return "meter-order" }
+func (p *meterOrderProvider) Stream(context.Context, provider.RouteTarget, provider.Request) (provider.EventStream, error) {
+	if p.beforeStream != nil {
+		if err := p.beforeStream(); err != nil {
+			return nil, err
+		}
+	}
+	if p.streamErr != nil {
+		return nil, p.streamErr
+	}
+	return &scriptedStream{events: []provider.Event{
+		{Type: provider.EventTextDelta, Text: "use the focused test"},
+		{Type: provider.EventDone, Usage: p.usage},
+	}}, nil
+}
+func (p *meterOrderProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+func (p *meterOrderProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{}, nil
+}
+
 func target() provider.RouteTarget {
 	return provider.RouteTarget{Provider: "scripted", Surface: "test", ModelID: "adv"}
 }
@@ -68,9 +120,10 @@ func target() provider.RouteTarget {
 // loop trigger fires.
 func repeatCall(a *Advisor, times int) {
 	req := permission.Request{Tool: "exec", Argv: []string{"go", "test", "./..."}}
-	for range times {
-		a.ToolStart("exec", req)
-		a.ToolEnd("exec", tools.Result{Content: "FAIL: TestX (0.01s)", IsError: true}, time.Second)
+	for i := range times {
+		call := provider.ToolUse{ID: fmt.Sprintf("call-%d", i), Name: "exec", Input: json.RawMessage(`{"argv":["go","test","./..."]}`)}
+		a.ToolStart(call, req)
+		a.ToolEnd(call, req, tools.Result{Content: "FAIL: TestX (0.01s)", IsError: true}, time.Second)
 	}
 }
 
@@ -153,5 +206,100 @@ func TestNoneMeansSilence(t *testing.T) {
 	}
 	if a.Drain() != nil {
 		t.Fatal("NONE queued an injection anyway")
+	}
+}
+
+func TestPauseWaitsForInflightConsultBeforeSessionSnapshot(t *testing.T) {
+	p := &blockingProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	a := New(agent.NopObserver{}, p, target(), nil, WithBounds(2, time.Nanosecond))
+	a.StartTurn("task")
+	a.maybeConsult("failure spike")
+	select {
+	case <-p.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("advisor provider call did not start")
+	}
+
+	waited := make(chan error, 1)
+	go func() { waited <- a.PauseAndWait(context.Background()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("PauseAndWait returned before admitted consult settled: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(p.release)
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("PauseAndWait did not unblock after consult settled")
+	}
+
+	// While paused, even a fresh trigger cannot enter a provider call.
+	a.mu.Lock()
+	a.lastConsult = time.Time{}
+	a.mu.Unlock()
+	a.maybeConsult("another failure")
+	time.Sleep(30 * time.Millisecond)
+	a.mu.Lock()
+	inflight := a.inflight
+	a.mu.Unlock()
+	if inflight {
+		t.Fatal("paused advisor admitted a new consult")
+	}
+	a.Resume()
+}
+
+func TestConsultMetersBeforeProviderAndSettlesDoneUsage(t *testing.T) {
+	began := false
+	settled := false
+	wantUsage := provider.Usage{InputTokens: 12, OutputTokens: 3}
+	p := &meterOrderProvider{
+		usage: wantUsage,
+		beforeStream: func() error {
+			if !began {
+				return errors.New("provider reached before meter admission")
+			}
+			return nil
+		},
+	}
+	a := New(agent.NopObserver{}, p, target(), nil, WithMeter(func(provider.Request) (AttemptFinish, error) {
+		began = true
+		return func(got provider.Usage, err error) error {
+			if err != nil {
+				t.Fatalf("successful consult settled with error: %v", err)
+			}
+			if got != wantUsage {
+				t.Fatalf("settled usage = %+v, want %+v", got, wantUsage)
+			}
+			settled = true
+			return nil
+		}, nil
+	}))
+	if _, err := a.consult(context.Background(), "task", "evidence", "trigger"); err != nil {
+		t.Fatal(err)
+	}
+	if !settled {
+		t.Fatal("advisor did not settle EventDone usage")
+	}
+}
+
+func TestConsultSettlesProviderFailureConservatively(t *testing.T) {
+	wantErr := errors.New("provider unavailable")
+	p := &meterOrderProvider{streamErr: wantErr}
+	var settledErr error
+	a := New(agent.NopObserver{}, p, target(), nil, WithMeter(func(provider.Request) (AttemptFinish, error) {
+		return func(_ provider.Usage, err error) error {
+			settledErr = err
+			return nil
+		}, nil
+	}))
+	if _, err := a.consult(context.Background(), "task", "evidence", "trigger"); !errors.Is(err, wantErr) {
+		t.Fatalf("consult err = %v, want provider failure", err)
+	}
+	if !errors.Is(settledErr, wantErr) {
+		t.Fatalf("meter settlement err = %v, want provider failure", settledErr)
 	}
 }

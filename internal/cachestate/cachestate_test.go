@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 const target provider.RouteTargetID = "anthropic/first-party/claude-haiku-4-5"

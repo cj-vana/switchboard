@@ -22,7 +22,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/config"
 )
 
 // Update machinery (§18). The check names nothing but the running version and
@@ -41,7 +41,7 @@ var (
 	version = "dev"
 
 	// updateRepo is the GitHub owner/repo releases are fetched from.
-	updateRepo = "cj-vana/switchboard"
+	updateRepo = "switchboard-code/switchboard"
 )
 
 // currentVersion is the release version, or "" for a dev build, which has

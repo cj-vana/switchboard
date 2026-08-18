@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
 
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/watch"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/watch"
 )
 
 func TestWatchCommandArmsReportsAndDisarms(t *testing.T) {

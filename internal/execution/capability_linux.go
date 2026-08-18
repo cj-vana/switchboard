@@ -1,10 +1,18 @@
 package execution
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // Linux confinement is a namespace construction rather than a policy language.
@@ -32,18 +40,260 @@ func detectPlatform() Capability {
 		}
 	}
 	c.MechanismPresent = true
-	bwrapPath = path
+	bwrap, err := resolveBubblewrapExecutable(path, string(filepath.Separator), 0, true)
+	if err != nil {
+		c.Detail = fmt.Sprintf("bubblewrap at %q is not a trusted system executable: %v", path, err)
+		return c
+	}
 
-	verified, detail := cachedVerification(linuxProfileKey(), linuxHostKey(), linuxSelfTest)
+	profileKey, err := linuxProfileKey(bwrap)
+	if err != nil {
+		c.Detail = fmt.Sprintf("bubblewrap changed while its sandbox profile was being prepared: %v", err)
+		return c
+	}
+	verified, detail := cachedVerification(profileKey, linuxHostKey(), func() (bool, string) {
+		return linuxSelfTest(bwrap.wrap)
+	})
 	c.Detail = detail
 	if verified {
-		c.confinement = &Confinement{mechanism: MechanismBubblewrap, wrap: wrapBubblewrap}
+		c.confinement = &Confinement{mechanism: MechanismBubblewrap, wrap: bwrap.wrap}
 	}
 	return c
 }
 
-// bwrapPath is resolved once by detectPlatform. Tests set it directly.
-var bwrapPath = "bwrap"
+// executableIdentity pins a verified sandbox profile to the exact executable
+// that passed it. Path alone is not identity: package upgrades and hostile
+// replacement both leave the same name behind.
+type executableIdentity struct {
+	Device      uint64
+	Inode       uint64
+	Size        int64
+	Mode        uint32
+	UID         uint32
+	GID         uint32
+	ModTimeNano int64
+	Digest      [sha256.Size]byte
+}
+
+func (id executableIdentity) key() string {
+	return shortHash(fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d:%s",
+		id.Device, id.Inode, id.Size, id.Mode, id.UID, id.GID,
+		id.ModTimeNano, hex.EncodeToString(id.Digest[:])))
+}
+
+// bubblewrapExecutable is immutable provenance captured before the sandbox
+// self-test. Its wrapper rechecks that provenance before every command, so a
+// cached verification cannot bless a replacement executable.
+type bubblewrapExecutable struct {
+	path       string
+	trustRoot  string
+	trustedUID uint32
+	// rejectCurrentUserWrite closes POSIX ACLs and other permissions that are
+	// not represented by the group/other mode bits. It is true in production;
+	// tests turn it off only for fixtures owned by the test process.
+	rejectCurrentUserWrite bool
+	identity               executableIdentity
+}
+
+// resolveBubblewrapExecutable canonicalizes a candidate and accepts it only
+// when it and every directory back to trustRoot are owned by trustedUID and
+// cannot be modified by group or other users. Production uses / and uid 0;
+// the explicit root and uid make the same checks deterministic in unit tests.
+func resolveBubblewrapExecutable(candidate, trustRoot string, trustedUID uint32, rejectCurrentUserWrite bool) (bubblewrapExecutable, error) {
+	resolvedRoot, err := canonicalAbsolutePath(trustRoot)
+	if err != nil {
+		return bubblewrapExecutable{}, fmt.Errorf("resolving trust root: %w", err)
+	}
+	resolved, err := canonicalAbsolutePath(candidate)
+	if err != nil {
+		return bubblewrapExecutable{}, fmt.Errorf("resolving executable: %w", err)
+	}
+	if !pathWithin(resolvedRoot, resolved) {
+		return bubblewrapExecutable{}, fmt.Errorf("resolved path %q is outside trusted root %q", resolved, resolvedRoot)
+	}
+	if err := validateTrustedDirectoryChain(filepath.Dir(resolved), resolvedRoot, trustedUID, rejectCurrentUserWrite); err != nil {
+		return bubblewrapExecutable{}, err
+	}
+	identity, err := readTrustedExecutableIdentity(resolved, trustedUID, rejectCurrentUserWrite)
+	if err != nil {
+		return bubblewrapExecutable{}, err
+	}
+	return bubblewrapExecutable{
+		path:                   resolved,
+		trustRoot:              resolvedRoot,
+		trustedUID:             trustedUID,
+		rejectCurrentUserWrite: rejectCurrentUserWrite,
+		identity:               identity,
+	}, nil
+}
+
+func canonicalAbsolutePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func validateTrustedDirectoryChain(dir, root string, trustedUID uint32, rejectCurrentUserWrite bool) error {
+	if !pathWithin(root, dir) {
+		return fmt.Errorf("executable directory %q is outside trusted root %q", dir, root)
+	}
+	for {
+		info, err := os.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("inspecting executable parent %q: %w", dir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("executable parent %q is not a directory", dir)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("cannot verify ownership of executable parent %q", dir)
+		}
+		if stat.Uid != trustedUID {
+			return fmt.Errorf("executable parent %q is owned by uid %d, want trusted uid %d", dir, stat.Uid, trustedUID)
+		}
+		if info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("executable parent %q is group- or other-writable (%#o)", dir, info.Mode().Perm())
+		}
+		if rejectCurrentUserWrite {
+			if err := rejectWritableByCurrentUser(dir, "executable parent"); err != nil {
+				return err
+			}
+		}
+		if dir == root {
+			return nil
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			return fmt.Errorf("executable parent chain did not reach trusted root %q", root)
+		}
+		dir = next
+	}
+}
+
+func readTrustedExecutableIdentity(path string, trustedUID uint32, rejectCurrentUserWrite bool) (executableIdentity, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return executableIdentity{}, fmt.Errorf("opening bubblewrap executable: %w", err)
+	}
+	defer f.Close()
+
+	before, err := f.Stat()
+	if err != nil {
+		return executableIdentity{}, fmt.Errorf("inspecting bubblewrap executable: %w", err)
+	}
+	identity, err := identityFromFileInfo(before, trustedUID)
+	if err != nil {
+		return executableIdentity{}, err
+	}
+	if rejectCurrentUserWrite {
+		if err := rejectWritableByCurrentUser(path, "bubblewrap executable"); err != nil {
+			return executableIdentity{}, err
+		}
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return executableIdentity{}, fmt.Errorf("hashing bubblewrap executable: %w", err)
+	}
+	copy(identity.Digest[:], hash.Sum(nil))
+
+	after, err := f.Stat()
+	if err != nil {
+		return executableIdentity{}, fmt.Errorf("rechecking bubblewrap executable: %w", err)
+	}
+	afterIdentity, err := identityFromFileInfo(after, trustedUID)
+	if err != nil {
+		return executableIdentity{}, err
+	}
+	// Ignore Digest here: the second snapshot exists to catch a file changing
+	// while its digest was being read.
+	identityWithoutDigest := identity
+	identityWithoutDigest.Digest = [sha256.Size]byte{}
+	if identityWithoutDigest != afterIdentity {
+		return executableIdentity{}, errors.New("bubblewrap executable changed while its identity was being read")
+	}
+	return identity, nil
+}
+
+func rejectWritableByCurrentUser(path, kind string) error {
+	// access(2) asks the kernel, including POSIX ACL evaluation, rather than
+	// reconstructing access from mode bits. Check effective access as well so
+	// file capabilities cannot make a path writable behind the real-id check.
+	// A set-id Switchboard process is outside this trust model and fails closed:
+	// old kernels emulate AT_EACCESS in userspace and cannot faithfully account
+	// for every ACL in that case.
+	if os.Getuid() != os.Geteuid() || os.Getgid() != os.Getegid() {
+		return fmt.Errorf("cannot trust %s %q while process credentials differ", kind, path)
+	}
+	checks := []error{
+		unix.Access(path, unix.W_OK),
+		unix.Faccessat(unix.AT_FDCWD, path, unix.W_OK, unix.AT_EACCESS),
+	}
+	for _, err := range checks {
+		if err == nil {
+			return fmt.Errorf("%s %q is writable by the current user", kind, path)
+		}
+		// EACCES is the proof being sought. A read-only filesystem can instead
+		// report EROFS, which is at least as strong for this replacement threat.
+		if !errors.Is(err, unix.EACCES) && !errors.Is(err, unix.EROFS) {
+			return fmt.Errorf("cannot verify that the current user cannot write %s %q: %w", kind, path, err)
+		}
+	}
+	return nil
+}
+
+func identityFromFileInfo(info os.FileInfo, trustedUID uint32) (executableIdentity, error) {
+	if !info.Mode().IsRegular() {
+		return executableIdentity{}, errors.New("bubblewrap executable is not a regular file")
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return executableIdentity{}, errors.New("bubblewrap executable has no execute bit")
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return executableIdentity{}, fmt.Errorf("bubblewrap executable is group- or other-writable (%#o)", info.Mode().Perm())
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return executableIdentity{}, errors.New("cannot verify ownership of bubblewrap executable")
+	}
+	if stat.Uid != trustedUID {
+		return executableIdentity{}, fmt.Errorf("bubblewrap executable is owned by uid %d, want trusted uid %d", stat.Uid, trustedUID)
+	}
+	return executableIdentity{
+		Device:      uint64(stat.Dev),
+		Inode:       stat.Ino,
+		Size:        info.Size(),
+		Mode:        stat.Mode,
+		UID:         stat.Uid,
+		GID:         stat.Gid,
+		ModTimeNano: info.ModTime().UnixNano(),
+	}, nil
+}
+
+func (b bubblewrapExecutable) revalidate() error {
+	current, err := resolveBubblewrapExecutable(b.path, b.trustRoot, b.trustedUID, b.rejectCurrentUserWrite)
+	if err != nil {
+		return fmt.Errorf("bubblewrap executable is no longer trusted: %w", err)
+	}
+	if current.path != b.path || current.identity != b.identity {
+		return errors.New("bubblewrap executable changed after sandbox verification")
+	}
+	return nil
+}
+
+func (b bubblewrapExecutable) wrap(p Policy, argv []string) ([]string, error) {
+	if err := b.revalidate(); err != nil {
+		return nil, err
+	}
+	return wrapBubblewrap(b.path, p, argv)
+}
 
 // writableCaches are build caches granted so a second build is not cold. The
 // list holds what has actually been exercised under confinement; extending it
@@ -60,7 +310,7 @@ var writableCaches = []string{
 	filepath.Join("go", "pkg", "mod"),
 }
 
-func wrapBubblewrap(p Policy, argv []string) ([]string, error) {
+func wrapBubblewrap(executable string, p Policy, argv []string) ([]string, error) {
 	workspace, err := filepath.EvalSymlinks(p.Workspace)
 	if err != nil {
 		return nil, err
@@ -78,7 +328,7 @@ func wrapBubblewrap(p Policy, argv []string) ([]string, error) {
 	}
 
 	out := []string{
-		bwrapPath,
+		executable,
 		"--ro-bind", "/", "/",
 		"--dev", "/dev",
 		"--proc", "/proc",
@@ -161,6 +411,11 @@ func wrapBubblewrap(p Policy, argv []string) ([]string, error) {
 		"--new-session",
 	)
 
+	// End bubblewrap's option parsing before appending model-controlled argv.
+	// Without this, an option-looking executable name such as --bind is parsed
+	// as another sandbox rule instead of a command, which can alter the mount
+	// profile that just passed verification.
+	out = append(out, "--")
 	return append(out, argv...), nil
 }
 
@@ -220,17 +475,18 @@ func sessionBusFlags() []string {
 	return flags
 }
 
-// linuxProfileKey changes whenever the constructed argument list changes, so a
-// cached pass cannot survive an edit to the confinement.
-func linuxProfileKey() string {
-	sample, err := wrapBubblewrap(
+// linuxProfileKey changes whenever the constructed argument list or executable
+// identity changes, so a cached pass cannot survive a profile edit or a
+// bubblewrap package replacement.
+func linuxProfileKey(bwrap bubblewrapExecutable) (string, error) {
+	sample, err := bwrap.wrap(
 		Policy{Workspace: os.TempDir(), Network: NetworkLoopback},
 		[]string{"/probe"},
 	)
 	if err != nil {
-		return "unbuildable"
+		return "", err
 	}
-	return shortHash(strings.Join(sample, "\x00"))
+	return shortHash(strings.Join(sample, "\x00") + "\x00executable-identity=" + bwrap.identity.key()), nil
 }
 
 // linuxHostKey pins the verdict to this kernel. Namespace and seccomp behavior

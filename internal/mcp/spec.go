@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -16,11 +18,25 @@ import (
 const SpecFileName = "mcp.toml"
 
 type specEntry struct {
-	Command string            `toml:"command"`
-	Args    []string          `toml:"args"`
-	Env     map[string]string `toml:"env"`
-	URL     string            `toml:"url"`
-	Allow   []string          `toml:"allow"`
+	Command       string            `toml:"command"`
+	Args          []string          `toml:"args"`
+	Env           map[string]string `toml:"env"`
+	CWD           string            `toml:"cwd"`
+	RestrictedEnv bool              `toml:"restricted_env"`
+	InheritEnv    []string          `toml:"inherit_env"`
+
+	URL               string            `toml:"url"`
+	Headers           map[string]string `toml:"headers"`
+	HeaderEnv         map[string]string `toml:"header_env"`
+	BearerTokenEnvVar string            `toml:"bearer_token_env"`
+
+	StartupTimeoutSeconds float64 `toml:"startup_timeout_seconds"`
+	ToolTimeoutSeconds    float64 `toml:"tool_timeout_seconds"`
+
+	EnabledTools  []string `toml:"enabled_tools"`
+	DisabledTools []string `toml:"disabled_tools"`
+	Required      bool     `toml:"required"`
+	Allow         []string `toml:"allow"`
 }
 
 // LoadSpecs reads one server file. A missing file is an empty list, not an
@@ -29,7 +45,8 @@ func LoadSpecs(path string) ([]Spec, error) {
 	var file struct {
 		MCP map[string]specEntry `toml:"mcp"`
 	}
-	if _, err := toml.DecodeFile(path, &file); err != nil {
+	metadata, err := toml.DecodeFile(path, &file)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -45,13 +62,34 @@ func LoadSpecs(path string) ([]Spec, error) {
 	specs := make([]Spec, 0, len(names))
 	for _, name := range names {
 		e := file.MCP[name]
+		startupTimeout, err := secondsDuration(e.StartupTimeoutSeconds)
+		if err != nil {
+			return nil, fmt.Errorf("%s: mcp server %s: invalid startup timeout", path, name)
+		}
+		toolTimeout, err := secondsDuration(e.ToolTimeoutSeconds)
+		if err != nil {
+			return nil, fmt.Errorf("%s: mcp server %s: invalid tool timeout", path, name)
+		}
 		s := Spec{
-			Name:    name,
-			Command: e.Command,
-			Args:    e.Args,
-			Env:     e.Env,
-			URL:     e.URL,
-			Allow:   e.Allow,
+			Name:              name,
+			Command:           e.Command,
+			Args:              e.Args,
+			Env:               e.Env,
+			CWD:               e.CWD,
+			RestrictedEnv:     e.RestrictedEnv,
+			InheritEnv:        e.InheritEnv,
+			URL:               e.URL,
+			Headers:           e.Headers,
+			HeaderEnv:         e.HeaderEnv,
+			BearerTokenEnvVar: e.BearerTokenEnvVar,
+			StartupTimeout:    startupTimeout,
+			ToolTimeout:       toolTimeout,
+			EnabledTools:      e.EnabledTools,
+			EnabledToolsSet:   metadata.IsDefined("mcp", name, "enabled_tools"),
+			DisabledTools:     e.DisabledTools,
+			DisabledToolsSet:  metadata.IsDefined("mcp", name, "disabled_tools"),
+			Required:          e.Required,
+			Allow:             e.Allow,
 		}
 		if err := s.validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -59,4 +97,11 @@ func LoadSpecs(path string) ([]Spec, error) {
 		specs = append(specs, s)
 	}
 	return specs, nil
+}
+
+func secondsDuration(seconds float64) (time.Duration, error) {
+	if seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds > float64(math.MaxInt64)/float64(time.Second) {
+		return 0, fmt.Errorf("invalid duration")
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
 }

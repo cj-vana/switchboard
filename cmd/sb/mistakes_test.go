@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // appendFailingRun records one exec test run that failed, the shape the loop

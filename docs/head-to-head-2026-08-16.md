@@ -8,7 +8,7 @@ per attempt.
 
 ## What ran
 
-The deterministic one-task-per-package cut of the tier-1 corpus —
+The deterministic one-task-per-package cut of the tier-1 corpus contains
 eleven seeded single-defect tasks in this repository, fixed in corpus
 order before any tool ran (`internal/eval/bench_test.go`). Each tool ran
 headless, one attempt per task, hard-killed at 540 seconds, in its own
@@ -16,8 +16,12 @@ fresh materialisation, in the non-interactive posture its documentation
 recommends for edit-and-run-tests work:
 
 - **switchboard**, this tree's HEAD: `sb -p "<prompt>" -mode bypass
-  -output json` — exec confined by the verified seatbelt sandbox, the
-  ladder as this machine configures it (t1 qwen3.5:9b local, t2
+  -output json`. Exec was confined by the verified Seatbelt sandbox. That build
+  activated verified confinement automatically. Current builds start with
+  confinement off, and both production profiles retain host IPC authority that
+  keeps bypass approval with the human. The historical prompt-free posture is
+  therefore not directly replayable. The ladder used this machine's
+  configuration (t1 qwen3.5:9b local, t2
   qwen3.8:27b local, t3 kimi-for-coding, t4 gpt-5.6-sol on the codex
   subscription), every session starting at t1 with escalation live.
 - **claude code**, installed release on claude-fable-5: `claude -p
@@ -26,9 +30,9 @@ recommends for edit-and-run-tests work:
 - **codex cli**, installed release on gpt-5.6-sol: `codex exec --sandbox
   workspace-write --skip-git-repo-check`.
 
-The judge is the corpus's own verifier — the package's test suite plus
-the mustContain checks that keep "delete the failing test" from counting
-— run by the same code for every lane.
+The judge is the corpus's own verifier. It runs the package test suite plus
+the mustContain checks that keep "delete the failing test" from counting.
+The same code judges every lane.
 
 ## Verdicts
 
@@ -50,13 +54,14 @@ Identical outcomes, three different bills.
 
 The ladder's decisions are the interesting column. Switchboard put
 cache-read-subset, prefix-seal, breakpoint-minimum, and
-router-feasibility-order entirely on local models — a 9B and a 27B that
-billed nothing — and climbed to a frontier rung only where its own
+router-feasibility-order entirely on local models. Those 9B and 27B targets
+billed nothing. Switchboard climbed to a frontier rung only where its own
 escalation evidence said the cheap rung was stuck, finishing three tasks
 on kimi and four on gpt-5.6-sol. Claude code bought every task at
 frontier price; on this corpus, eleven times out of eleven, that bought
-nothing the verifier could see. That is §7's bet — allocation beats
-always-using-the-best — holding on this family, measured, not assumed.
+nothing the verifier could see. On this task family, the result supports the
+[routing premise](routing.md): allocate a stronger target only when the work
+provides evidence that it is needed.
 
 ## What this does and does not establish
 
@@ -69,6 +74,6 @@ cheaper moves its number, exactly as a user who pins switchboard to t4
 moves its. Wall times overlap too much to rank on. What the run
 establishes is precisely this: on this corpus, under each tool's own
 recommended headless posture, completion tied at the ceiling, and only
-one of the three tools has machinery whose job is to notice when the
-ceiling is reachable from a free rung — and it worked. Anything broader
+one of the three tools had machinery whose job was to notice when the
+ceiling was reachable from a free rung. It worked here. Anything broader
 needs a broader corpus, and the instrument for that is committed.

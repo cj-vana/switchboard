@@ -1,12 +1,14 @@
 package catalog
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func load(t *testing.T) *Catalog {
@@ -195,6 +197,37 @@ func TestCostArithmetic(t *testing.T) {
 	}
 }
 
+func TestCostArithmeticDoesNotOverflowBeforeDivision(t *testing.T) {
+	const hugeRate = Money(5_000_000_000_000_000_000)
+	for tokens, want := range map[int]Money{
+		2: 10_000_000_000_000,
+		4: 20_000_000_000_000,
+	} {
+		if got := hugeRate.Cost(tokens); got != want {
+			t.Errorf("rate %d for %d tokens = %d, want %d", hugeRate, tokens, got, want)
+		}
+	}
+}
+
+func TestCostArithmeticSaturatesInsteadOfWrapping(t *testing.T) {
+	info := ModelInfo{Pricing: []PriceBand{{
+		InputPerMTok:  Money(5_000_000_000_000_000_000),
+		OutputPerMTok: Money(5_000_000_000_000_000_000),
+	}}}
+
+	got, _, ok := info.Cost(provider.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+	if !ok {
+		t.Fatal("no band matched")
+	}
+	if got != MaxMoney {
+		t.Fatalf("overflowing cumulative cost = %d, want saturation at %d", got, MaxMoney)
+	}
+
+	if got := Money(math.MaxInt64).Cost(math.MaxInt); got != MaxMoney {
+		t.Fatalf("overflowing multiplication = %d, want saturation at %d", got, MaxMoney)
+	}
+}
+
 func TestLocalModelCostsNothing(t *testing.T) {
 	c := load(t)
 	info, _, _ := c.Lookup(provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "qwen3.5:9b-mlx"})
@@ -249,6 +282,11 @@ func TestMoneyParsing(t *testing.T) {
 	if err := m.UnmarshalText([]byte("free")); err == nil {
 		t.Error("a price that is not a number must be an error, not zero")
 	}
+	for _, invalid := range []string{"-1", "NaN", "+Inf", "10000000000000"} {
+		if err := m.UnmarshalText([]byte(invalid)); err == nil {
+			t.Errorf("out-of-range price %q was accepted", invalid)
+		}
+	}
 }
 
 // An entry with no price silently bills every request at nothing, which is
@@ -270,6 +308,73 @@ func TestEntryWithoutVerificationDateIsRejected(t *testing.T) {
 	}
 }
 
+func validPaidEntry() ModelInfo {
+	return ModelInfo{
+		Provider: "p", Surface: "s", ProviderModelID: "m",
+		ContextWindow: 1_000_000,
+		MaxOutput:     1,
+		Pricing:       []PriceBand{{InputPerMTok: PerMTok(1), OutputPerMTok: PerMTok(1)}},
+		VerifiedAt:    time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestNegativeCatalogRangesAreRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ModelInfo)
+	}{
+		{"context window", func(m *ModelInfo) { m.ContextWindow = -1 }},
+		{"max output", func(m *ModelInfo) { m.MaxOutput = -1 }},
+		{"band limit", func(m *ModelInfo) { m.Pricing[0].MaxInputTokens = -1 }},
+		{"input price", func(m *ModelInfo) { m.Pricing[0].InputPerMTok = -1 }},
+		{"output price", func(m *ModelInfo) { m.Pricing[0].OutputPerMTok = -1 }},
+		{"cache read price", func(m *ModelInfo) { m.Pricing[0].CacheReadPerMTok = -1 }},
+		{"cache write price", func(m *ModelInfo) { m.Pricing[0].CacheWritePerMTok = map[string]Money{"5m": -1} }},
+		{"cache minimum", func(m *ModelInfo) { m.Cache.MinTokens = -1 }},
+		{"cache breakpoints", func(m *ModelInfo) { m.Cache.MaxBreakpoints = -1 }},
+		{"cache lookback", func(m *ModelInfo) { m.Cache.LookbackBlocks = -1 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := validPaidEntry()
+			tc.mutate(&entry)
+			if err := validate(entry); err == nil || !strings.Contains(err.Error(), "negative") {
+				t.Fatalf("validate() = %v, want a negative-range error", err)
+			}
+		})
+	}
+}
+
+func TestPaidPerTokenEntryNeedsPositiveMaxOutput(t *testing.T) {
+	entry := validPaidEntry()
+	entry.MaxOutput = 0
+	if err := validate(entry); err == nil || !strings.Contains(err.Error(), "max_output") {
+		t.Fatalf("validate() = %v, want a max_output error", err)
+	}
+}
+
+func TestUnrepresentableCatalogCostIsRejected(t *testing.T) {
+	entry := validPaidEntry()
+	entry.ContextWindow = 1_000_000
+	entry.MaxOutput = 1_000_000
+	entry.Pricing[0].InputPerMTok = Money(5_000_000_000_000_000_000)
+	entry.Pricing[0].OutputPerMTok = Money(5_000_000_000_000_000_000)
+	if err := validate(entry); err == nil || !strings.Contains(err.Error(), "representable") {
+		t.Fatalf("validate() = %v, want a representable-range error", err)
+	}
+}
+
+func TestLargeIntermediateWithRepresentableCostIsAccepted(t *testing.T) {
+	entry := validPaidEntry()
+	entry.ContextWindow = 0
+	entry.MaxOutput = 2
+	entry.Pricing[0].InputPerMTok = 0
+	entry.Pricing[0].OutputPerMTok = Money(5_000_000_000_000_000_000)
+	if err := validate(entry); err != nil {
+		t.Fatalf("representable price was rejected: %v", err)
+	}
+}
+
 // Local edits must be visible in the revision, or a cost reconstructed from a
 // session record would be checked against data that never produced it.
 func TestUserOverrideChangesTheRevision(t *testing.T) {
@@ -285,6 +390,7 @@ surface = "first-party"
 provider_model_id = "claude-opus-5"
 display_name = "Claude Opus 5 (negotiated rate)"
 context_window = 1000000
+max_output = 128000
 verified_at = 2026-08-13T00:00:00Z
 source_urls = ["local override"]
 

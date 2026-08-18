@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // oneTurnProvider streams a single text answer and stops.
@@ -175,10 +175,12 @@ func TestForwardingFiltersWhatWouldMislead(t *testing.T) {
 	f.TextDelta("streamed text")
 	f.ThinkingDelta("thoughts")
 	f.TurnUsage(session.Usage{})
-	f.ToolStart("todo", permission.Request{Tool: "todo"})
-	f.ToolEnd("todo", tools.Result{}, time.Millisecond)
-	f.ToolStart("grep", permission.Request{Tool: "grep"})
-	f.ToolEnd("grep", tools.Result{Content: "hit"}, time.Millisecond)
+	todo := provider.ToolUse{ID: "1", Name: "todo"}
+	grep := provider.ToolUse{ID: "2", Name: "grep"}
+	f.ToolStart(todo, permission.Request{Tool: "todo"})
+	f.ToolEnd(todo, permission.Request{Tool: "todo"}, tools.Result{}, time.Millisecond)
+	f.ToolStart(grep, permission.Request{Tool: "grep"})
+	f.ToolEnd(grep, permission.Request{Tool: "grep"}, tools.Result{Content: "hit"}, time.Millisecond)
 	f.Notice("warn", "retrying")
 
 	if len(rec.starts) != 1 || rec.starts[0] != "grep" {
@@ -293,11 +295,12 @@ type recorder struct {
 
 func (r *recorder) ThinkingDelta(string) {}
 func (r *recorder) TextDelta(string)     {}
-func (r *recorder) ToolStart(name string, _ permission.Request) {
-	r.starts = append(r.starts, name)
+func (r *recorder) ToolStart(call provider.ToolUse, _ permission.Request) {
+	r.starts = append(r.starts, call.Name)
 }
-func (r *recorder) ToolEnd(name string, _ tools.Result, _ time.Duration) {
-	r.ends = append(r.ends, name)
+func (r *recorder) ToolEnd(call provider.ToolUse, _ permission.Request, _ tools.Result, _ time.Duration) {
+	r.ends = append(r.ends, call.Name)
 }
-func (r *recorder) Notice(_, text string)   { r.notices = append(r.notices, text) }
-func (r *recorder) TurnUsage(session.Usage) {}
+func (r *recorder) ToolBatchEnd(context.Context) {}
+func (r *recorder) Notice(_, text string)        { r.notices = append(r.notices, text) }
+func (r *recorder) TurnUsage(session.Usage)      {}

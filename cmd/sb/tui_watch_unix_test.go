@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/checkpoint"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/watch"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/watch"
 )
 
 // The round boundary is the whole contract: the verifier runs only when the

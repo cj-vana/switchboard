@@ -21,20 +21,20 @@ package main
 // honestly comes before acting on it.
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 type retryStartMsg struct {
-	prompt string
-	tier   string // empty reruns on the sitting rung
-	images []provider.Image
+	generation uint64
+	prompt     string
+	tier       string // empty reruns on the sitting rung
+	images     []provider.Image
 }
 
 func cmdRetry(m *tuiModel, args string) tea.Cmd {
@@ -56,6 +56,11 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 	prompt, images := openingParts(state.Messages[last])
 	if prompt == "" {
 		return noticeCmd("error", "the last turn's opening carries no text to replay")
+	}
+
+	ctx, generation, sourceID, err := m.startOperation("retry")
+	if err != nil {
+		return noticeCmd("warn", err.Error())
 	}
 
 	// The files first, while the recorder's stack still has the turn on
@@ -88,23 +93,20 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 		return retryStartMsg{prompt: prompt, tier: dest.ID, images: images}
 	}
 	return func() tea.Msg {
-		// The whole turn is dropped, so the opening lands where a fresh
-		// prompt would; a first-turn retry starts a fresh log for the same
-		// reason a fork keeping nothing would be one.
-		if last == 0 {
-			fresh, err := app.store.Create(app.workspace, app.tier.Target.ID(), app.catalog.Revision)
-			if err != nil {
-				return sessionSwapMsg{err: err}
-			}
-			return sessionSwapMsg{sess: fresh, tier: app.tier, client: app.loop.Provider, fresh: true,
-				note: fmt.Sprintf("retrying on %s; the set-aside answer stays in %s, /resume %s returns to it", destID, id, id), andThen: start}
-		}
-		forked, err := app.store.Fork(id, last)
+		release, err := pauseAdvisorLedger(ctx, app)
 		if err != nil {
-			return sessionSwapMsg{err: err}
+			return sessionSwapMsg{err: fmt.Errorf("waiting for the advisor ledger before retry: %w", err), operation: generation, sourceID: sourceID}
 		}
-		return sessionSwapMsg{sess: forked, tier: app.tier, client: app.loop.Provider,
-			note: fmt.Sprintf("retrying the last turn on %s; the set-aside answer stays in %s, /resume %s returns to it", destID, id, id), andThen: start}
+		// A retry-specific fork can keep an empty conversation for the first
+		// turn, but it always carries the source's budget ledger. Repeated retry
+		// therefore cannot make already-sent requests disappear from a ceiling.
+		forked, err := app.store.ForkSessionForRetry(sess, last)
+		if err != nil {
+			return sessionSwapMsg{err: err, release: release, operation: generation, sourceID: sourceID}
+		}
+		return sessionSwapMsg{sess: forked, tier: app.tier, client: app.loop.Binding().Provider, fresh: last == 0,
+			note: fmt.Sprintf("retrying the last turn on %s; the set-aside answer stays in %s, /resume %s returns to it", destID, id, id), andThen: start, release: release,
+			continueTurn: true, operation: generation, sourceID: sourceID, preserveRuntimeTarget: true}
 	}
 }
 
@@ -113,26 +115,60 @@ func cmdRetry(m *tuiModel, args string) tea.Cmd {
 // because a retry elsewhere is exactly a one-shot override with a recorded
 // prompt.
 func (m *tuiModel) retryStart(msg retryStartMsg) tea.Cmd {
-	// The swap lands asynchronously, and the prompt line stayed live in
-	// between; a turn started in that window keeps the session, and the
-	// replay is dropped with its name rather than raced against it.
-	if m.busy {
+	// Production continuations arrive with planning ownership claimed by
+	// onSessionSwap. The zero-generation branch keeps direct legacy/test calls
+	// fail-closed without weakening that owned boundary.
+	if msg.generation == 0 {
+		if !m.busy {
+			return noticeCmd("warn", "retry continuation arrived without turn ownership")
+		}
 		return noticeCmd("warn", "a turn started before the retry could; /retry again when it finishes")
 	}
+	if msg.generation != m.turnGeneration || !m.turnPlanning || m.turnCtx == nil {
+		return nil
+	}
+	m.addUser(msg.prompt)
 	if msg.tier != "" && msg.tier != m.app.tier.ID {
 		tier, ok := m.app.config.Tier(msg.tier)
 		if !ok {
 			return noticeCmd("error", "no tier "+msg.tier+" is configured; try /tiers")
 		}
 		app := m.app
+		ctx, generation := m.turnCtx, msg.generation
+		sticky := app.sticky
 		return func() tea.Msg {
-			probed, client, note, err := app.providers.probeTierFallback(context.Background(), tier)
-			return overrideProbeMsg{prompt: msg.prompt, images: msg.images, tier: probed, client: client, note: note, err: err}
+			result := overrideProbeMsg{generation: generation, prompt: msg.prompt, images: msg.images}
+			opening := provider.UserText(msg.prompt)
+			for _, image := range msg.images {
+				opening.Content = append(opening.Content, image)
+			}
+			plan := prospectiveTurnPlan(app.loop, sticky, opening, app.workspace)
+			result.plan = plan
+			rank := app.rankOf(tier)
+			if rank < 0 {
+				result.err = fmt.Errorf("the requested tier %s is not on the configured ladder", tier.ID)
+				return result
+			}
+			probed, client, note, err := app.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
+				return checkTurnFeasible(app.loop, app.catalog, app.providers, app.budget, candidate, rank, plan, opening)
+			})
+			if err != nil {
+				result.err = fmt.Errorf("the requested tier %s cannot serve the turn: %w", tier.ID, err)
+				return result
+			}
+			if err := ctx.Err(); err != nil {
+				result.err = err
+				return result
+			}
+			retargetTurnPlan(&plan, app.loop, app.catalog, app.caches, probed, rank, opening)
+			result.plan = plan
+			result.tier, result.client, result.note = probed, client, note
+			return result
 		}
 	}
-	m.addUser(msg.prompt)
+	m.turnPlanning = false
 	m.beginTurn(msg.prompt)
-	go m.runTurn(m.turnCtx, msg.prompt, msg.images)
+	m.launchModelTurn(msg.prompt, msg.images)
 	return m.spin.Tick
 }
 

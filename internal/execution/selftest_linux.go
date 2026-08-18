@@ -10,7 +10,7 @@ import (
 // now. Unprivileged user namespaces are a kernel configuration that some
 // distributions and hardening profiles disable, so bubblewrap being installed
 // says nothing about whether it can actually build a namespace here.
-func linuxSelfTest() (bool, string) {
+func linuxSelfTest(wrap wrapFunc) (bool, string) {
 	env, cleanup, err := newSelfTestEnv()
 	if err != nil {
 		return false, err.Error()
@@ -76,7 +76,7 @@ func linuxSelfTest() (bool, string) {
 		}
 	}
 
-	ok, detail := runSelfTestCases(policy, wrapBubblewrap, cases)
+	ok, detail := runSelfTestCases(policy, wrap, cases)
 	if ok {
 		if _, err := os.Stat(env.Escape); err == nil {
 			return false, "sandbox self-test failed: a denied write still reached the home directory"

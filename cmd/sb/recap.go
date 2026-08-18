@@ -16,9 +16,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 const recapMaxFiles = 8
@@ -89,16 +89,26 @@ func recapLines(store *session.Store, workspace, id, skip string) []string {
 			}
 		case rec.Route != nil:
 			turns++
+			routed := rec.Route
 			if firstTier == "" {
-				firstTier = rec.Route.Tier
+				firstTier = routed.Tier
 			}
-			if rec.Route.Tier != firstTier {
+			endedTier := routed.Tier
+			if routed.EndedTier != "" {
+				endedTier = routed.EndedTier
+			}
+			if routed.Tier != firstTier || endedTier != firstTier {
 				oneTier = false
 			}
-			lastTier = rec.Route.Tier
-			if rec.Route.EndedOn != "" && rec.Route.EndedOn != rec.Route.Target {
-				moves++
+			lastTier = endedTier
+			routeMoves := routed.Escalations
+			if routeMoves == 0 && ((routed.EndedTier != "" && routed.EndedTier != routed.Tier) ||
+				(routed.EndedOn != "" && routed.EndedOn != routed.Target)) {
+				// Legacy route records did not count moves explicitly. Retain their
+				// one recoverable transition without pretending to know more.
+				routeMoves = 1
 			}
+			moves += routeMoves
 		case rec.Race != nil:
 			races++
 			if rec.Race.Kept != "" {
@@ -113,8 +123,8 @@ func recapLines(store *session.Store, workspace, id, skip string) []string {
 		span = tl[0].At.Local().Format("Jan 2 15:04") + " – " + info.Modified.Local().Format("15:04")
 	}
 	bill := "nothing billed"
-	if state.CostMicroUSD > 0 {
-		bill = catalog.Money(state.CostMicroUSD).String()
+	if state.AccountedCostMicroUSD() > 0 {
+		bill = catalog.Money(state.AccountedCostMicroUSD()).String()
 	}
 	turnWord := "turns"
 	if turns == 1 {

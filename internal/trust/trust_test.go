@@ -3,6 +3,7 @@ package trust
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -127,5 +128,49 @@ func TestGrantedListsSorted(t *testing.T) {
 	}
 	if got[0] > got[1] {
 		t.Errorf("Granted() not sorted: %v", got)
+	}
+}
+
+func TestOpenRejectsUnsafeExistingTrustStores(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Run("loose-permissions", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte("[workspaces]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := OpenFile(path); err == nil || !strings.Contains(err.Error(), "permissions") {
+				t.Fatalf("OpenFile loose permissions = %v", err)
+			}
+		})
+	}
+	t.Run("symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.toml")
+		if err := os.WriteFile(target, []byte("[workspaces]\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, FileName)
+		if err := os.Symlink(target, path); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if _, err := OpenFile(path); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Fatalf("OpenFile symlink = %v", err)
+		}
+	})
+	t.Run("oversized", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), FileName)
+		if err := os.WriteFile(path, []byte("#"+strings.Repeat("x", maxTrustFileBytes)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenFile(path); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("OpenFile oversized = %v", err)
+		}
+	})
+}
+
+func TestNilStoreIsNeverTrusted(t *testing.T) {
+	var store *Store
+	if store.Trusted(t.TempDir()) {
+		t.Fatal("nil store trusted a workspace")
 	}
 }

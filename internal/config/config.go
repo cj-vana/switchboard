@@ -18,9 +18,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 const FileName = "config.toml"
@@ -47,9 +48,9 @@ type Tier struct {
 
 func (t Tier) String() string {
 	if t.Label == "" {
-		return fmt.Sprintf("%s  %s", t.ID, t.Target.ID())
+		return fmt.Sprintf("%s  %s", t.ID, t.Target.Display())
 	}
-	return fmt.Sprintf("%s  %-10s %s", t.ID, t.Label, t.Target.ID())
+	return fmt.Sprintf("%s  %-10s %s", t.ID, t.Label, t.Target.Display())
 }
 
 type Config struct {
@@ -108,6 +109,11 @@ type Config struct {
 	// dollars; a local rung consumes nothing scarce and a plan rung consumes
 	// quota, and neither is what this bounds (§4, §15).
 	Budget catalog.Money
+
+	// Sandbox is command confinement, independent of permission mode. Off is
+	// the zero value and default; on requires verified confinement at session
+	// assembly; auto uses it when verified and stays visibly off otherwise.
+	Sandbox execution.SandboxMode
 
 	// Profiles are alternate ladders for other workloads, selected at
 	// launch with -profile: a review ladder that opens high, a docs ladder
@@ -202,6 +208,13 @@ type file struct {
 	Compact   compactEntry             `toml:"compact"`
 	UI        uiEntry                  `toml:"ui"`
 	Limits    limitsEntry              `toml:"limits"`
+	Execution executionEntry           `toml:"execution"`
+}
+
+// any accepts both the concise sandbox = true form and the named
+// off/on/auto form. The loader normalizes both into execution.SandboxMode.
+type executionEntry struct {
+	Sandbox any `toml:"sandbox,omitempty"`
 }
 
 // profileEntry is one alternate ladder. Deliberately tiers-only: a key that
@@ -300,6 +313,7 @@ func Load() (*Config, error) {
 			UpdateAuto:       true,
 			CompactAuto:      true,
 			CompactAtPercent: 85,
+			Sandbox:          execution.SandboxOff,
 		}, nil
 	}
 	return LoadFile(path)
@@ -314,6 +328,7 @@ func LoadFile(path string) (*Config, error) {
 		UpdateAuto:       true,
 		CompactAuto:      true,
 		CompactAtPercent: 85,
+		Sandbox:          execution.SandboxOff,
 		Path:             path,
 	}
 
@@ -388,6 +403,26 @@ func LoadFile(path string) (*Config, error) {
 	}
 	c.Theme = f.UI.Theme
 	c.Notify = f.UI.Notify
+	if f.Execution.Sandbox != nil {
+		var raw string
+		switch value := f.Execution.Sandbox.(type) {
+		case bool:
+			if value {
+				raw = "on"
+			} else {
+				raw = "off"
+			}
+		case string:
+			raw = value
+		default:
+			return nil, fmt.Errorf("%s: execution.sandbox must be true, false, off, on, or auto", path)
+		}
+		mode, parseErr := execution.ParseSandboxMode(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("%s: execution.sandbox: %w", path, parseErr)
+		}
+		c.Sandbox = mode
+	}
 	if f.Limits.Budget < 0 {
 		return nil, fmt.Errorf("%s: limits.budget %s is negative; a ceiling below zero rules out every turn", path, f.Limits.Budget)
 	}

@@ -9,26 +9,32 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // TurnCost is one user turn's metering: what its calls consumed, summed
 // from the usage records that rode between its opening and the next.
 type TurnCost struct {
-	Turn         int
-	Prompt       string
+	Turn   int
+	Prompt string
+	// Purpose is "turn" for user turns. Compact, learn, advisor, and
+	// unattributed buckets are explicit background model work and have Turn 0.
+	Purpose      string
 	Calls        int
 	Usage        provider.Usage
 	CostMicroUSD int64
 }
 
 // ReadTurnCosts replays a log and returns each turn's summed metering, in
-// turn order. Usage recorded before any turn opened — nothing the loop
-// writes today — is dropped rather than invented a home.
+// turn order, followed by explicit background-purpose buckets. A one-shot
+// advisor, compaction, or skill-distillation request must never ride the most
+// recent user's bill merely because its record happened to follow that turn.
 func ReadTurnCosts(path string) ([]TurnCost, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -40,11 +46,40 @@ func ReadTurnCosts(path string) ([]TurnCost, error) {
 		return nil, err
 	}
 
-	var out []TurnCost
+	var turns []TurnCost
+	background := make(map[string]*TurnCost)
+	backgroundOrder := make([]string, 0, 4)
+	backgroundFor := func(purpose string) *TurnCost {
+		if purpose == "" || purpose == UsagePurposeTurn {
+			purpose = UsagePurposeUnknown
+		}
+		if bucket := background[purpose]; bucket != nil {
+			return bucket
+		}
+		bucket := &TurnCost{Purpose: purpose, Prompt: "background model work: " + purpose}
+		background[purpose] = bucket
+		backgroundOrder = append(backgroundOrder, purpose)
+		return bucket
+	}
+	finish := func() []TurnCost {
+		out := append([]TurnCost(nil), turns...)
+		for _, purpose := range backgroundOrder {
+			out = append(out, *background[purpose])
+		}
+		return out
+	}
+	addCost := func(cur *TurnCost, amount int64) error {
+		total, err := checkedMicroUSDAdd(cur.CostMicroUSD, amount)
+		if err != nil {
+			return err
+		}
+		cur.CostMicroUSD = total
+		return nil
+	}
 	for {
 		rec, _, err := decodeRecord(r)
 		if errors.Is(err, io.EOF) || errors.Is(err, ErrCorruptRecord) {
-			return out, nil
+			return finish(), nil
 		}
 		if err != nil {
 			return nil, err
@@ -56,20 +91,53 @@ func ReadTurnCosts(path string) ([]TurnCost, error) {
 				return nil, err
 			}
 			if OpensTurn(m) {
-				out = append(out, TurnCost{Turn: len(out) + 1, Prompt: strings.TrimSpace(m.Text())})
+				turns = append(turns, TurnCost{Turn: len(turns) + 1, Prompt: strings.TrimSpace(m.Text()), Purpose: UsagePurposeTurn})
 			}
 		case RecordUsage:
-			if len(out) == 0 {
-				continue
-			}
 			var u Usage
 			if err := json.Unmarshal(rec.Payload, &u); err != nil {
 				return nil, err
 			}
-			cur := &out[len(out)-1]
+			var cur *TurnCost
+			if u.EffectivePurpose() == UsagePurposeTurn && len(turns) > 0 {
+				cur = &turns[len(turns)-1]
+			} else {
+				cur = backgroundFor(u.EffectivePurpose())
+			}
+			usage, err := cur.Usage.CheckedAdd(u.Usage)
+			if err != nil {
+				return nil, fmt.Errorf("turn usage in record %d: %w", rec.Seq, err)
+			}
+			if cur.Calls == math.MaxInt {
+				return nil, fmt.Errorf("turn call accounting overflow in record %d", rec.Seq)
+			}
 			cur.Calls++
-			cur.Usage = cur.Usage.Add(u.Usage)
-			cur.CostMicroUSD += u.CostMicroUSD
+			cur.Usage = usage
+			if err := addCost(cur, u.CostMicroUSD); err != nil {
+				return nil, fmt.Errorf("turn cost in record %d: %w", rec.Seq, err)
+			}
+		case RecordBudgetSettle:
+			if len(turns) == 0 {
+				continue
+			}
+			var settlement BudgetSettlement
+			if err := json.Unmarshal(rec.Payload, &settlement); err != nil {
+				return nil, err
+			}
+			if err := addCost(&turns[len(turns)-1], settlement.ExternalCostMicroUSD); err != nil {
+				return nil, fmt.Errorf("turn settlement in record %d: %w", rec.Seq, err)
+			}
+		case RecordBudgetTransfer:
+			if len(turns) == 0 {
+				continue
+			}
+			var transfer BudgetTransfer
+			if err := json.Unmarshal(rec.Payload, &transfer); err != nil {
+				return nil, err
+			}
+			if err := addCost(&turns[len(turns)-1], transfer.ExternalCostMicroUSD); err != nil {
+				return nil, fmt.Errorf("turn transfer in record %d: %w", rec.Seq, err)
+			}
 		}
 	}
 }

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // The live test needs gopls and skips without it, so the suite stays

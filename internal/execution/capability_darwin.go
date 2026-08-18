@@ -60,6 +60,11 @@ func wrapSeatbelt(p Policy, argv []string) ([]string, error) {
 	for _, k := range keys {
 		out = append(out, "-D", k+"="+params[k])
 	}
+	// sandbox-exec keeps parsing -D/-p options until an explicit terminator.
+	// The target argv is model-controlled, so without this separator an
+	// option-looking executable can replace profile parameters or the profile
+	// itself while the permission layer still reports confined execution.
+	out = append(out, "--")
 	return append(out, argv...), nil
 }
 

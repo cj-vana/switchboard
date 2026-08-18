@@ -28,12 +28,12 @@ import (
 
 	"golang.org/x/net/html"
 
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 const (
-	webUserAgent = "switchboard (+https://github.com/cj-vana/switchboard)"
+	webUserAgent = "switchboard (+https://github.com/switchboard-code/switchboard)"
 
 	// webFetchLimit caps what a fetch reads off the wire; webTextLimit caps
 	// what reaches the context after conversion. Both exist because a page

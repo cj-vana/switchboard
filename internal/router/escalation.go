@@ -104,7 +104,7 @@ var weights = map[Signal]float64{
 	EditReverted:     1.0,
 	DiffGrew:         1.0,
 	RepeatedToolCall: 1.0,
-	ToolErrorSpike:   0.5,
+	ToolErrorSpike:   1.0,
 
 	PlanningComplete: 1.0,
 	ScopeReduced:     1.0,
@@ -130,6 +130,20 @@ type Move struct {
 	Direction int // +1 up, -1 down, 0 stay
 	Rationale string
 	Held      bool // a move was warranted and the dwell held it back
+
+	// FromRank and ToRank make a proposed move transactional. The policy can
+	// ask the surface to prove and bind ToRank first; Sticky commits only when
+	// the proposal is still current. A failed probe or budget check therefore
+	// cannot leave policy state ahead of the target actually serving the loop.
+	FromRank int
+	ToRank   int
+	Boundary bool
+
+	// revision binds a proposal to the exact Sticky state that produced it.
+	// It is deliberately private: only Sticky may mint or validate proposals.
+	// A pin, rebase, or concurrent observation can otherwise leave FromRank
+	// unchanged while making the proposal stale.
+	revision uint64
 }
 
 // Assess weighs the signals seen since the last switch.
@@ -209,6 +223,7 @@ const (
 	UserCorrected    Outcome = "user_corrected"
 	ReviewerRejected Outcome = "reviewer_rejected"
 	Abandoned        Outcome = "abandoned"
+	Failed           Outcome = "failed"
 )
 
 // Label is what an outcome is worth as evidence, and mostly the answer is "less
@@ -269,6 +284,10 @@ func LabelFor(o Outcome, verified bool) Label {
 	case Abandoned:
 		return Label{Censored: true, Weight: 0,
 			Reason: "abandonment says nothing about the target unless the user gave a reason"}
+
+	case Failed:
+		return Label{Censored: true, Weight: 0,
+			Reason: "provider, budget, round-limit, or internal failure is unavailable model-quality evidence"}
 	}
 	return Label{Censored: true, Weight: 0, Reason: "unrecognized outcome"}
 }

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 func reqFor(tool string) permission.Request {

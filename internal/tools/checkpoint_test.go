@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
 )
 
 // The registry's side of the undo contract: write and edit capture prior

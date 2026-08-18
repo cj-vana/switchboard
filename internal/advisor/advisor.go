@@ -20,17 +20,18 @@ package advisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 const (
@@ -60,6 +61,7 @@ type Advisor struct {
 	client   provider.Provider
 	target   provider.RouteTarget
 	onAdvice func(text string)
+	meter    Meter
 
 	maxConsults int
 	cooldown    time.Duration
@@ -70,8 +72,9 @@ type Advisor struct {
 	consults    int
 	lastConsult time.Time
 	inflight    bool
+	paused      bool
+	idleWait    chan struct{}
 	pending     []string
-	pendingArgv map[string]string
 	detector    *route.Detector
 }
 
@@ -79,6 +82,12 @@ type Advisor struct {
 // mid-flight, because a bound that can be raised while the loop runs is not a
 // bound.
 type Option func(*Advisor)
+
+type AttemptFinish func(provider.Usage, error) error
+
+// Meter durably admits one advisor request and returns its settlement hook.
+// The surface owns pricing/session state; Advisor owns calling the hook once.
+type Meter func(provider.Request) (AttemptFinish, error)
 
 func WithBounds(maxConsultsPerTurn int, cooldown time.Duration) Option {
 	return func(a *Advisor) {
@@ -89,6 +98,10 @@ func WithBounds(maxConsultsPerTurn int, cooldown time.Duration) Option {
 			a.cooldown = cooldown
 		}
 	}
+}
+
+func WithMeter(meter Meter) Option {
+	return func(a *Advisor) { a.meter = meter }
 }
 
 // New builds an advisor around the observer the loop already had. onAdvice is
@@ -103,7 +116,6 @@ func New(inner agent.Observer, client provider.Provider, target provider.RouteTa
 		onAdvice:    onAdvice,
 		maxConsults: DefaultMaxConsultsPerTurn,
 		cooldown:    DefaultCooldown,
-		pendingArgv: map[string]string{},
 		detector:    route.NewDetector(),
 	}
 	for _, o := range opts {
@@ -122,6 +134,55 @@ func (a *Advisor) SetInner(inner agent.Observer) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.inner = inner
+}
+
+func (a *Advisor) SetMeter(meter Meter) {
+	a.mu.Lock()
+	a.meter = meter
+	a.mu.Unlock()
+}
+
+// PauseAndWait prevents a new asynchronous consult from entering its provider
+// call and waits for any current consult to settle. Session fork/compaction
+// uses this barrier before taking an accounting snapshot; otherwise an advisor
+// attempt can append just after the fork reader reaches EOF and be absent from
+// every continuing ledger.
+func (a *Advisor) PauseAndWait(ctx context.Context) error {
+	a.mu.Lock()
+	a.paused = true
+	if !a.inflight {
+		a.mu.Unlock()
+		return nil
+	}
+	if a.idleWait == nil {
+		a.idleWait = make(chan struct{})
+	}
+	wait := a.idleWait
+	a.mu.Unlock()
+
+	select {
+	case <-wait:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Resume allows consults after the caller has installed the new session
+// ledger (or abandoned the transition).
+func (a *Advisor) Resume() {
+	a.mu.Lock()
+	a.paused = false
+	a.mu.Unlock()
+}
+
+func (a *Advisor) innerObserver() agent.Observer {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.inner == nil {
+		return agent.NopObserver{}
+	}
+	return a.inner
 }
 
 // StartTurn resets the per-turn evidence and budget. Pending advice survives:
@@ -154,41 +215,38 @@ func (a *Advisor) Drain() []provider.Message {
 
 // --- agent.Observer ---------------------------------------------------------
 
-func (a *Advisor) ThinkingDelta(text string) { a.inner.ThinkingDelta(text) }
+func (a *Advisor) ThinkingDelta(text string) { a.innerObserver().ThinkingDelta(text) }
 
 func (a *Advisor) TextDelta(text string) {
-	a.inner.TextDelta(text)
+	a.innerObserver().TextDelta(text)
 	a.observe(a.detector.AssistantText(text))
 }
 
-func (a *Advisor) ToolStart(name string, req permission.Request) {
-	a.inner.ToolStart(name, req)
+func (a *Advisor) ToolStart(call provider.ToolUse, req permission.Request) {
+	a.innerObserver().ToolStart(call, req)
 	argv := strings.Join(req.Argv, " ")
 	a.mu.Lock()
-	if argv != "" {
-		a.pendingArgv[name] = argv
-	}
-	a.record(fmt.Sprintf("tool %s %s %s", name, req.Path, argv))
+	a.record(fmt.Sprintf("tool %s %s %s", call.Name, req.Path, argv))
 	a.mu.Unlock()
-	a.observe(a.detector.ToolCall(name, []byte(req.Path+"\x00"+argv)))
+	a.observe(a.detector.ToolCall(call.Name, call.Input))
 }
 
-func (a *Advisor) ToolEnd(name string, res tools.Result, took time.Duration) {
-	a.inner.ToolEnd(name, res, took)
+func (a *Advisor) ToolEnd(call provider.ToolUse, req permission.Request, res tools.Result, took time.Duration) {
+	a.innerObserver().ToolEnd(call, req, res, took)
 	a.mu.Lock()
-	argv := a.pendingArgv[name]
-	delete(a.pendingArgv, name)
 	status := "ok"
 	if res.IsError {
 		status = "FAILED"
 	}
 	a.record(fmt.Sprintf("  → %s in %s: %s", status, took.Round(time.Second), firstLine(res.Content)))
 	a.mu.Unlock()
-	a.observe(a.detector.ToolResult(name, argv, res.Content, res.IsError))
+	a.observe(a.detector.ToolResult(call.Name, strings.Join(req.Argv, " "), res.Content, res.IsError))
 }
 
+func (a *Advisor) ToolBatchEnd(ctx context.Context) { a.innerObserver().ToolBatchEnd(ctx) }
+
 func (a *Advisor) Notice(level, text string) {
-	a.inner.Notice(level, text)
+	a.innerObserver().Notice(level, text)
 	if level == "error" || level == "warn" {
 		a.mu.Lock()
 		a.record("notice " + level + ": " + text)
@@ -196,7 +254,7 @@ func (a *Advisor) Notice(level, text string) {
 	}
 }
 
-func (a *Advisor) TurnUsage(u session.Usage) { a.inner.TurnUsage(u) }
+func (a *Advisor) TurnUsage(u session.Usage) { a.innerObserver().TurnUsage(u) }
 
 // --- consulting -------------------------------------------------------------
 
@@ -211,7 +269,7 @@ func (a *Advisor) observe(signals []route.Signal) {
 // it keeps working and the advice lands at the next round boundary.
 func (a *Advisor) maybeConsult(trigger string) {
 	a.mu.Lock()
-	if a.inflight || a.consults >= a.maxConsults || time.Since(a.lastConsult) < a.cooldown {
+	if a.paused || a.inflight || a.consults >= a.maxConsults || time.Since(a.lastConsult) < a.cooldown {
 		a.mu.Unlock()
 		return
 	}
@@ -226,6 +284,10 @@ func (a *Advisor) maybeConsult(trigger string) {
 		defer func() {
 			a.mu.Lock()
 			a.inflight = false
+			if a.idleWait != nil {
+				close(a.idleWait)
+				a.idleWait = nil
+			}
 			a.mu.Unlock()
 		}()
 
@@ -256,9 +318,26 @@ func (a *Advisor) consult(ctx context.Context, task, evidence, trigger string) (
 		System:   []provider.Block{provider.Text{Text: systemPrompt}},
 		Messages: []provider.Message{provider.UserText(b.String())},
 	}
+	a.mu.Lock()
+	meter := a.meter
+	a.mu.Unlock()
+	var finish AttemptFinish
+	if meter != nil {
+		var err error
+		finish, err = meter(req)
+		if err != nil {
+			return "", err
+		}
+	}
+	settle := func(usage provider.Usage, callErr error) error {
+		if finish == nil {
+			return callErr
+		}
+		return errors.Join(callErr, finish(usage, callErr))
+	}
 	stream, err := a.client.Stream(ctx, a.target, req)
 	if err != nil {
-		return "", err
+		return "", settle(provider.Usage{}, err)
 	}
 	defer stream.Close()
 
@@ -266,12 +345,15 @@ func (a *Advisor) consult(ctx context.Context, task, evidence, trigger string) (
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			return "", err
+			return "", settle(provider.Usage{}, err)
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:
 			out.WriteString(ev.Text)
 		case provider.EventDone:
+			if err := settle(ev.Usage, nil); err != nil {
+				return "", err
+			}
 			text := strings.TrimSpace(out.String())
 			if text == "NONE" || strings.HasPrefix(text, "NONE") {
 				return "", nil

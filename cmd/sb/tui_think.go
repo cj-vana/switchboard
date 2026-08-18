@@ -3,13 +3,13 @@ package main
 // /think: reasoning effort for the model that is running, changed without
 // leaving the session. The change is session-scoped by design — a binding
 // that should survive a restart is made in /models, where effort is part of
-// the rung — and it is visible twice the moment it lands: the target ID
-// grows a +think suffix and the status bar says so.
+// the rung — and it is visible twice the moment it lands: the machine target
+// identity changes and the readable status label names the reasoning effort.
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 var thinkLevels = []pickerItem{
@@ -31,7 +31,7 @@ func cmdThink(m *tuiModel, args string) tea.Cmd {
 		items[i].current = items[i].id == current || (current == "" && items[i].id == "default")
 	}
 	m.dlg = &pickerDialog{
-		title:  "reasoning effort for " + string(m.app.tier.Target.ID()),
+		title:  "reasoning effort for " + m.app.tier.Target.Display(),
 		items:  items,
 		onPick: func(level string) tea.Cmd { return m.applyThink(level) },
 	}
@@ -58,7 +58,7 @@ func (m *tuiModel) applyThink(level string) tea.Cmd {
 	// controller too, which matters: effort changes cache identity, and a
 	// tracker carried across that boundary would attribute one prefix's
 	// cache to another (§6).
-	m.app.bind(tier, m.app.loop.Provider, true)
+	m.app.bind(tier, m.app.loop.Binding().Provider, true)
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
 

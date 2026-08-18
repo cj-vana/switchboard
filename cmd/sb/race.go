@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // A raceArm is one branch of the trial: its rung, the client that probed
@@ -80,13 +80,17 @@ func assembleRaceArm(app *tuiApp, tier config.Tier, client provider.Provider, ob
 	var sess *session.Session
 	var err error
 	if n := len(state.Messages); n > 0 {
-		sess, err = app.store.ForkOnto(state.ID, n, tier.Target.ID())
+		sess, err = app.store.ForkSessionOnto(app.loop.Session, n, tier.Target.ID())
 	} else {
-		// A race on an empty session has no prefix to fork; two fresh logs
-		// share the same nothing, which is the same guarantee trivially held.
-		sess, err = app.store.Create(app.workspace, tier.Target.ID(), app.catalog.Revision)
+		// The conversation prefix is empty, but its accounting lineage may not
+		// be (for example, a first-turn retry whose routing failed). Carry it.
+		sess, err = app.store.ForkSessionAccountingOnto(app.loop.Session, tier.Target.ID())
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := sess.MarkRaceBranchPending(state.ID); err != nil {
+		_ = sess.Close()
 		return nil, err
 	}
 
@@ -105,7 +109,7 @@ func assembleRaceArm(app *tuiApp, tier config.Tier, client provider.Provider, ob
 			"delegate": "delegate is unavailable in a race branch: an errand spawned here would outlive the pick; the branch that wins can delegate after it continues",
 			"ask":      "ask is unavailable in a race branch: both arms answer unattended so they can be compared, and the pick at the end is the user's answer",
 		}),
-		Perms:    permission.NewEngine(permission.ModePlan, app.capability),
+		Perms:    permission.NewEngineWithExecution(permission.ModePlan, app.loop.Tools.Execution()),
 		Session:  sess,
 		Catalog:  app.catalog,
 		Cache:    cacheFor(tier.Target, app.catalog),
@@ -119,14 +123,26 @@ func assembleRaceArm(app *tuiApp, tier config.Tier, client provider.Provider, ob
 // raceGates wires the shared ceiling across both arms: each gate charges
 // the pre-race session plus what both branches have added, so two arms
 // cannot each spend up to the ceiling by not counting the other.
-func raceGates(bs *budgetState, cat *catalog.Catalog, before session.State, a, b *raceArm) {
+func raceGates(bs *budgetState, cat *catalog.Catalog, origin *session.Session, before session.State, a, b *raceArm) {
 	spent := func() catalog.Money {
-		return catalog.Money(before.CostMicroUSD +
-			(a.sess.State().CostMicroUSD - a.baseCost) +
-			(b.sess.State().CostMicroUSD - b.baseCost))
+		return addMoney(
+			catalog.Money(before.AccountedCostMicroUSD()),
+			catalog.Money(a.sess.State().CostMicroUSD-a.baseCost),
+			catalog.Money(b.sess.State().CostMicroUSD-b.baseCost))
 	}
-	a.loop.Budget = budgetGate(bs, cat, func() provider.RouteTarget { return a.loop.Target }, spent)
-	b.loop.Budget = budgetGate(bs, cat, func() provider.RouteTarget { return b.loop.Target }, spent)
+	scope := func() string { return before.ID }
+	persisted := func() catalog.Money { return catalog.Money(origin.State().RetryReserveMicroUSD) }
+	begin := func(amount catalog.Money) (string, error) {
+		return origin.BeginBudgetAttempt(int64(amount))
+	}
+	settle := func(id, outcome string, charge catalog.Money) error {
+		return origin.SettleBudgetAttempt(id, outcome, int64(charge))
+	}
+	// The pre-race session is the sole live ledger while both arms run. A
+	// verdict later transfers one cumulative delta to a chosen branch; no
+	// attempt is partially replicated across three logs.
+	wireBudget(a.loop, budgetGate(bs, cat, func() provider.RouteTarget { return a.loop.Binding().Target }, spent, scope).withLedger(persisted, begin, settle, true))
+	wireBudget(b.loop, budgetGate(bs, cat, func() provider.RouteTarget { return b.loop.Binding().Target }, spent, scope).withLedger(persisted, begin, settle, true))
 }
 
 // racePreflight refuses a race the ceiling cannot hold. §15's rule applied
@@ -137,14 +153,7 @@ func raceGates(bs *budgetState, cat *catalog.Catalog, before session.State, a, b
 func racePreflight(bs *budgetState, cat *catalog.Catalog, before session.State,
 	system []provider.Block, defs []provider.ToolDefinition, opening provider.Message,
 	a, b config.Tier) (string, bool) {
-	if bs == nil {
-		return "", false
-	}
-	ceiling := bs.get()
-	if ceiling == 0 {
-		return "", false
-	}
-	tokens := prefix.RequestTokens(provider.Request{
+	tokens := prefix.RequestTokenCeiling(provider.Request{
 		System:   system,
 		Tools:    defs,
 		Messages: append(append([]provider.Message(nil), before.Messages...), opening),
@@ -152,15 +161,67 @@ func racePreflight(bs *budgetState, cat *catalog.Catalog, before session.State,
 	var bound catalog.Money
 	for _, tier := range []config.Tier{a, b} {
 		if info, _, ok := cat.Lookup(tier.Target); ok {
-			bound += preflightBound(info, tokens)
+			armBound := preflightBoundForTarget(info, tier.Target, tokens)
+			if armBound <= 0 && info.Metering != catalog.Local && info.Metering != catalog.Plan && !info.Free() {
+				return fmt.Sprintf("%s has no positive conservative cost bound in the catalog, so its race arm cannot be authorized",
+					tier.Target.Display()), true
+			}
+			bound = addMoney(bound, armBound)
 		}
 	}
-	spent := catalog.Money(before.CostMicroUSD)
-	if spent+bound > ceiling {
-		return fmt.Sprintf("both arms together could cost up to %s against %s already spent, crossing the %s ceiling; /budget raises or clears it",
-			bound, spent, ceiling), true
+	if bs == nil {
+		return "", false
+	}
+	ceiling := bs.get()
+	if ceiling == 0 {
+		return "", false
+	}
+	spent := catalog.Money(before.AccountedCostMicroUSD())
+	debt := bs.syncRetryDebt(before.ID, catalog.Money(before.RetryReserveMicroUSD))
+	accounted := bs.accounted(before.ID, catalog.Money(before.RetryReserveMicroUSD), spent)
+	observed := accounted - debt
+	if crossesMoneyCeiling(ceiling, accounted, bound) {
+		return fmt.Sprintf("both arms together could cost up to %s against %s already spent and %s reserved for failed attempts, crossing the %s ceiling; /budget raises or clears it",
+			bound, observed, debt, ceiling), true
 	}
 	return "", false
+}
+
+// reconcileRaceAccounting makes the origin ledger hold every arm's actual
+// cost even when a successful response could not append its settlement. The
+// unresolved bound remains as reserve in that case, intentionally
+// conservative; this record prevents the actual work from disappearing too.
+func reconcileRaceAccounting(origin *session.Session, before session.State, a, b *raceArm) error {
+	actual := int64(addMoney(
+		catalog.Money(a.sess.State().CostMicroUSD-a.baseCost),
+		catalog.Money(b.sess.State().CostMicroUSD-b.baseCost)))
+	recorded := origin.State().ExternalCostMicroUSD - before.ExternalCostMicroUSD
+	missing := actual - recorded
+	if missing <= 0 {
+		return nil
+	}
+	source := fmt.Sprintf("race-reconcile:%s:%s:%s", before.ID, a.sess.ID(), b.sess.ID())
+	return origin.AppendBudgetTransfer(source, missing, 0)
+}
+
+// transferRaceAccounting moves the authoritative race delta from the origin
+// ledger to a branch that may continue. The branch already owns its copied
+// lineage and local Usage, so the transfer is the difference between that and
+// the origin's fully reconciled ledger. This also captures metered origin work
+// completed after the pre-race snapshot without fabricating provider usage.
+func transferRaceAccounting(origin *session.Session, before session.State, kept, other *raceArm) error {
+	after := origin.State()
+	branch := kept.sess.State()
+	external := after.AccountedCostMicroUSD() - branch.AccountedCostMicroUSD()
+	if external < 0 {
+		external = 0
+	}
+	debt := after.RetryReserveMicroUSD - branch.RetryReserveMicroUSD
+	if debt < 0 {
+		debt = 0
+	}
+	source := fmt.Sprintf("race:%s:%s:%s", before.ID, kept.sess.ID(), other.sess.ID())
+	return kept.sess.AppendBudgetTransfer(source, external, debt)
 }
 
 // raceRecord assembles the verdict. outcome and kept follow the Race type's

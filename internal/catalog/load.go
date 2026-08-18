@@ -81,6 +81,9 @@ func loadBundled() (*Catalog, error) {
 		c.entries[m.ID()] = m
 	}
 	for _, d := range f.SurfaceDefault {
+		if err := validateSurfaceDefault(d); err != nil {
+			return nil, err
+		}
 		c.defaults[d.Provider+"/"+d.Surface] = d
 	}
 	return c, nil
@@ -109,6 +112,9 @@ func (c *Catalog) applyOverrides(path string) error {
 		changed++
 	}
 	for _, d := range f.SurfaceDefault {
+		if err := validateSurfaceDefault(d); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
 		c.defaults[d.Provider+"/"+d.Surface] = d
 		changed++
 	}
@@ -146,6 +152,97 @@ func validate(m ModelInfo) error {
 		return fmt.Errorf("catalog entry %s has no pricing", m.ID())
 	case m.VerifiedAt.IsZero():
 		return fmt.Errorf("catalog entry %s has no verified_at; a price with no date cannot be audited", m.ID())
+	}
+	return validateRanges(m)
+}
+
+func validateSurfaceDefault(m ModelInfo) error {
+	switch {
+	case m.Provider == "":
+		return errors.New("catalog surface default has no provider")
+	case m.Surface == "":
+		return fmt.Errorf("catalog surface default for %s has no surface", m.Provider)
+	case len(m.Pricing) == 0:
+		return fmt.Errorf("catalog surface default %s/%s has no pricing", m.Provider, m.Surface)
+	case m.VerifiedAt.IsZero():
+		return fmt.Errorf("catalog surface default %s/%s has no verified_at; a price with no date cannot be audited", m.Provider, m.Surface)
+	}
+	return validateRanges(m)
+}
+
+func validateRanges(m ModelInfo) error {
+	id := m.ID()
+	if m.ProviderModelID == "" {
+		id = m.Provider + "/" + m.Surface
+	}
+
+	switch {
+	case m.ContextWindow < 0:
+		return fmt.Errorf("catalog entry %s has negative context_window", id)
+	case m.MaxOutput < 0:
+		return fmt.Errorf("catalog entry %s has negative max_output", id)
+	case m.Cache.MinTokens < 0:
+		return fmt.Errorf("catalog entry %s has negative cache min_tokens", id)
+	case m.Cache.MaxBreakpoints < 0:
+		return fmt.Errorf("catalog entry %s has negative cache max_breakpoints", id)
+	case m.Cache.LookbackBlocks < 0:
+		return fmt.Errorf("catalog entry %s has negative cache lookback_blocks", id)
+	}
+
+	for i, band := range m.Pricing {
+		if err := validatePriceBand(id, i, m, band); err != nil {
+			return err
+		}
+	}
+
+	if Metering(m.Metering.String()) == PerToken && !m.Free() && m.MaxOutput <= 0 {
+		return fmt.Errorf("catalog entry %s is paid per-token but max_output is not positive", id)
+	}
+	return nil
+}
+
+func validatePriceBand(id string, index int, model ModelInfo, band PriceBand) error {
+	if band.MaxInputTokens < 0 {
+		return fmt.Errorf("catalog entry %s pricing band %d has negative max_input_tokens", id, index)
+	}
+	rates := []struct {
+		name string
+		rate Money
+	}{
+		{"input_per_mtok", band.InputPerMTok},
+		{"output_per_mtok", band.OutputPerMTok},
+		{"cache_read_per_mtok", band.CacheReadPerMTok},
+	}
+	for _, item := range rates {
+		if item.rate < 0 {
+			return fmt.Errorf("catalog entry %s pricing band %d has negative %s", id, index, item.name)
+		}
+	}
+	for ttl, rate := range band.CacheWritePerMTok {
+		if rate < 0 {
+			return fmt.Errorf("catalog entry %s pricing band %d has negative cache_write_per_mtok for %q", id, index, ttl)
+		}
+	}
+
+	inputLimit := model.ContextWindow
+	if band.MaxInputTokens > 0 && (inputLimit == 0 || band.MaxInputTokens < inputLimit) {
+		inputLimit = band.MaxInputTokens
+	}
+	inputRate := band.InputPerMTok
+	if band.CacheReadPerMTok > inputRate {
+		inputRate = band.CacheReadPerMTok
+	}
+	for _, rate := range band.CacheWritePerMTok {
+		if rate > inputRate {
+			inputRate = rate
+		}
+	}
+
+	inputCost, inputOK := checkedTokenCost(inputRate, inputLimit)
+	outputCost, outputOK := checkedTokenCost(band.OutputPerMTok, model.MaxOutput)
+	_, totalOK := checkedMoneyAdd(inputCost, outputCost)
+	if !inputOK || !outputOK || !totalOK {
+		return fmt.Errorf("catalog entry %s pricing band %d exceeds the representable cost range", id, index)
 	}
 	return nil
 }

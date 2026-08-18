@@ -25,7 +25,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Name is the provider component of a RouteTarget bound to this adapter.
@@ -182,7 +182,7 @@ func KnownProfile(surface string) bool {
 func (c *Client) Stream(ctx context.Context, target provider.RouteTarget, req provider.Request) (provider.EventStream, error) {
 	body, err := c.buildRequest(target, req)
 	if err != nil {
-		return nil, err
+		return nil, provider.MarkUnissued(err)
 	}
 	resp, err := c.do(ctx, http.MethodPost, "/chat/completions", body)
 	if err != nil {
@@ -317,6 +317,12 @@ func errorMessage(raw []byte) string {
 }
 
 func (c *Client) buildRequest(target provider.RouteTarget, req provider.Request) ([]byte, error) {
+	if req.CachePlan != nil && req.CachePlan.RoutingKey != "" {
+		return nil, &provider.CapabilityError{
+			Target: target.ID(), Capability: "cache routing key",
+			Detail: "this chat-completions profile has no verified field for prompt cache affinity",
+		}
+	}
 	if req.CachePlan != nil && len(req.CachePlan.Breakpoints) > 0 {
 		return nil, &provider.CapabilityError{
 			Target:     target.ID(),

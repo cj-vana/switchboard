@@ -44,7 +44,7 @@ jobs:
               -ldflags "-s -w -X main.version=$tag" -o "dist/$bin" ./cmd/sb
             (cd dist && tar -czf "sb_${ver}_${os}_${arch}.tar.gz" "$bin" && rm "$bin")
           done
-          (cd dist && sha256sum *.tar.gz > checksums.txt)
+          (cd dist && sha256sum -- *.tar.gz > checksums.txt)
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*

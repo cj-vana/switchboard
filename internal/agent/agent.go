@@ -15,13 +15,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/hooks"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/hooks"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 const (
@@ -39,6 +39,26 @@ const (
 // ErrRoundLimit reports that a turn hit its tool-round cap with the model still
 // asking for more calls.
 var ErrRoundLimit = errors.New("turn exceeded its tool-round limit")
+
+// ErrProviderCall marks errors that came from the selected provider transport
+// or stream. Its wrapper preserves the original error for errors.Is/As while
+// letting route telemetry distinguish availability from internal failures.
+var ErrProviderCall = errors.New("provider call failed")
+
+// ContextWindowError is a local pre-stream refusal. It is typed so a surface
+// can compact or transactionally rebind to a roomier target without parsing
+// provider error text; no request has left the process when it is returned.
+type ContextWindowError struct {
+	Target         provider.RouteTargetID
+	Window         int
+	InputTokens    int
+	ReservedOutput int
+}
+
+func (e *ContextWindowError) Error() string {
+	return fmt.Sprintf("target %s holds %d tokens, but this call may need up to %d input plus %d reserved output tokens",
+		provider.DisplayRouteTargetID(e.Target), e.Window, e.InputTokens, e.ReservedOutput)
+}
 
 type Loop struct {
 	Provider provider.Provider
@@ -82,23 +102,74 @@ type Loop struct {
 	Checkpoints interface{ Begin(label string) }
 
 	// Budget, when non-nil, is asked before each model call whether the call
-	// may go out, given the request's estimated token count. An error ends
+	// may go out, given the request's conservative token ceiling. An error ends
 	// the turn right there — before the call, which is what §15 means by a
 	// preflight bound rather than a spending brake — and everything earlier
 	// rounds earned is already recorded. The ceiling itself lives with the
 	// surface, which knows what the session has spent and what a dollar is.
-	Budget func(promptTokens int) error
+	// Budget runs before every provider attempt. attempt starts at one for each
+	// model call, allowing a hard ceiling to reserve for failed attempts that a
+	// provider may still bill even when no usage record comes back.
+	Budget func(contextTokens, attempt int) error
+
+	// BudgetResult reports the outcome of every provider attempt that passed
+	// Budget. A failed request may still be billed even when the provider did not
+	// return usage, so a hard session ceiling needs a durable pessimistic reserve
+	// before a later model call is admitted. On success, usage is the exact
+	// priced record already appended to the session; on failure it is empty.
+	// It is deliberately separate from Budget so embedders that only need a
+	// preflight gate can omit settlement handling.
+	BudgetResult func(promptTokens, attempt int, usage session.Usage, err error) error
+
+	// runtimeMu guards the pieces of a loop that a surface may replace between
+	// turns or at an explicit model-call boundary. A turn snapshots its observer
+	// once, while a model call snapshots provider, target, and cache as one unit.
+	runtimeMu sync.RWMutex
+}
+
+// Binding is the provider state that must move as one unit. Cache state is
+// target-scoped, so independent setters could otherwise send to one target
+// while warming or charging another target's cache.
+type Binding struct {
+	Provider provider.Provider
+	Target   provider.RouteTarget
+	Cache    *Cache
+}
+
+// Binding returns a coherent snapshot of the loop's current provider state.
+func (l *Loop) Binding() Binding {
+	l.runtimeMu.RLock()
+	defer l.runtimeMu.RUnlock()
+	return Binding{Provider: l.Provider, Target: l.Target, Cache: l.Cache}
+}
+
+// Bind replaces provider, target, and cache atomically. It is safe while idle
+// or from ToolBatchEnd, after the preceding model call and tools are durable.
+func (l *Loop) Bind(binding Binding) {
+	l.runtimeMu.Lock()
+	l.Provider = binding.Provider
+	l.Target = binding.Target
+	l.Cache = binding.Cache
+	l.runtimeMu.Unlock()
+}
+
+// SetObserver installs the observer graph used by the next turn. A turn keeps
+// the snapshot it started with through completion.
+func (l *Loop) SetObserver(observer Observer) {
+	l.runtimeMu.Lock()
+	l.Observer = observer
+	l.runtimeMu.Unlock()
 }
 
 // price attaches what the catalog says this call cost, along with the revision
 // and confidence that produced the number. A cost with neither is not
 // reproducible, and one derived from a surface default is shape rather than
 // fact (§4, §15).
-func (l *Loop) price(record session.Usage) session.Usage {
+func (l *Loop) price(target provider.RouteTarget, record session.Usage) session.Usage {
 	if l.Catalog == nil {
 		return record
 	}
-	info, confidence, ok := l.Catalog.Lookup(l.Target)
+	info, confidence, ok := l.Catalog.Lookup(target)
 	if !ok {
 		return record
 	}
@@ -112,11 +183,33 @@ func (l *Loop) price(record session.Usage) session.Usage {
 	return record
 }
 
+func (l *Loop) checkContext(target provider.RouteTarget, inputTokens int) error {
+	if l.Catalog == nil {
+		return nil
+	}
+	info, _, ok := l.Catalog.Lookup(target)
+	if !ok || info.ContextWindow <= 0 {
+		return nil
+	}
+	outputTokens := provider.EffectiveOutputTokenReserve(target, info.MaxOutput)
+	if inputTokens < 0 || outputTokens < 0 || outputTokens > info.ContextWindow ||
+		inputTokens > info.ContextWindow-outputTokens {
+		return &ContextWindowError{
+			Target: target.ID(), Window: info.ContextWindow,
+			InputTokens: inputTokens, ReservedOutput: outputTokens,
+		}
+	}
+	return nil
+}
+
 func (l *Loop) observer() Observer {
-	if l.Observer == nil {
+	l.runtimeMu.RLock()
+	observer := l.Observer
+	l.runtimeMu.RUnlock()
+	if observer == nil {
 		return NopObserver{}
 	}
-	return l.Observer
+	return observer
 }
 
 // Turn runs one user message to completion.
@@ -134,6 +227,7 @@ func (l *Loop) Turn(ctx context.Context, input string) error {
 // and complete: it opens the turn, so it is the boundary /fork cuts on and
 // the message every later request replays.
 func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error {
+	observer := l.observer()
 	// The turn is the undo unit: everything this input causes the tools to
 	// change restores together. A subagent's loop leaves this nil and its
 	// registry shares the primary recorder, so a delegate's edits file under
@@ -159,7 +253,7 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 				}
 			}
 		}
-		msg, stop, usage, attempts, err := l.callModel(ctx)
+		msg, stop, usage, attempts, promptTokens, servedTarget, err := l.callModel(ctx, observer)
 		if err != nil {
 			// Content that did arrive is recorded as an interrupted turn, so the
 			// session shows what happened instead of a gap. Adapters drop
@@ -177,22 +271,33 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 		if err := l.Session.AppendMessage(msg); err != nil {
 			return err
 		}
-		record := l.price(session.Usage{
-			Target:   string(l.Target.ID()),
+		record := l.price(servedTarget, session.Usage{
+			Target:   string(servedTarget.ID()),
 			Usage:    usage,
 			Attempts: attempts,
+			Purpose:  session.UsagePurposeTurn,
 		})
-		if err := l.Session.AppendUsage(record); err != nil {
+		storedRecord, err := l.Session.AppendUsageRecord(record)
+		if err != nil {
 			return err
 		}
-		l.observer().TurnUsage(record)
+		record = storedRecord
+		// A successful attempt remains atomically reserved until its observed
+		// usage is durable. Releasing it before AppendUsage would let a
+		// concurrent race/delegate call spend the same headroom in that gap.
+		if l.BudgetResult != nil {
+			if err := l.BudgetResult(promptTokens, attempts, record, nil); err != nil {
+				return err
+			}
+		}
+		observer.TurnUsage(record)
 
 		uses := msg.ToolUses()
 		if stop != provider.StopToolUse || len(uses) == 0 {
 			return nil
 		}
 
-		results, runErr := l.runTools(ctx, uses)
+		results, runErr := l.runTools(ctx, uses, observer)
 		// Results are appended even when the turn is being abandoned. An
 		// assistant message whose tool calls have no matching results is a
 		// malformed conversation, and every later request built from this
@@ -208,10 +313,14 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 		if runErr != nil {
 			return runErr
 		}
+		// All parallel calls completed successfully and their ordered results are
+		// durable. An aborted or cancelled batch is not a routing boundary: its
+		// partial evidence must not rebind a turn that is ending.
+		observer.ToolBatchEnd(ctx)
 	}
 
 	msg := fmt.Sprintf("turn stopped at the %d tool-round limit", maxRounds)
-	l.observer().Notice("warn", msg)
+	observer.Notice("warn", msg)
 	l.Session.AppendNote("warn", msg)
 	return ErrRoundLimit
 }
@@ -219,82 +328,124 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 // callModel issues one model call, retrying transient failures. It returns
 // whatever content arrived even when it ends in an error, so the caller can
 // record a partial turn.
-func (l *Loop) callModel(ctx context.Context) (provider.Message, provider.StopReason, provider.Usage, int, error) {
+func (l *Loop) callModel(ctx context.Context, observer Observer) (provider.Message, provider.StopReason, provider.Usage, int, int, provider.RouteTarget, error) {
 	maxAttempts := orDefault(l.MaxAttempts, DefaultMaxAttempts)
+	binding := l.Binding()
 
 	req := provider.Request{
 		System:   l.System,
 		Tools:    l.Tools.Definitions(),
 		Messages: l.Session.State().Messages,
 	}
-	if l.Budget != nil {
-		if err := l.Budget(prefix.RequestTokens(req)); err != nil {
-			return provider.Message{}, "", provider.Usage{}, 0, err
-		}
+	promptTokens := prefix.RequestTokens(req)
+	contextTokens := prefix.RequestTokenCeiling(req)
+	if err := l.checkContext(binding.Target, contextTokens); err != nil {
+		return provider.Message{}, "", provider.Usage{}, 0, promptTokens, binding.Target, err
 	}
-	req.CachePlan = l.Cache.plan(req.System, req.Tools, req.Messages)
+	req.CachePlan = binding.Cache.plan(req.System, req.Tools, req.Messages)
 
 	var lastMsg provider.Message
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		msg, stop, usage, err := l.streamOnce(ctx, req)
+		// Do not reserve a hard-budget attempt that cannot possibly be issued.
+		// A cancellation after this point is handled by streamOnce's issued bit:
+		// an invoked provider is conservatively chargeable; an uninvoked one is
+		// released without becoming permanent retry debt.
+		if err := ctx.Err(); err != nil {
+			return lastMsg, "", provider.Usage{}, attempt - 1, promptTokens, binding.Target, err
+		}
+		if l.Budget != nil {
+			if err := l.Budget(contextTokens, attempt); err != nil {
+				return lastMsg, "", provider.Usage{}, attempt - 1, promptTokens, binding.Target, err
+			}
+		}
+		msg, stop, usage, issued, err := l.streamOnce(ctx, binding, observer, req)
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil && l.BudgetResult != nil {
+			settlementErr := err
+			if !issued {
+				settlementErr = nil
+			}
+			if budgetErr := l.BudgetResult(promptTokens, attempt, session.Usage{}, settlementErr); budgetErr != nil {
+				return msg, stop, usage, attempt, promptTokens, binding.Target, budgetErr
+			}
+		}
 		if err == nil {
 			// Recorded from what came back, never from what was sent (§6.3).
 			// A retried attempt is not recorded: its usage belongs to a request
 			// that failed, and folding it in would report a cache miss for a
 			// turn the provider never finished.
-			l.Cache.observe(usage, time.Now())
-			return msg, stop, usage, attempt, nil
+			binding.Cache.observe(usage, time.Now())
+			return msg, stop, usage, attempt, promptTokens, binding.Target, nil
 		}
 		lastMsg, lastErr = msg, err
 
 		if ctx.Err() != nil {
-			return msg, stop, usage, attempt, ctx.Err()
+			return msg, stop, usage, attempt, promptTokens, binding.Target, ctx.Err()
 		}
 		if !retryable(err) || attempt == maxAttempts {
-			return msg, stop, usage, attempt, err
+			return msg, stop, usage, attempt, promptTokens, binding.Target, providerCallError(err)
 		}
 
 		// A dropped stream is re-issued from the last committed message rather
 		// than resumed. Ollama exposes no continuation handle, and treating a
 		// partial response as committed would mean guessing what the server
 		// had already produced (§10.3).
-		l.observer().Notice("warn", fmt.Sprintf("attempt %d of %d failed (%v), retrying", attempt, maxAttempts, err))
+		observer.Notice("warn", fmt.Sprintf("attempt %d of %d failed (%v), retrying", attempt, maxAttempts, err))
 		if err := sleep(ctx, backoff(attempt)); err != nil {
-			return msg, stop, usage, attempt, err
+			return msg, stop, usage, attempt, promptTokens, binding.Target, err
 		}
 	}
-	return lastMsg, "", provider.Usage{}, maxAttempts, lastErr
+	return lastMsg, "", provider.Usage{}, maxAttempts, promptTokens, binding.Target, providerCallError(lastErr)
 }
 
-func (l *Loop) streamOnce(ctx context.Context, req provider.Request) (provider.Message, provider.StopReason, provider.Usage, error) {
+func providerCallError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrProviderCall, err)
+}
+
+func (l *Loop) streamOnce(ctx context.Context, binding Binding, observer Observer, req provider.Request) (provider.Message, provider.StopReason, provider.Usage, bool, error) {
 	var b messageBuilder
 	var stop provider.StopReason
 	var usage provider.Usage
 
-	stream, err := l.Provider.Stream(ctx, l.Target, req)
+	if err := ctx.Err(); err != nil {
+		return b.message(), stop, usage, false, err
+	}
+	stream, err := binding.Provider.Stream(ctx, binding.Target, req)
 	if err != nil {
-		return b.message(), stop, usage, err
+		return b.message(), stop, usage, provider.RequestIssued(err), err
 	}
 	defer stream.Close()
 
 	for {
 		ev, err := stream.Next()
+		// Cancellation is the owner's last word even when an adapter cannot
+		// interrupt its read promptly and later hands back a successful terminal
+		// event. Check before accepting either that event or EOF so a late result
+		// cannot become a completed, billed turn after the user stopped it.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return b.message(), stop, usage, true, ctxErr
+		}
 		if errors.Is(err, io.EOF) {
-			return b.message(), stop, usage, nil
+			return b.message(), stop, usage, true, nil
 		}
 		if err != nil {
-			return b.message(), stop, usage, err
+			return b.message(), stop, usage, true, err
 		}
 
 		switch ev.Type {
 		case provider.EventThinkingDelta:
 			b.delta(ev.Index, provider.KindThinking, ev.Text)
 			b.sign(ev.Index, ev.Signature)
-			l.observer().ThinkingDelta(ev.Text)
+			observer.ThinkingDelta(ev.Text)
 		case provider.EventTextDelta:
 			b.delta(ev.Index, provider.KindText, ev.Text)
-			l.observer().TextDelta(ev.Text)
+			observer.TextDelta(ev.Text)
 		case provider.EventToolUse:
 			b.toolUse(ev.Index, *ev.ToolUse)
 		case provider.EventDone:
@@ -305,15 +456,18 @@ func (l *Loop) streamOnce(ctx context.Context, req provider.Request) (provider.M
 }
 
 type toolJob struct {
-	use    provider.ToolUse
-	plan   tools.Plan
-	result *tools.Result
-	ready  bool
+	use      provider.ToolUse
+	plan     tools.Plan
+	result   *tools.Result
+	ready    bool
+	resolved bool
+	outcome  permission.Outcome
+	audit    session.Permission
 }
 
 // runTools resolves permission for every call and then executes. Results come
 // back in call order regardless of how they were scheduled.
-func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse) ([]provider.Block, error) {
+func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse, observer Observer) ([]provider.Block, error) {
 	jobs := make([]*toolJob, len(uses))
 	for i, use := range uses {
 		j := &toolJob{use: use}
@@ -338,21 +492,79 @@ func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse) ([]provide
 		if err != nil {
 			return resultBlocks(jobs, "the permission prompt failed"), err
 		}
-		l.Session.AppendPermission(session.Permission{
-			Tool:     use.Name,
-			Mode:     string(l.Perms.Mode()),
-			Decision: string(outcome.Decision),
-			Reason:   outcome.Reason,
-		})
+		audit := session.Permission{
+			Tool:       use.Name,
+			Mode:       string(l.Perms.Mode()),
+			Decision:   string(outcome.Decision),
+			Reason:     outcome.Reason,
+			Approved:   approved,
+			ResolvedBy: string(outcome.ResolvedBy),
+		}
+		if outcome.Review != nil {
+			audit.Reviewer = outcome.Review.Reviewer
+			audit.ReviewDecision = string(outcome.Review.Decision)
+			audit.ReviewReason = outcome.Review.Reason
+			audit.ReviewError = outcome.Review.Error
+		}
+		j.resolved = true
+		j.outcome = outcome
+		j.audit = audit
 		if !approved {
-			j.fail("the user did not approve this call: %s", outcome.Reason)
 			continue
 		}
 		j.ready = true
 	}
 
+	var approvedOutcomes []permission.Outcome
+	for _, j := range jobs {
+		if j != nil && j.ready {
+			approvedOutcomes = append(approvedOutcomes, j.outcome)
+		}
+	}
+	var releasePermissions func()
+	if len(approvedOutcomes) > 0 {
+		var holdErr error
+		releasePermissions, holdErr = l.Perms.HoldResolutions(approvedOutcomes)
+		if holdErr != nil {
+			for _, j := range jobs {
+				if j == nil || !j.ready {
+					continue
+				}
+				j.ready = false
+				j.outcome.Decision = permission.Deny
+				j.outcome.ResolvedBy = permission.ResolvedByPolicy
+				j.outcome.Reason = holdErr.Error()
+				j.audit.Decision = string(permission.Deny)
+				j.audit.Approved = false
+				j.audit.ResolvedBy = string(permission.ResolvedByPolicy)
+				j.audit.Reason = holdErr.Error()
+			}
+		}
+	}
+	if releasePermissions != nil {
+		defer releasePermissions()
+	}
+
+	// Permission is one durable batch boundary: every final resolution is
+	// recorded before the first side effect, while the mode lease is held.
+	for _, j := range jobs {
+		if j == nil || !j.resolved {
+			continue
+		}
+		if err := l.Session.AppendPermission(j.audit); err != nil {
+			return resultBlocks(jobs, "the permission decision could not be recorded"),
+				fmt.Errorf("recording permission for %s: %w", j.use.Name, err)
+		}
+		if !j.ready {
+			j.fail("the request was not approved: %s", j.audit.Reason)
+		}
+	}
+
 	var pending []*toolJob
-	parallel := true
+	// Hooks are trusted commands with arbitrary side effects. Even read tools
+	// serialize when hooks are present so two pre/post hooks cannot race each
+	// other or the tool whose result they annotate.
+	parallel := l.Hooks.Empty()
 	for _, j := range jobs {
 		if !j.ready {
 			continue
@@ -371,7 +583,7 @@ func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse) ([]provide
 			wg.Add(1)
 			go func(j *toolJob) {
 				defer wg.Done()
-				l.execute(ctx, j)
+				l.execute(ctx, j, observer)
 			}(j)
 		}
 		wg.Wait()
@@ -380,7 +592,7 @@ func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse) ([]provide
 			if ctx.Err() != nil {
 				break
 			}
-			l.execute(ctx, j)
+			l.execute(ctx, j, observer)
 		}
 	}
 
@@ -390,8 +602,8 @@ func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse) ([]provide
 	return resultBlocks(jobs, "did not run"), nil
 }
 
-func (l *Loop) execute(ctx context.Context, j *toolJob) {
-	l.observer().ToolStart(j.use.Name, j.plan.Request)
+func (l *Loop) execute(ctx context.Context, j *toolJob, observer Observer) {
+	observer.ToolStart(j.use, j.plan.Request)
 	started := time.Now()
 
 	var res tools.Result
@@ -410,7 +622,7 @@ func (l *Loop) execute(ctx context.Context, j *toolJob) {
 		}
 	}
 	j.result = &res
-	l.observer().ToolEnd(j.use.Name, res, time.Since(started))
+	observer.ToolEnd(j.use, j.plan.Request, res, time.Since(started))
 }
 
 func (j *toolJob) fail(format string, args ...any) {

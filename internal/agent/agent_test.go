@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,11 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // scriptTurn is one canned model call.
@@ -104,11 +106,25 @@ type recordingObserver struct {
 	thinking strings.Builder
 	notices  []string
 	toolEnds []string
+	batches  int
+	usages   int
+	receipts []session.Usage
 
 	// The loop runs a turn's tool calls in parallel, so an observer that
 	// appends without guarding races. This one did, which is the same mistake
 	// the production detector made and the reason -race is worth running.
 	mu sync.Mutex
+}
+
+type closeSessionOnUsageObserver struct {
+	*recordingObserver
+	sess *session.Session
+	once sync.Once
+}
+
+func (o *closeSessionOnUsageObserver) TurnUsage(u session.Usage) {
+	o.recordingObserver.TurnUsage(u)
+	o.once.Do(func() { _ = o.sess.Close() })
 }
 
 func (o *recordingObserver) ThinkingDelta(s string) {
@@ -123,12 +139,18 @@ func (o *recordingObserver) TextDelta(s string) {
 	o.text.WriteString(s)
 }
 
-func (o *recordingObserver) ToolStart(string, permission.Request) {}
+func (o *recordingObserver) ToolStart(provider.ToolUse, permission.Request) {}
 
-func (o *recordingObserver) ToolEnd(name string, res tools.Result, _ time.Duration) {
+func (o *recordingObserver) ToolEnd(call provider.ToolUse, _ permission.Request, res tools.Result, _ time.Duration) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.toolEnds = append(o.toolEnds, name)
+	o.toolEnds = append(o.toolEnds, call.Name)
+}
+
+func (o *recordingObserver) ToolBatchEnd(context.Context) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.batches++
 }
 
 func (o *recordingObserver) Notice(level, text string) {
@@ -136,7 +158,12 @@ func (o *recordingObserver) Notice(level, text string) {
 	defer o.mu.Unlock()
 	o.notices = append(o.notices, level+": "+text)
 }
-func (o *recordingObserver) TurnUsage(session.Usage) {}
+func (o *recordingObserver) TurnUsage(usage session.Usage) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.usages++
+	o.receipts = append(o.receipts, usage)
+}
 
 type autoAsker struct {
 	approve bool
@@ -222,6 +249,16 @@ func TestTurnWithoutTools(t *testing.T) {
 	if got := h.sess.State().Usage; got.InputTokens != 10 || got.OutputTokens != 5 {
 		t.Errorf("usage = %+v", got)
 	}
+	if len(h.obs.receipts) != 1 || h.obs.receipts[0].CallID == "" || h.obs.receipts[0].Purpose != session.UsagePurposeTurn {
+		t.Fatalf("observer receipt = %#v, want stored durable turn CallID", h.obs.receipts)
+	}
+	durable, err := session.ReadUsages(h.sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(durable) != 1 || durable[0].CallID != h.obs.receipts[0].CallID {
+		t.Fatalf("durable usage %#v does not resolve observer receipt %#v", durable, h.obs.receipts)
+	}
 }
 
 func TestToolRoundTrip(t *testing.T) {
@@ -251,6 +288,9 @@ func TestToolRoundTrip(t *testing.T) {
 	if result.ToolUseID != "call_1" || result.Content != "hi" || result.IsError {
 		t.Errorf("result = %+v", result)
 	}
+	if h.obs.batches != 1 {
+		t.Fatalf("tool batch callbacks = %d, want exactly one after results were committed", h.obs.batches)
+	}
 
 	// The second request must carry the whole conversation so far.
 	if len(h.provider.requests) != 2 {
@@ -258,6 +298,31 @@ func TestToolRoundTrip(t *testing.T) {
 	}
 	if n := len(h.provider.requests[1].Messages); n != 3 {
 		t.Errorf("second request carried %d messages, want 3", n)
+	}
+}
+
+func TestToolDoesNotRunWhenPermissionDecisionCannotBeJournaled(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("call_1", "write", `{"path":"must-not-exist.txt","content":"side effect"}`)),
+	)
+	observer := &closeSessionOnUsageObserver{recordingObserver: h.obs, sess: h.sess}
+	h.loop.SetObserver(observer)
+
+	err := h.loop.Turn(context.Background(), "write the file")
+	if !errors.Is(err, session.ErrSessionPoisoned) {
+		t.Fatalf("Turn err = %v, want ErrSessionPoisoned from the permission journal", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(h.root, "must-not-exist.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("approved side effect ran after the journal failed: stat err = %v", statErr)
+	}
+	observer.mu.Lock()
+	toolEnds := len(observer.toolEnds)
+	observer.mu.Unlock()
+	if toolEnds != 0 {
+		t.Fatalf("observer saw %d completed tools, want none", toolEnds)
+	}
+	if h.provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want no follow-up after journal failure", h.provider.calls)
 	}
 }
 
@@ -332,7 +397,7 @@ func TestDeniedCallIsReportedNotFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := h.messages()[2].Content[0].(provider.ToolResult)
-	if !res.IsError || !strings.Contains(res.Content, "did not approve") {
+	if !res.IsError || !strings.Contains(res.Content, "not approved") {
 		t.Errorf("result = %+v", res)
 	}
 	if h.asker.calls != 1 {
@@ -372,6 +437,63 @@ func TestRetryOnTransientFailure(t *testing.T) {
 	}
 	if len(h.obs.notices) == 0 {
 		t.Error("a retry must be visible to the user, not silent")
+	}
+}
+
+func TestBudgetIsRecheckedBeforeEveryProviderAttempt(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		scriptTurn{startErr: &provider.APIError{Provider: "scripted", StatusCode: 503}},
+		textTurn("must not be sent"),
+	)
+	h.loop.MaxAttempts = 3
+	var attempts []int
+	var outcomes []error
+	h.loop.Budget = func(_ int, attempt int) error {
+		attempts = append(attempts, attempt)
+		if attempt > 1 {
+			return errors.New("retry reservation crosses the ceiling")
+		}
+		return nil
+	}
+	h.loop.BudgetResult = func(_ int, _ int, _ session.Usage, err error) error {
+		outcomes = append(outcomes, err)
+		return nil
+	}
+
+	err := h.loop.Turn(context.Background(), "hello")
+	if err == nil || !strings.Contains(err.Error(), "ceiling") {
+		t.Fatalf("err = %v, want the retry budget refusal", err)
+	}
+	if h.provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want the second attempt stopped before send", h.provider.calls)
+	}
+	if fmt.Sprint(attempts) != "[1 2]" {
+		t.Fatalf("budget attempts = %v", attempts)
+	}
+	if len(outcomes) != 1 || outcomes[0] == nil {
+		t.Fatalf("attempt outcomes = %v, want the one issued provider attempt reported as failed", outcomes)
+	}
+}
+
+func TestSuccessfulBudgetReservationReleasesAfterUsageIsDurable(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("done"))
+	h.loop.Budget = func(_ int, _ int) error { return nil }
+	called := false
+	h.loop.BudgetResult = func(_ int, _ int, _ session.Usage, err error) error {
+		called = true
+		if err != nil {
+			t.Fatalf("successful attempt reported %v", err)
+		}
+		if state := h.sess.State(); state.Calls != 1 {
+			t.Fatalf("reservation released before usage was durable: calls=%d", state.Calls)
+		}
+		return nil
+	}
+	if err := h.loop.Turn(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("successful attempt did not release its budget reservation")
 	}
 }
 
@@ -420,6 +542,9 @@ func TestExhaustedRetriesRecordAnIncompleteMessage(t *testing.T) {
 	err := h.loop.Turn(context.Background(), "hello")
 	if !errors.Is(err, provider.ErrStreamIncomplete) {
 		t.Fatalf("err = %v", err)
+	}
+	if !errors.Is(err, ErrProviderCall) {
+		t.Fatalf("err = %v, want provider-call provenance", err)
 	}
 	if h.provider.calls != 2 {
 		t.Errorf("provider called %d times, want 2 attempts", h.provider.calls)
@@ -484,6 +609,213 @@ func TestCancellationStillPairsResultsWithCalls(t *testing.T) {
 	if !second.IsError || !strings.Contains(second.Content, "cancelled") {
 		t.Errorf("the unrun call should say it never ran: %+v", second)
 	}
+	if h.obs.batches != 0 {
+		t.Fatalf("cancelled batch emitted %d successful routing boundaries", h.obs.batches)
+	}
+}
+
+type gatedProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (*gatedProvider) Name() string { return "gated" }
+func (p *gatedProvider) Stream(context.Context, provider.RouteTarget, provider.Request) (provider.EventStream, error) {
+	return &gatedStream{started: p.started, release: p.release}, nil
+}
+func (*gatedProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+func (*gatedProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{Reachable: true, ModelPresent: true}, nil
+}
+
+type gatedStream struct {
+	started chan struct{}
+	release chan struct{}
+	step    int
+}
+
+func (s *gatedStream) Next() (provider.Event, error) {
+	switch s.step {
+	case 0:
+		s.step++
+		close(s.started)
+		return provider.Event{Type: provider.EventTextDelta, Index: 0, Text: "hello"}, nil
+	case 1:
+		s.step++
+		<-s.release
+		return provider.Event{Type: provider.EventDone, StopReason: provider.StopEndTurn,
+			Usage: provider.Usage{InputTokens: 1, OutputTokens: 1}}, nil
+	default:
+		return provider.Event{}, io.EOF
+	}
+}
+func (*gatedStream) Close() error { return nil }
+
+func TestLateProviderSuccessCannotOutrunCancellation(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault)
+	gated := &gatedProvider{started: make(chan struct{}), release: make(chan struct{})}
+	h.loop.Bind(Binding{Provider: gated, Target: h.loop.Binding().Target})
+	h.loop.Budget = func(int, int) error { return nil }
+	var settled error
+	h.loop.BudgetResult = func(_ int, _ int, _ session.Usage, err error) error {
+		settled = err
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.loop.Turn(ctx, "hello") }()
+	<-gated.started
+	cancel()
+	close(gated.release) // the stream ignores cancellation and reports Done
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("late provider result won over cancellation: %v", err)
+	}
+	if !errors.Is(settled, context.Canceled) {
+		t.Fatalf("cancelled provider attempt was not settled conservatively: %v", settled)
+	}
+	state := h.sess.State()
+	if state.Calls != 0 || state.Usage.OutputTokens != 0 {
+		t.Fatalf("late success was durably accounted: calls=%d usage=%+v", state.Calls, state.Usage)
+	}
+	if len(state.Messages) != 2 || !state.Messages[1].Incomplete || state.Messages[1].Text() != "hello" {
+		t.Fatalf("partial output was not retained as incomplete: %+v", state.Messages)
+	}
+}
+
+func TestUnissuedCancellationReleasesBudgetReservation(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("must never be sent"))
+	ctx, cancel := context.WithCancel(context.Background())
+	budgetCalls := 0
+	h.loop.Budget = func(int, int) error {
+		budgetCalls++
+		cancel() // cancellation lands after admission but before Provider.Stream
+		return nil
+	}
+	settlements := 0
+	var settlementErr error
+	h.loop.BudgetResult = func(_ int, _ int, _ session.Usage, err error) error {
+		settlements++
+		settlementErr = err
+		return nil
+	}
+
+	err := h.loop.Turn(ctx, "hello")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("turn error = %v, want context.Canceled", err)
+	}
+	if h.provider.calls != 0 || budgetCalls != 1 {
+		t.Fatalf("provider calls=%d budget admissions=%d, want 0/1", h.provider.calls, budgetCalls)
+	}
+	if settlements != 1 || settlementErr != nil {
+		t.Fatalf("unissued reservation settled %d times with %v; want one debt-free release", settlements, settlementErr)
+	}
+}
+
+func TestAlreadyCancelledTurnDoesNotReserveBudget(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("must never be sent"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	budgetCalls := 0
+	settlements := 0
+	h.loop.Budget = func(int, int) error { budgetCalls++; return nil }
+	h.loop.BudgetResult = func(_ int, _ int, _ session.Usage, _ error) error { settlements++; return nil }
+
+	err := h.loop.Turn(ctx, "hello")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("turn error = %v, want context.Canceled", err)
+	}
+	if h.provider.calls != 0 || budgetCalls != 0 || settlements != 0 {
+		t.Fatalf("pre-cancel activity: provider=%d budget=%d settlements=%d", h.provider.calls, budgetCalls, settlements)
+	}
+}
+
+func TestObserverSwapTakesEffectAtTheNextTurn(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault)
+	oldObserver := h.obs
+	newObserver := &recordingObserver{}
+	provider := &gatedProvider{started: make(chan struct{}), release: make(chan struct{})}
+	h.loop.Bind(Binding{Provider: provider, Target: h.loop.Binding().Target})
+
+	done := make(chan error, 1)
+	go func() { done <- h.loop.Turn(context.Background(), "hello") }()
+	<-provider.started
+	h.loop.SetObserver(newObserver)
+	close(provider.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	oldObserver.mu.Lock()
+	oldText, oldUsages := oldObserver.text.String(), oldObserver.usages
+	oldObserver.mu.Unlock()
+	newObserver.mu.Lock()
+	newText, newUsages := newObserver.text.String(), newObserver.usages
+	newObserver.mu.Unlock()
+	if oldText != "hello" || oldUsages != 1 {
+		t.Fatalf("turn was split away from its starting observer: text=%q usages=%d", oldText, oldUsages)
+	}
+	if newText != "" || newUsages != 0 {
+		t.Fatalf("new observer saw the old turn: text=%q usages=%d", newText, newUsages)
+	}
+}
+
+func TestBindingSnapshotsStayCoherentDuringRebind(t *testing.T) {
+	aProvider := &scriptedProvider{}
+	bProvider := &scriptedProvider{}
+	aTarget := provider.RouteTarget{Provider: "a", Surface: "local", ModelID: "one"}
+	bTarget := provider.RouteTarget{Provider: "b", Surface: "local", ModelID: "two"}
+	aCache := &Cache{Target: aTarget.ID()}
+	bCache := &Cache{Target: bTarget.ID()}
+	loop := &Loop{}
+	loop.Bind(Binding{Provider: aProvider, Target: aTarget, Cache: aCache})
+
+	var wg sync.WaitGroup
+	errs := make(chan string, 1)
+	report := func(format string, args ...any) {
+		select {
+		case errs <- fmt.Sprintf(format, args...):
+		default:
+		}
+	}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10_000; i++ {
+			loop.Bind(Binding{Provider: bProvider, Target: bTarget, Cache: bCache})
+			loop.Bind(Binding{Provider: aProvider, Target: aTarget, Cache: aCache})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20_000; i++ {
+			binding := loop.Binding()
+			switch binding.Provider {
+			case aProvider:
+				if binding.Target.ID() != aTarget.ID() || binding.Cache != aCache {
+					report("torn a binding: %+v", binding)
+					return
+				}
+			case bProvider:
+				if binding.Target.ID() != bTarget.ID() || binding.Cache != bCache {
+					report("torn b binding: %+v", binding)
+					return
+				}
+			default:
+				report("unexpected provider in binding: %T", binding.Provider)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	default:
+	}
 }
 
 func TestSessionResumesAfterAFailedTurn(t *testing.T) {
@@ -507,15 +839,31 @@ func TestSessionResumesAfterAFailedTurn(t *testing.T) {
 func TestSystemPromptIsStableWithinASession(t *testing.T) {
 	capability := execution.Capability{Platform: "darwin"}
 	first := SystemPrompt("/work", permission.ModeDefault, capability)
-	second := SystemPrompt("/work", permission.ModeDefault, capability)
+	// Mode and confinement can change while this frozen block stays cached.
+	// Supplying different launch values must not freeze a claim that later
+	// becomes false into the model-facing contract.
+	second := SystemPrompt("/work", permission.ModeYOLO, execution.TestingVerifiedCapability())
 
 	// The system prompt sits in the frozen zone. If it varied per call, every
 	// request would invalidate the cached prefix (§6.1).
 	if first[0].(provider.Text).Text != second[0].(provider.Text).Text {
 		t.Error("the system prompt is not stable between calls")
 	}
-	if !strings.Contains(first[0].(provider.Text).Text, "no verified sandbox") {
-		t.Error("the model should be told that each command needs approval")
+	prompt := first[0].(provider.Text).Text
+	for _, want := range []string{
+		"paths are rooted in the workspace",
+		"Sandbox is off by default",
+		"approved command runs on the host",
+		"Never claim confinement from a permission prompt alone",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt is missing mutable-posture invariant %q", want)
+		}
+	}
+	for _, stale := range []string{"no verified sandbox", "approves each command", "Nothing outside the workspace is reachable"} {
+		if strings.Contains(prompt, stale) {
+			t.Errorf("system prompt froze stale posture claim %q", stale)
+		}
 	}
 }
 
@@ -573,7 +921,7 @@ func TestInjectLandsBetweenRoundsOnly(t *testing.T) {
 func TestBudgetGateStopsBeforeTheCall(t *testing.T) {
 	h := newHarness(t, permission.ModeDefault, textTurn("never sent"))
 	asked := 0
-	h.loop.Budget = func(promptTokens int) error {
+	h.loop.Budget = func(promptTokens, _ int) error {
 		asked++
 		if promptTokens <= 0 {
 			t.Errorf("promptTokens = %d, want the request sized before the gate answers", promptTokens)
@@ -593,5 +941,56 @@ func TestBudgetGateStopsBeforeTheCall(t *testing.T) {
 	}
 	if usage := h.sess.State().Usage; usage.InputTokens != 0 || usage.OutputTokens != 0 {
 		t.Errorf("usage = %+v, want nothing billed", usage)
+	}
+}
+
+func TestBudgetGateReceivesConservativeShortMessageCeiling(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault, textTurn("never sent"))
+	for i := range 1_000 {
+		role := provider.RoleUser
+		if i%2 == 1 {
+			role = provider.RoleAssistant
+		}
+		if err := h.sess.AppendMessage(provider.Message{Role: role, Content: []provider.Block{provider.Text{Text: "x"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := 0
+	h.loop.Budget = func(contextTokens, _ int) error {
+		got = contextTokens
+		return errors.New("stop before stream")
+	}
+	_ = h.loop.Turn(context.Background(), "x")
+	if got < 10_000 {
+		t.Fatalf("budget gate received %d tokens; per-block floor would be zero", got)
+	}
+}
+
+func TestToolResultCannotOverflowContextOnTheNextModelCall(t *testing.T) {
+	h := newHarness(t, permission.ModeDefault,
+		toolTurn(use("read-big", "read", `{"path":"large.txt"}`)),
+		textTurn("must never be sent"),
+	)
+	if err := os.WriteFile(filepath.Join(h.root, "large.txt"), []byte(strings.Repeat("x", 200_000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := catalog.LoadBundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.RouteTarget{Provider: "anthropic", Surface: "first-party", ModelID: "claude-haiku-4-5"}
+	h.loop.Catalog = cat
+	h.loop.Bind(Binding{Provider: h.provider, Target: target})
+
+	err = h.loop.Turn(context.Background(), "read the large file")
+	var contextErr *ContextWindowError
+	if !errors.As(err, &contextErr) {
+		t.Fatalf("second-round refusal = %v, want ContextWindowError", err)
+	}
+	if h.provider.calls != 1 {
+		t.Fatalf("infeasible target received %d streams, want only the pre-tool call", h.provider.calls)
+	}
+	if contextErr.InputTokens+contextErr.ReservedOutput <= contextErr.Window {
+		t.Fatalf("invalid context refusal: %+v", contextErr)
 	}
 }

@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 const (
@@ -97,7 +97,7 @@ func Target(model string) provider.RouteTarget {
 func (c *Client) Stream(ctx context.Context, target provider.RouteTarget, req provider.Request) (provider.EventStream, error) {
 	body, err := c.buildRequest(target, req, true)
 	if err != nil {
-		return nil, err
+		return nil, provider.MarkUnissued(err)
 	}
 	resp, err := c.do(ctx, http.MethodPost, "/api/chat", body)
 	if err != nil {
@@ -265,6 +265,12 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 }
 
 func (c *Client) buildRequest(target provider.RouteTarget, req provider.Request, stream bool) ([]byte, error) {
+	if req.CachePlan != nil && req.CachePlan.RoutingKey != "" {
+		return nil, &provider.CapabilityError{
+			Target: target.ID(), Capability: "cache routing key",
+			Detail: "Ollama exposes no prompt cache affinity key",
+		}
+	}
 	if req.CachePlan != nil && len(req.CachePlan.Breakpoints) > 0 {
 		return nil, &provider.CapabilityError{
 			Target:     target.ID(),

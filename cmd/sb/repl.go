@@ -8,19 +8,19 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 type repl struct {
@@ -38,13 +38,15 @@ type repl struct {
 	// route is what chose the starting target, when a router chose it. §8.1
 	// renders this rather than logging it, because principle 3 requires the
 	// user can see why.
-	route   *route.Decision
-	sticky  *route.Sticky
-	watcher *watcher
+	route         *route.Decision
+	routeFeatures route.SessionFeatures
+	sticky        *route.Sticky
+	watcher       *watcher
 
 	// budget is the shared ceiling the loop's gate reads; the REPL checks it
 	// before an escalation the same way the TUI does.
 	budget *budgetState
+	caches *cacheSet
 }
 
 // moveTo rebinds the loop after the escalation policy changed the primary.
@@ -52,39 +54,49 @@ type repl struct {
 // A move that cannot be served leaves the target where it is: reporting a
 // switch and then not making it would be worse than staying, because every
 // later line would describe the wrong target.
-func (r *repl) moveTo(rank int, why string) {
+func (r *repl) moveTo(ctx context.Context, rank int, why string) (func() bool, func(), bool) {
 	if rank < 0 || rank >= len(r.config.Tiers) {
-		return
+		return nil, nil, false
 	}
 	tier := r.config.Tiers[rank]
-
-	// Same refusal as the TUI's: an escalation never overrides the ceiling.
-	if r.budget != nil {
-		state := r.loop.Session.State()
-		tokens := prefix.RequestTokens(provider.Request{
-			System: r.loop.System, Tools: r.loop.Tools.Definitions(), Messages: state.Messages,
-		})
-		if reason, blocked := budgetBlocksMove(r.budget, r.catalog, tier,
-			catalog.Money(state.CostMicroUSD), tokens); blocked {
-			r.out.Notice("warn", "staying on "+r.tier.ID+": "+reason)
-			return
-		}
-	}
-
-	probed, client, note, err := r.providers.probeTierFallback(context.Background(), tier)
+	probed, client, note, err := r.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
+		return checkMoveFeasible(r.loop, r.catalog, r.providers, r.budget, candidate, rank)
+	})
 	if err != nil {
 		r.out.Notice("warn", "staying on "+r.tier.ID+": "+err.Error())
-		return
+		return nil, nil, false
 	}
-	if note != "" {
-		r.out.Notice("warn", note)
-		r.loop.Session.AppendNote("warn", note)
+	if ctx.Err() != nil {
+		return nil, nil, false
 	}
-	r.tier = probed
-	r.loop.Target = probed.Target
-	r.loop.Provider = client
-	r.loop.Cache = cacheFor(probed.Target, r.catalog)
-	r.out.line(r.out.style(dim, "  now on "+r.tierLine()))
+	oldBinding := r.loop.Binding()
+	targetChanged := oldBinding.Target.ID() != probed.Target.ID()
+	abandoned := ""
+	if targetChanged {
+		abandoned = abandonedCacheNote(oldBinding.Cache, r.catalog, time.Now())
+	}
+	cache := r.caches.For(probed.Target, r.catalog)
+	bind := func() bool {
+		if err := persistRuntimeBinding(r.loop.Session, probed, false); err != nil {
+			r.out.Notice("warn", "the automatic tier move was not saved: "+err.Error())
+			return false
+		}
+		r.tier = probed
+		r.loop.Bind(agent.Binding{Provider: client, Target: probed.Target, Cache: cache})
+		return true
+	}
+	after := func() {
+		if note != "" {
+			r.out.Notice("warn", note)
+			r.loop.Session.AppendNote("warn", note)
+		}
+		r.out.line(r.out.style(dim, "  now on "+r.tierLine()))
+		if abandoned != "" {
+			r.out.line(r.out.style(dim, "  "+abandoned))
+			_ = r.loop.Session.AppendNote("info", abandoned)
+		}
+	}
+	return bind, after, true
 }
 
 func (r *repl) banner(sess *session.Session, resumed bool) {
@@ -93,7 +105,7 @@ func (r *repl) banner(sess *session.Session, resumed bool) {
 	r.out.line(r.out.style(bold, "switchboard") + " " + r.out.style(dim, r.tierLine()))
 	r.out.line(r.out.style(dim, "  workspace  "+r.workspace))
 	r.out.line(r.out.style(dim, "  mode       "+string(r.loop.Perms.Mode())))
-	r.out.line(r.out.style(dim, "  sandbox    "+r.capability.Summary()))
+	r.out.line(r.out.style(dim, "  execution  "+r.loop.Perms.Execution().Summary()))
 	r.out.line(r.out.style(dim, "  catalog    "+r.catalog.Revision+" ("+r.catalog.Source+")"))
 	if r.route != nil {
 		for _, line := range describeRoute(*r.route) {
@@ -120,7 +132,7 @@ func (r *repl) banner(sess *session.Session, resumed bool) {
 }
 
 func (r *repl) tierLine() string {
-	target := string(r.loop.Target.ID())
+	target := r.loop.Binding().Target.Display()
 	if r.tier.Label != "" {
 		return fmt.Sprintf("%s %s  %s", r.tier.ID, r.tier.Label, target)
 	}
@@ -161,16 +173,11 @@ func (r *repl) interactive(ctx context.Context) error {
 			continue
 		}
 
-		// The outbound credential gate, on the one scripted surface that can
-		// still ask: same three answers as the TUI dialog, in line.
-		if leaks := credential.ScanPrompt(input); len(leaks) > 0 {
-			input = r.secretGate(input, leaks)
-			if input == "" {
-				continue
-			}
+		prompt, images, ok := r.prepareInteractivePrompt(input)
+		if !ok {
+			continue
 		}
-
-		if err := r.turn(ctx, input); err != nil {
+		if err := r.turnPrepared(ctx, prompt, images, false); err != nil {
 			if errors.Is(err, context.Canceled) {
 				r.out.Notice("warn", "turn cancelled; the session is intact and can continue")
 				continue
@@ -181,6 +188,19 @@ func (r *repl) interactive(ctx context.Context) error {
 			r.out.Notice("error", err.Error())
 		}
 	}
+}
+
+// prepareInteractivePrompt performs the assembly before the outbound secret
+// gate, so credentials inside an @mentioned file are guarded too.
+func (r *repl) prepareInteractivePrompt(input string) (string, []provider.Image, bool) {
+	prompt, images := expandPromptMentions(r.workspace, input)
+	if leaks := credential.ScanPrompt(prompt); len(leaks) > 0 {
+		prompt = r.secretGate(prompt, leaks)
+		if prompt == "" {
+			return "", nil, false
+		}
+	}
+	return prompt, images, true
 }
 
 // secretGate holds a key-shaped prompt behind a one-line question, the
@@ -217,6 +237,10 @@ func (r *repl) secretGate(input string, leaks []credential.Leak) string {
 // the turn and returns to the prompt rather than killing the process, because
 // the session is resumable and the work already done is worth keeping.
 func (r *repl) turn(ctx context.Context, input string) error {
+	return r.turnPrepared(ctx, input, nil, false)
+}
+
+func (r *repl) turnPrepared(ctx context.Context, input string, images []provider.Image, fixedTier bool) error {
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -234,18 +258,98 @@ func (r *repl) turn(ctx context.Context, input string) error {
 		}
 	}()
 
+	opening := provider.UserText(input)
+	for _, image := range images {
+		opening.Content = append(opening.Content, image)
+	}
+	if _, onLadder := r.config.Tier(r.tier.ID); onLadder && !fixedTier {
+		binding := r.loop.Binding()
+		tier, client, note, plan, err := resolveUserTurn(turnCtx, r.loop, r.config, r.catalog, r.providers,
+			r.budget, r.caches, r.sticky, r.tier, binding.Provider, opening, r.workspace)
+		if err != nil {
+			return err
+		}
+		if err := r.acceptTurnResolution(turnCtx, tier, client, note, plan); err != nil {
+			return err
+		}
+	} else {
+		if !fixedTier {
+			r.route = nil
+			plan := prospectiveTurnPlan(r.loop, r.sticky, opening, r.workspace)
+			r.routeFeatures = plan.Features
+			// An explicit or synthetic resumed target cannot reroute to an
+			// unapproved rung, but it still owes every hard preflight invariant.
+			// Probe this concrete parameterized identity first: /think changes the
+			// full target ID, while live tool/vision evidence belongs to the probe
+			// result for the target about to receive the request.
+			probed, client, err := r.providers.probeTier(turnCtx, r.tier)
+			if err != nil {
+				return fmt.Errorf("the current target cannot serve the turn: %w", err)
+			}
+			if err := checkTurnFeasible(r.loop, r.catalog, r.providers, r.budget, probed, 0, plan, opening); err != nil {
+				return fmt.Errorf("the current target cannot serve the turn: %w", err)
+			}
+			if err := turnCtx.Err(); err != nil {
+				return err
+			}
+			r.tier = probed
+			r.loop.Bind(agent.Binding{Provider: client, Target: probed.Target, Cache: r.caches.For(probed.Target, r.catalog)})
+		}
+	}
 	if r.watcher != nil {
 		r.watcher.StartTurn()
 	}
 
 	before := r.loop.Session.State()
+	usageWindow := r.loop.Session.BeginUsageWindow()
 	startedOn := r.tier
 	started := time.Now()
 
-	err := r.loop.Turn(turnCtx, input)
+	err := r.loop.TurnMessage(turnCtx, opening)
 	r.out.endTurn()
-	r.recordRoute(input, startedOn, before, started, err)
+	r.recordRoute(input, startedOn, before, usageWindow, started, err)
+	r.route = nil
 	return err
+}
+
+// acceptTurnResolution is the commit boundary between a live route probe and
+// the session runtime. Cancellation wins even when an adapter ignores it and
+// returns success late: no binding, sticky rank, or durable runtime record may
+// move after the user cancelled the turn.
+func (r *repl) acceptTurnResolution(ctx context.Context, tier config.Tier, client provider.Provider, note string, plan turnPlan) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if tier.ID != r.tier.ID || tier.Target.ID() != r.tier.Target.ID() {
+		pinned := r.sticky != nil && r.sticky.Pinned()
+		oldBinding := r.loop.Binding()
+		targetChanged := oldBinding.Target.ID() != tier.Target.ID()
+		abandoned := ""
+		if targetChanged {
+			abandoned = abandonedCacheNote(oldBinding.Cache, r.catalog, time.Now())
+		}
+		if err := persistRuntimeBinding(r.loop.Session, tier, pinned); err != nil {
+			return fmt.Errorf("saving automatic tier selection: %w", err)
+		}
+		if note != "" {
+			r.out.Notice("warn", note)
+			_ = r.loop.Session.AppendNote("warn", note)
+		}
+		r.tier = tier
+		r.loop.Bind(agent.Binding{Provider: client, Target: tier.Target, Cache: r.caches.For(tier.Target, r.catalog)})
+		r.out.line(r.out.style(dim, "  now on "+r.tierLine()))
+		if abandoned != "" {
+			r.out.line(r.out.style(dim, "  "+abandoned))
+			_ = r.loop.Session.AppendNote("info", abandoned)
+		}
+	}
+	if r.sticky != nil {
+		r.sticky.Rebase(slices.IndexFunc(r.config.Tiers, func(candidate config.Tier) bool { return candidate.ID == r.tier.ID }))
+	}
+	r.route = &plan.Decision
+	r.routeFeatures = plan.Features
+	r.out.Notice("route", fmt.Sprintf("%s: %s", plan.Decision.Tier, plan.Decision.Rationale))
+	return nil
 }
 
 // recordRoute writes §8.4's training signal for the turn that just ended.
@@ -259,9 +363,12 @@ func (r *repl) turn(ctx context.Context, input string) error {
 // negative label and a clean completion is weak evidence of sufficiency and none
 // of necessity, so turning any of this into a label is a decision for whoever
 // trains on it, not one to bake in here.
-func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.State, started time.Time, turnErr error) {
-	after := r.loop.Session.State()
-	err := appendRouteRecord(r.loop.Session, prompt, startedOn, r.tier, before, after, started, turnErr, r.route, r.sticky)
+func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.State, usageWindow session.UsageCursor, started time.Time, turnErr error) {
+	moves := 0
+	if r.watcher != nil {
+		moves = r.watcher.MoveCount()
+	}
+	err := appendRouteRecord(r.loop.Session, prompt, startedOn, r.tier, before, usageWindow, started, turnErr, r.route, r.routeFeatures, moves)
 	if err != nil {
 		r.out.Notice("warn", "the routing record for this turn was not saved: "+err.Error())
 	}
@@ -270,25 +377,45 @@ func (r *repl) recordRoute(prompt string, startedOn config.Tier, before session.
 // appendRouteRecord is the UI-independent half of recordRoute, shared with the
 // TUI: it derives the record and appends it, leaving error reporting to the
 // caller's surface.
-func appendRouteRecord(sess *session.Session, prompt string, startedOn, endedOn config.Tier, before, after session.State, started time.Time, turnErr error, routeDec *route.Decision, sticky *route.Sticky) error {
+func appendRouteRecord(sess *session.Session, prompt string, startedOn, endedOn config.Tier, before session.State, usageWindow session.UsageCursor, started time.Time, turnErr error, routeDec *route.Decision, features route.SessionFeatures, moves int) error {
+	wallTime := time.Since(started).Milliseconds()
+	if wallTime < 0 {
+		wallTime = 0
+	}
 	rec := session.Route{
-		TurnDepth:    len(before.Messages),
-		PromptChars:  len(prompt),
-		Tier:         startedOn.ID,
-		Target:       startedOn.Target.ID(),
-		Source:       "manual",
-		Usage:        after.Usage.Sub(before.Usage),
-		CostMicroUSD: after.CostMicroUSD - before.CostMicroUSD,
-		WallTimeMS:   time.Since(started).Milliseconds(),
-		Outcome:      string(route.Completed),
+		TurnDepth:         len(before.Messages),
+		PromptTokens:      features.PromptTokens,
+		ContextTokens:     features.ContextTokens,
+		PriorFailures:     features.PriorFailures,
+		TestFailures:      features.TestFailures,
+		FilesInContext:    features.FilesInContext,
+		DiffSize:          features.DiffSizeSoFar,
+		DiffSizeKnown:     features.DiffSizeKnown,
+		TestsInvolved:     features.TestsInvolved,
+		PromptChars:       len(prompt),
+		Languages:         append([]string(nil), features.RepoLanguages...),
+		LastTurnEscalated: features.LastTurnEscalated,
+		Tier:              startedOn.ID,
+		Target:            startedOn.Target.ID(),
+		Source:            "manual",
+		WallTimeMS:        wallTime,
+		Outcome:           string(route.Completed),
+		// Route records are currently appended before a task-specific verifier
+		// can be correlated with this exact turn. Say that explicitly; false/
+		// false alone is ambiguous between "not run" and "ran and failed".
+		VerificationStatus: session.RouteVerificationUnavailable,
 	}
 	if routeDec != nil {
 		rec.Source = string(routeDec.Source)
 		rec.Rationale = routeDec.Rationale
+		rec.PolicyRevision = routeDec.PolicyRevision
 	}
-	if sticky != nil && endedOn.ID != startedOn.ID {
-		rec.Escalations = 1
+	rec.Escalations = moves
+	moved := moves > 0 || endedOn.ID != startedOn.ID || endedOn.Target.ID() != startedOn.Target.ID()
+	if moved {
 		rec.EndedOn = endedOn.Target.ID()
+		rec.EndedTier = endedOn.ID
+		rec.Outcome = string(route.Escalated)
 	}
 	switch {
 	case errors.Is(turnErr, context.Canceled):
@@ -296,11 +423,47 @@ func appendRouteRecord(sess *session.Session, prompt string, startedOn, endedOn 
 		// counting against the target: the user walked away and told you
 		// nothing about the choice.
 		rec.Outcome = string(route.Abandoned)
+		rec.FailureKind = session.RouteFailureCancelled
 	case turnErr != nil:
-		rec.Outcome = string(route.Escalated)
+		rec.FailureKind = routeFailureKind(turnErr)
+		if !moved {
+			rec.Outcome = string(route.Failed)
+		}
 	}
 
-	return sess.AppendRoute(rec)
+	return sess.AppendRouteWithUsage(usageWindow, rec)
+}
+
+func routeFailureKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return session.RouteFailureCancelled
+	case errors.Is(err, agent.ErrRoundLimit):
+		return session.RouteFailureRoundLimit
+	case errors.Is(err, errBudgetUnavailable):
+		return session.RouteFailureBudget
+	case isContextWindowError(err):
+		return session.RouteFailureContext
+	case errors.Is(err, agent.ErrProviderCall):
+		return session.RouteFailureProvider
+	case errors.Is(err, provider.ErrStreamIncomplete):
+		return session.RouteFailureProvider
+	}
+	var capability *provider.CapabilityError
+	var protocol *provider.ProtocolError
+	var api *provider.APIError
+	if errors.As(err, &capability) || errors.As(err, &protocol) || errors.As(err, &api) {
+		return session.RouteFailureProvider
+	}
+	return session.RouteFailureInternal
+}
+
+func isContextWindowError(err error) bool {
+	var contextWindow *agent.ContextWindowError
+	return errors.As(err, &contextWindow)
 }
 
 // command handles a slash command and reports whether the REPL should exit.
@@ -308,10 +471,21 @@ func (r *repl) command(ctx context.Context, input string) bool {
 	name, rest, _ := strings.Cut(strings.TrimPrefix(input, "/"), " ")
 	rest = strings.TrimSpace(rest)
 
-	// A bare tier name switches to it, which is the shortest path to the one
-	// control the user most often wants (design principle 3).
+	// A bare tier name permanently pins it. With a prompt it borrows that rung
+	// for exactly one fully assembled turn, then restores the prior binding and
+	// routing policy byte-for-byte at the behavioral level.
 	if _, ok := r.config.Tier(name); ok {
-		r.switchTier(ctx, name)
+		if rest == "" {
+			r.switchTier(ctx, name)
+		} else if prompt, images, send := r.prepareInteractivePrompt(rest); send {
+			if err := r.turnOnTier(ctx, name, prompt, images); err != nil {
+				if errors.Is(err, context.Canceled) {
+					r.out.Notice("warn", "turn cancelled; the session is intact and can continue")
+				} else if !errors.Is(err, agent.ErrRoundLimit) {
+					r.out.Notice("error", err.Error())
+				}
+			}
+		}
 		r.out.flush()
 		return false
 	}
@@ -321,17 +495,30 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		return true
 
 	case "help":
-		r.out.line("  /tN                                       switch to tier N, for example /t2")
+		r.out.line("  /tN                                       permanently pin tier N, for example /t2")
+		r.out.line("  /tN <prompt>                              run one prompt there, then restore")
+		r.out.line("  /tier auto                                return to automatic per-turn routing")
 		r.out.line("  /tiers                                    show the configured ladder")
-		r.out.line("  /mode [plan|default|acceptEdits|bypass]   show or change the permission mode")
+		r.out.line("  /mode [plan|default|acceptEdits|auto|yolo|bypass]  show or change permission mode")
 		r.out.line("  /cost                                     tokens and cost for this session")
 		r.out.line("  /session                                  session id, target, and message count")
-		r.out.line("  /sandbox                                  what isolation this host provides")
+		r.out.line("  /sandbox [off|on|auto]                    show or change command confinement")
 		r.out.line("  /exit                                     leave")
 
 	case "tier":
 		if rest == "" {
 			r.out.line("  " + r.tierLine())
+			break
+		}
+		if rest == "auto" {
+			if err := persistAutomaticPosture(r.loop.Session, r.tier); err != nil {
+				r.out.Notice("error", "automatic routing was not enabled: "+err.Error())
+				break
+			}
+			if r.sticky != nil {
+				r.sticky.Unpin()
+			}
+			r.out.line("  automatic per-turn routing resumed from " + r.tier.ID)
 			break
 		}
 		r.switchTier(ctx, rest)
@@ -361,10 +548,25 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		}
 		r.loop.Perms.SetMode(mode)
 		r.out.line("  mode is now " + string(mode))
-		if mode == permission.ModeBypass && !r.capability.AutomaticExecutionAllowed() {
+		if mode == permission.ModeYOLO {
+			warning := "FULL HOST ACCESS: ordinary workspace edits and non-sensitive commands skip prompts; commands are unsandboxed with host filesystem and network reach. External and sensitive actions still ask"
+			if r.capability.Platform == "windows" {
+				warning += ". Windows descendant processes may survive cancellation"
+			}
+			r.out.Notice("warn", warning)
+		}
+		if mode == permission.ModeAuto {
+			r.out.line(r.out.style(dim, "  ordinary workspace edits apply; ordinary non-sensitive commands go to the cheap approver; external, sensitive, uncertain, and host-loopback-sandbox actions ask you"))
+		}
+		if mode == permission.ModeBypass && !r.loop.Perms.Execution().SandboxActive() {
 			// Saying this once, plainly, beats letting the user discover it by
 			// being prompted anyway and reading it as a bug (§19.3).
-			r.out.line(r.out.style(dim, "  commands will still be approved one at a time: "+r.capability.Summary()))
+			r.out.line(r.out.style(dim, "  commands will still be approved one at a time: bypass needs an active verified sandbox"))
+		} else if mode == permission.ModeBypass {
+			policy := r.loop.Perms.Execution().CommandPolicy(false)
+			if policy.HostLoopbackShared || policy.HostIPCShared {
+				r.out.line(r.out.style(dim, "  commands will still ask: host-local network or IPC services retain authority outside this sandbox; bypass is promptless only when both are isolated"))
+			}
 		}
 
 	case "cost":
@@ -373,15 +575,38 @@ func (r *repl) command(ctx context.Context, input string) bool {
 	case "session":
 		state := r.loop.Session.State()
 		r.out.line("  " + state.ID)
-		r.out.line("  target   " + state.Target)
+		r.out.line("  target   " + r.loop.Binding().Target.Display())
 		r.out.line("  catalog  " + state.CatalogRevision)
 		r.out.line("  messages " + fmt.Sprint(len(state.Messages)))
 		r.out.line("  log      " + r.loop.Session.Path())
 
 	case "sandbox":
-		r.out.line("  platform  " + r.capability.Platform)
-		r.out.line("  mechanism " + string(r.capability.Mechanism))
-		r.out.line("  " + r.capability.Summary())
+		controller := r.loop.Perms.Execution()
+		if rest == "" || rest == "status" {
+			r.out.line("  platform  " + r.capability.Platform)
+			r.out.line("  mechanism " + string(r.capability.Mechanism))
+			r.out.line("  requested " + string(controller.SandboxMode()))
+			r.out.line("  " + controller.Summary())
+			break
+		}
+		mode, err := execution.ParseSandboxMode(rest)
+		if err != nil {
+			r.out.Notice("error", err.Error())
+			break
+		}
+		if r.loop.Perms.Mode() == permission.ModeYOLO && mode != execution.SandboxOff {
+			r.out.Notice("error", "yolo mode requires the sandbox to stay off; leave yolo before enabling confinement")
+			break
+		}
+		if err := controller.SetSandbox(mode); err != nil {
+			r.out.Notice("error", err.Error())
+			break
+		}
+		r.config.Sandbox = mode
+		r.out.line("  " + controller.Summary())
+		if err := r.config.Save(); err != nil {
+			r.out.Notice("warn", "sandbox changed for this process, but the config was not saved: "+err.Error())
+		}
 
 	default:
 		r.out.Notice("error", "unknown command "+name+"; try /help")
@@ -391,13 +616,75 @@ func (r *repl) command(ctx context.Context, input string) bool {
 	return false
 }
 
+func (r *repl) turnOnTier(ctx context.Context, id, prompt string, images []provider.Image) error {
+	requested, ok := r.config.Tier(id)
+	if !ok {
+		return fmt.Errorf("no tier %s is configured; try /tiers", id)
+	}
+	opening := provider.UserText(prompt)
+	for _, image := range images {
+		opening.Content = append(opening.Content, image)
+	}
+	plan := prospectiveTurnPlan(r.loop, r.sticky, opening, r.workspace)
+	rank := slices.IndexFunc(r.config.Tiers, func(candidate config.Tier) bool { return candidate.ID == requested.ID })
+	probed, client, note, err := r.providers.probeTierFallbackFeasible(ctx, requested, func(candidate config.Tier) error {
+		return checkTurnFeasible(r.loop, r.catalog, r.providers, r.budget, candidate, rank, plan, opening)
+	})
+	if err != nil {
+		return fmt.Errorf("the requested tier %s cannot serve the turn: %w", id, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	retargetTurnPlan(&plan, r.loop, r.catalog, r.caches, probed, rank, opening)
+
+	priorTier := r.tier
+	priorBinding := r.loop.Binding()
+	var stickyState route.StickySnapshot
+	if r.sticky != nil {
+		stickyState = r.sticky.Snapshot()
+		r.sticky.Pin(rank)
+	}
+	r.tier = probed
+	r.loop.Bind(agent.Binding{Provider: client, Target: probed.Target, Cache: r.caches.For(probed.Target, r.catalog)})
+	defer func() {
+		r.tier = priorTier
+		r.loop.Bind(priorBinding)
+		if r.sticky != nil {
+			r.sticky.Restore(stickyState)
+		}
+	}()
+
+	if note != "" {
+		r.out.Notice("warn", note)
+		_ = r.loop.Session.AppendNote("warn", note)
+	}
+	r.route = &route.Decision{
+		Tier: probed.ID, Target: probed.Target.ID(), Confidence: 1,
+		Source: route.SourceUserPin, Rationale: "one-turn tier override requested by you",
+		PolicyRevision: route.PolicyRevision, EstimatedCost: plan.Decision.EstimatedCost,
+	}
+	r.routeFeatures = plan.Features
+	r.out.line(r.out.style(dim, "  running this turn on "+r.tierLine()))
+	return r.turnPrepared(ctx, prompt, images, true)
+}
+
 func (r *repl) switchTier(ctx context.Context, id string) {
 	tier, ok := r.config.Tier(id)
 	if !ok {
 		r.out.Notice("error", "no tier "+id+" is configured; try /tiers")
 		return
 	}
-	if tier.ID == r.tier.ID {
+	if tier.ID == r.tier.ID && tier.Target.ID() == r.tier.Target.ID() {
+		if err := persistRuntimeBinding(r.loop.Session, r.tier, true); err != nil {
+			r.out.Notice("error", "tier pin was not saved: "+err.Error())
+			return
+		}
+		if r.sticky != nil {
+			if rank := slices.IndexFunc(r.config.Tiers, func(candidate config.Tier) bool { return candidate.ID == r.tier.ID }); rank >= 0 {
+				r.sticky.Pin(rank)
+			}
+		}
 		r.out.line("  already on " + r.tierLine())
 		return
 	}
@@ -407,20 +694,35 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 		r.out.Notice("error", err.Error())
 		return
 	}
+	// The runtime binding is the state transition; make it durable before
+	// publishing ancillary fallback notes or changing the live binding.
+	if err := persistRuntimeBinding(r.loop.Session, probed, true); err != nil {
+		r.out.Notice("error", "tier switch was not saved: "+err.Error())
+		return
+	}
 	if note != "" {
 		r.out.Notice("warn", note)
 		r.loop.Session.AppendNote("warn", note)
 	}
 
+	oldBinding := r.loop.Binding()
+	targetChanged := oldBinding.Target.ID() != probed.Target.ID()
 	r.tier = probed
-	r.loop.Target = probed.Target
 	// A tier may cross providers, so the adapter moves with the target. So does
 	// the cache: markers, minimums, and observed state all belong to a target,
 	// and carrying one target's tracker onto another would attribute its cache
 	// to a server that never held it.
-	abandoned := abandonedCacheNote(r.loop.Cache, r.catalog, time.Now())
-	r.loop.Provider = client
-	r.loop.Cache = cacheFor(probed.Target, r.catalog)
+	abandoned := ""
+	if targetChanged {
+		abandoned = abandonedCacheNote(oldBinding.Cache, r.catalog, time.Now())
+	}
+	r.loop.Bind(agent.Binding{Provider: client, Target: probed.Target, Cache: r.caches.For(probed.Target, r.catalog)})
+	if r.sticky != nil {
+		rank := slices.IndexFunc(r.config.Tiers, func(candidate config.Tier) bool { return candidate.ID == probed.ID })
+		if rank >= 0 {
+			r.sticky.Pin(rank)
+		}
+	}
 	r.out.line("  now on " + r.tierLine())
 
 	// Cache state is scoped to a target, so a switch abandons whatever was
@@ -428,8 +730,10 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 	// modeled number is the note; otherwise the fact is stated without one.
 	if abandoned != "" {
 		r.out.line(r.out.style(dim, "  "+abandoned))
-	} else if info, _, ok := r.catalog.Lookup(probed.Target); ok && !info.Free() {
-		r.out.line(r.out.style(dim, "  a target switch leaves the previous target's cache behind"))
+	} else if targetChanged {
+		if info, _, ok := r.catalog.Lookup(probed.Target); ok && !info.Free() {
+			r.out.line(r.out.style(dim, "  a target switch leaves the previous target's cache behind"))
+		}
 	}
 }
 
@@ -437,7 +741,7 @@ func (r *repl) switchTier(ctx context.Context, id string) {
 // figure is an estimate against a named catalog revision and a reconciliation
 // aid, never a substitute for the provider's invoice (§15).
 func (r *repl) summary() {
-	for _, line := range summaryLines(r.loop.Session.State(), r.catalog, r.loop.Target) {
+	for _, line := range summaryLines(r.loop.Session.State(), r.catalog, r.loop.Binding().Target) {
 		r.out.line(r.out.style(dim, line))
 	}
 	r.out.flush()
@@ -459,7 +763,32 @@ func summaryLines(state session.State, cat *catalog.Catalog, target provider.Rou
 	// scarce, a plan target consumed quota, and reporting either as the other
 	// tells the user the wrong thing about what just ran out.
 	info, _, ok := cat.Lookup(target)
+	accounted := catalog.Money(state.AccountedCostMicroUSD())
+	routedKinds, routedKindsKnown := routedMeteringKinds(cat, state)
 	switch {
+	case state.ExternalCostMicroUSD > 0:
+		lines = append(lines, fmt.Sprintf("  estimated %s including delegate/race work against recorded catalog data",
+			accounted))
+	case accounted > 0:
+		lines = append(lines, fmt.Sprintf("  estimated %s across routed provider work against catalog %s",
+			accounted, state.CatalogRevision))
+	case routedKindsKnown:
+		if len(routedKinds) > 1 {
+			lines = append(lines, "  mixed metering across routed calls: "+strings.Join(routedKinds, " + "))
+			break
+		}
+		switch routedKinds[0] {
+		case "local":
+			lines = append(lines, "  runs locally, so there is nothing to bill")
+		case "plan":
+			lines = append(lines, "  billed as a plan; quota, not dollars, is what this consumed")
+		case "dollar-metered":
+			lines = append(lines, "  dollar-metered routed calls rounded to "+accounted.String())
+		case "no per-token cost":
+			lines = append(lines, "  no per-token cost recorded for the routed calls")
+		default:
+			lines = append(lines, "  routed calls include a target the catalog could not price")
+		}
 	case !ok:
 		lines = append(lines, "  no catalog entry for this target, so nothing was priced")
 	case info.Metering == catalog.Local:
@@ -470,7 +799,11 @@ func summaryLines(state session.State, cat *catalog.Catalog, target provider.Rou
 		lines = append(lines, "  no per-token cost recorded for this target")
 	default:
 		lines = append(lines, fmt.Sprintf("  estimated %s against catalog %s",
-			catalog.Money(state.CostMicroUSD), state.CatalogRevision))
+			catalog.Money(state.AccountedCostMicroUSD()), state.CatalogRevision))
+	}
+	if state.RetryReserveMicroUSD > 0 {
+		lines = append(lines, fmt.Sprintf("  retry reserve %s for failed or unsettled provider attempts (not observed cost)",
+			catalog.Money(state.RetryReserveMicroUSD)))
 	}
 	return lines
 }

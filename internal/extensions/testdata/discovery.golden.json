@@ -1,0 +1,201 @@
+{
+  "plugins": [
+    {
+      "dialect": "claude",
+      "kind": "plugin",
+      "scope": "user",
+      "root": "$TESTDATA/claude-manifestless",
+      "real_path": "$TESTDATA/claude-manifestless",
+      "namespace": "claude-manifestless",
+      "id": "claude:claude-manifestless",
+      "components": [
+        {
+          "kind": "hook",
+          "source": "default",
+          "declared_path": "./hooks/hooks.json",
+          "path": "$TESTDATA/claude-manifestless/hooks/hooks.json",
+          "real_path": "$TESTDATA/claude-manifestless/hooks/hooks.json",
+          "executable": true
+        },
+        {
+          "kind": "mcp",
+          "source": "default",
+          "declared_path": "./.mcp.json",
+          "path": "$TESTDATA/claude-manifestless/.mcp.json",
+          "real_path": "$TESTDATA/claude-manifestless/.mcp.json",
+          "executable": true
+        },
+        {
+          "kind": "skill",
+          "source": "default",
+          "declared_path": "./skills",
+          "path": "$TESTDATA/claude-manifestless/skills",
+          "real_path": "$TESTDATA/claude-manifestless/skills",
+          "executable": false
+        }
+      ],
+      "executable": true,
+      "digest": "$SHA256",
+      "warnings": [
+        {
+          "code": "manifestless",
+          "path": "$TESTDATA/claude-manifestless",
+          "message": "Claude manifest is absent; namespace comes from the plugin directory name"
+        },
+        {
+          "code": "unsupported-default-component",
+          "path": "./.lsp.json",
+          "message": "Claude default component \".lsp.json\" is detected but not interpreted or enabled; it may start code and marks the plugin executable"
+        },
+        {
+          "code": "unsupported-default-component",
+          "path": "./agents",
+          "message": "Claude default component \"agents\" is detected but not interpreted or enabled"
+        }
+      ]
+    },
+    {
+      "dialect": "claude",
+      "kind": "plugin",
+      "scope": "user",
+      "root": "$TESTDATA/claude-plugin",
+      "real_path": "$TESTDATA/claude-plugin",
+      "manifest": "$TESTDATA/claude-plugin/.claude-plugin/plugin.json",
+      "namespace": "claude-tools",
+      "id": "claude:claude-tools",
+      "components": [
+        {
+          "kind": "hook",
+          "source": "manifest",
+          "declared_path": "./hooks/custom.json",
+          "path": "$TESTDATA/claude-plugin/hooks/custom.json",
+          "real_path": "$TESTDATA/claude-plugin/hooks/custom.json",
+          "executable": true
+        },
+        {
+          "kind": "hook",
+          "source": "default",
+          "declared_path": "./hooks/hooks.json",
+          "path": "$TESTDATA/claude-plugin/hooks/hooks.json",
+          "real_path": "$TESTDATA/claude-plugin/hooks/hooks.json",
+          "executable": true
+        },
+        {
+          "kind": "mcp",
+          "source": "manifest",
+          "inline": true,
+          "executable": true
+        },
+        {
+          "kind": "mcp",
+          "source": "default",
+          "declared_path": "./.mcp.json",
+          "path": "$TESTDATA/claude-plugin/.mcp.json",
+          "real_path": "$TESTDATA/claude-plugin/.mcp.json",
+          "executable": true
+        },
+        {
+          "kind": "skill",
+          "source": "manifest",
+          "declared_path": "./extra-skills",
+          "path": "$TESTDATA/claude-plugin/extra-skills",
+          "real_path": "$TESTDATA/claude-plugin/extra-skills",
+          "executable": false
+        },
+        {
+          "kind": "skill",
+          "source": "manifest",
+          "declared_path": "./skills",
+          "path": "$TESTDATA/claude-plugin/skills",
+          "real_path": "$TESTDATA/claude-plugin/skills",
+          "executable": false
+        }
+      ],
+      "executable": true,
+      "digest": "$SHA256",
+      "warnings": [
+        {
+          "code": "inline-component-requires-adapter",
+          "path": "mcpServers",
+          "message": "inline mcp semantics are recorded for an explicit adapter; discovery itself does not enable them"
+        },
+        {
+          "code": "unsupported-default-component",
+          "path": "./commands",
+          "message": "Claude default component \"commands\" is detected but not interpreted or enabled"
+        },
+        {
+          "code": "unsupported-manifest-field",
+          "path": "agents",
+          "message": "claude manifest field \"agents\" is detected but not interpreted or enabled"
+        },
+        {
+          "code": "unsupported-manifest-field",
+          "path": "lspServers",
+          "message": "claude manifest field \"lspServers\" is detected but not interpreted or enabled; it may start code and marks the plugin executable"
+        }
+      ]
+    },
+    {
+      "dialect": "codex",
+      "kind": "plugin",
+      "scope": "workspace",
+      "root": "$TESTDATA/codex-plugin",
+      "real_path": "$TESTDATA/codex-plugin",
+      "manifest": "$TESTDATA/codex-plugin/.codex-plugin/plugin.json",
+      "namespace": "codex-tools",
+      "id": "codex:codex-tools",
+      "components": [
+        {
+          "kind": "hook",
+          "source": "manifest",
+          "declared_path": "./config/hooks.json",
+          "path": "$TESTDATA/codex-plugin/config/hooks.json",
+          "real_path": "$TESTDATA/codex-plugin/config/hooks.json",
+          "executable": true
+        },
+        {
+          "kind": "hook",
+          "source": "default",
+          "declared_path": "./hooks/hooks.json",
+          "path": "$TESTDATA/codex-plugin/hooks/hooks.json",
+          "real_path": "$TESTDATA/codex-plugin/hooks/hooks.json",
+          "executable": true
+        },
+        {
+          "kind": "mcp",
+          "source": "default",
+          "declared_path": "./.mcp.json",
+          "path": "$TESTDATA/codex-plugin/.mcp.json",
+          "real_path": "$TESTDATA/codex-plugin/.mcp.json",
+          "executable": true
+        },
+        {
+          "kind": "mcp",
+          "source": "manifest",
+          "declared_path": "./config/mcp.json",
+          "path": "$TESTDATA/codex-plugin/config/mcp.json",
+          "real_path": "$TESTDATA/codex-plugin/config/mcp.json",
+          "executable": true
+        },
+        {
+          "kind": "skill",
+          "source": "manifest",
+          "declared_path": "./skills/",
+          "path": "$TESTDATA/codex-plugin/skills",
+          "real_path": "$TESTDATA/codex-plugin/skills",
+          "executable": false
+        }
+      ],
+      "executable": true,
+      "digest": "$SHA256",
+      "warnings": [
+        {
+          "code": "unsupported-manifest-field",
+          "path": "apps",
+          "message": "codex manifest field \"apps\" is detected but not interpreted or enabled; it may start code and marks the plugin executable"
+        }
+      ]
+    }
+  ]
+}

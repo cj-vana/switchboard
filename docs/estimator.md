@@ -63,10 +63,9 @@ pricing path. That half stays open until an adapter reaches a billing provider.
 
 It is a weaker gap than it sounds. Cost is a multiplication over token counts
 against a catalog rate, so an estimator with a bounded error yields a cost
-estimate bounded by the same factor. The arithmetic is covered by
-`internal/catalog` tests that reproduce the §6.4 worked example exactly. What is
-genuinely untested is whether a real provider's invoice matches the tokens it
-reported, and no local model can answer that.
+estimate bounded by the same factor. The arithmetic is covered by the catalog
+and cost-model tests. What is genuinely untested is whether a real provider's
+invoice matches the tokens it reported, and no local model can answer that.
 
 The corpus is three tasks on one model. It is enough to establish a direction
 and an order of magnitude, and not enough to claim a distribution.
@@ -105,12 +104,12 @@ cannot.
 
 ## What to do about it
 
-Nothing consumes `CountTokens` yet, which is why the answer for now is to write
-the error down rather than to correct it. The cost estimator is phase 2a work
-(§19.2), and it should start from a token estimate that accounts for per-message
-framing rather than from characters over four. The measurement above says what
-that correction has to be worth: roughly a fifth of the prompt at these
-conversation lengths, more as they grow.
+Production routing does not call provider `CountTokens`. Request assembly uses
+its own whole-request estimate and ceiling, and `internal/costmodel` widens
+non-exact counts with the measured ratios above. A future estimator should
+account for per-message framing instead of relying on characters divided by
+four. The measurement says that correction is worth roughly a fifth of the
+prompt at these conversation lengths, with the gap increasing as they grow.
 
 Until then, any consumer should treat the number as a floor, not an estimate.
 `TokenEstimate.Exact` is false for exactly this reason.

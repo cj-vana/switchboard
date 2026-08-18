@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func TestMentionTokenFindsOnlyTheActiveToken(t *testing.T) {
@@ -105,4 +108,111 @@ func TestShellContextDrainsIntoThePrompt(t *testing.T) {
 	if again := m.shellContext("next"); again != "next" {
 		t.Fatal("shell context should drain once, not repeat on every turn")
 	}
+}
+
+func TestTierOverrideUsesExpandedPromptAndImageBlocks(t *testing.T) {
+	m := testModel(t)
+	workspace := t.TempDir()
+	m.app.workspace = workspace
+	if err := os.WriteFile(filepath.Join(workspace, "shot.png"), []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := capabilityOllama(t, map[string]bool{"vision": true})
+	tier := ollamaTier("t1", "vision")
+	m.app.config.Tiers = []config.Tier{tier}
+	m.app.tier = tier
+	m.app.providers = newProviders(server.URL, m.app.config)
+	m.onShellDone(shellDoneMsg{command: "git status", output: "clean tree"})
+
+	cmd := m.startTurn("inspect @shot.png", "t1")
+	if cmd == nil || !m.turnPlanning {
+		t.Fatal("override did not enter planning")
+	}
+	msg := cmd().(overrideProbeMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	if len(msg.images) != 1 || !strings.Contains(msg.prompt, "Image shot.png") ||
+		!strings.Contains(msg.prompt, "$ git status") || !strings.Contains(msg.prompt, "clean tree") {
+		t.Fatalf("override opening lost ordinary prompt construction: prompt=%q images=%d", msg.prompt, len(msg.images))
+	}
+	m.finishPlanning()
+}
+
+func TestOffLadderVisionCheckDoesNotBlockValidOverride(t *testing.T) {
+	m := testModel(t)
+	workspace := t.TempDir()
+	m.app.workspace = workspace
+	if err := os.WriteFile(filepath.Join(workspace, "shot.png"), []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := capabilityOllama(t, map[string]bool{"vision": true})
+	tier := ollamaTier("t2", "vision")
+	m.app.config.Tiers = []config.Tier{tier}
+	m.app.providers = newProviders(server.URL, m.app.config)
+	m.app.tier = config.Tier{ID: "-resumed", Target: provider.RouteTarget{
+		Provider: "ollama", Surface: "local", ModelID: "text-only",
+	}}
+
+	cmd := m.startTurn("inspect @shot.png", "t2")
+	if cmd == nil {
+		t.Fatal("valid override was refused against the unrelated current target")
+	}
+	msg := cmd().(overrideProbeMsg)
+	if msg.err != nil || len(msg.images) != 1 {
+		t.Fatalf("override result: err=%v images=%d", msg.err, len(msg.images))
+	}
+	m.finishPlanning()
+}
+
+func TestOffLadderImageIsRefusedEvenWhenLadderExists(t *testing.T) {
+	m := testModel(t)
+	workspace := t.TempDir()
+	m.app.workspace = workspace
+	if err := os.WriteFile(filepath.Join(workspace, "shot.png"), []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.app.config.Tiers = []config.Tier{ollamaTier("t1", "vision")}
+	server := capabilityOllama(t, map[string]bool{"text-only": false})
+	m.app.providers = newProviders(server.URL, m.app.config)
+	m.app.tier = config.Tier{ID: "-resumed", Target: provider.RouteTarget{
+		Provider: "ollama", Surface: "local", ModelID: "text-only",
+	}}
+
+	cmd := m.startTurn("inspect @shot.png", "")
+	if cmd == nil || !m.turnPlanning {
+		t.Fatal("off-ladder turn did not enter owned asynchronous planning")
+	}
+	msg := cmd().(turnPlanMsg)
+	if msg.err == nil || !strings.Contains(strings.ToLower(msg.err.Error()), "image") {
+		t.Fatalf("off-ladder non-vision target was not refused before launch: %v", msg.err)
+	}
+	m.finishPlanning()
+}
+
+func TestOffLadderParameterizedTargetRefreshesLiveVisionEvidence(t *testing.T) {
+	m := testModel(t)
+	workspace := t.TempDir()
+	m.app.workspace = workspace
+	if err := os.WriteFile(filepath.Join(workspace, "shot.png"), []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := capabilityOllama(t, map[string]bool{"unlisted-vision": true})
+	m.app.providers = newProviders(server.URL, m.app.config)
+	target := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "unlisted-vision"}
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	m.app.tier = config.Tier{ID: "-model", Target: target}
+
+	cmd := m.startTurn("inspect @shot.png", "")
+	if cmd == nil {
+		t.Fatal("off-ladder image turn did not plan")
+	}
+	msg := cmd().(turnPlanMsg)
+	if msg.err != nil || len(msg.images) != 1 {
+		t.Fatalf("fresh positive live vision evidence was not honored: err=%v images=%d", msg.err, len(msg.images))
+	}
+	if vision, known := m.app.providers.probedVision(target); !known || !vision {
+		t.Fatalf("parameterized target probe evidence = vision %v known %v", vision, known)
+	}
+	m.finishPlanning()
 }

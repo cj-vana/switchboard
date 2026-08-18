@@ -20,10 +20,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/blame"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/blame"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 const blameMaxRuns = 12
@@ -85,7 +85,7 @@ func blameLines(store, delegates *session.Store, workspace, abs, shown string) [
 			break
 		}
 		o := ann.Origins[origin]
-		who := o.Target
+		who := provider.DisplayRouteTargetID(provider.RouteTargetID(o.Target))
 		if who == "" {
 			who = "(target unrecorded)"
 		}
@@ -236,7 +236,7 @@ func blameWorkspaceLines(store, delegates *session.Store, cat *catalog.Catalog, 
 	nameWidth := 0
 	names := map[string]string{}
 	for _, target := range targets {
-		name := target
+		name := provider.DisplayRouteTargetID(provider.RouteTargetID(target))
 		if name == "" {
 			name = "(target unrecorded)"
 		}
@@ -301,7 +301,7 @@ func blameLineLines(store, delegates *session.Store, workspace, abs, shown strin
 	}
 
 	o := ann.Origins[origin]
-	who := o.Target
+	who := provider.DisplayRouteTargetID(provider.RouteTargetID(o.Target))
 	if o.Tier != "" {
 		who = o.Tier + " " + who
 	}
@@ -423,7 +423,7 @@ func targetPay(cat *catalog.Catalog, targetStr string, usages []session.Usage) s
 	}
 	var dollars catalog.Money
 	for _, u := range usages {
-		dollars += catalog.Money(u.CostMicroUSD)
+		dollars = addMoney(dollars, catalog.Money(u.CostMicroUSD))
 	}
 	if dollars == 0 {
 		return "bills dollars, but no cost was recorded"

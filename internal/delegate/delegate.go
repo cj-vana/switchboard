@@ -21,12 +21,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // MaxRounds bounds a subagent's turn tighter than the primary's, because a
@@ -64,6 +64,11 @@ type Config struct {
 	// A non-nil named agent carries the definition's prompt and tool grant
 	// for the assembly to apply.
 	NewLoop func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *Agent) (*agent.Loop, error)
+
+	// Finish runs after the subagent loop stops and before its result returns to
+	// the primary. Surfaces use it to reconcile the sub-session's priced calls
+	// into the primary's authoritative budget ledger without copying Usage.
+	Finish func(sess *session.Session) error
 
 	// Forward receives the subagent's tool activity so the user watches the
 	// work as it happens. Nil means unobserved.
@@ -267,6 +272,11 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent) 
 	turnErr := loop.Turn(ctx, in.Task)
 	state := sess.State()
 	answer := finalText(state)
+	if t.c.Finish != nil {
+		if err := t.c.Finish(sess); err != nil {
+			return tools.Result{Content: fmt.Sprintf("the subagent's budget accounting could not be recorded: %v", err), IsError: true}, nil
+		}
+	}
 
 	who := "on " + tier.ID
 	if named != nil {
@@ -317,19 +327,21 @@ type forwarding struct {
 func (f *forwarding) ThinkingDelta(string) {}
 func (f *forwarding) TextDelta(string)     {}
 
-func (f *forwarding) ToolStart(name string, req permission.Request) {
-	if name == "todo" {
+func (f *forwarding) ToolStart(call provider.ToolUse, req permission.Request) {
+	if call.Name == "todo" {
 		return
 	}
-	f.parent.ToolStart(name, req)
+	f.parent.ToolStart(call, req)
 }
 
-func (f *forwarding) ToolEnd(name string, res tools.Result, took time.Duration) {
-	if name == "todo" {
+func (f *forwarding) ToolEnd(call provider.ToolUse, req permission.Request, res tools.Result, took time.Duration) {
+	if call.Name == "todo" {
 		return
 	}
-	f.parent.ToolEnd(name, res, took)
+	f.parent.ToolEnd(call, req, res, took)
 }
+
+func (f *forwarding) ToolBatchEnd(ctx context.Context) { f.parent.ToolBatchEnd(ctx) }
 
 func (f *forwarding) Notice(level, text string) { f.parent.Notice(level, text) }
 func (f *forwarding) TurnUsage(session.Usage)   {}

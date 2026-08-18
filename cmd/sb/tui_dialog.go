@@ -6,7 +6,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/terminaltext"
 )
 
 // dialog is a modal that takes over the input zone until it resolves. The
@@ -68,15 +69,18 @@ func (d *permissionDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
 }
 
 func (d *permissionDialog) view(width int, th *theme) string {
-	desc := describeRequest(d.req)
+	desc := approvalDescription(d.req)
 
 	var b strings.Builder
-	b.WriteString(th.bold.Render(" approve "+d.req.Tool) + " " + th.dim.Render(desc) + "\n")
+	b.WriteString(th.bold.Render(" approve "+terminaltext.Escape(d.req.Tool)) + " " + th.dim.Render(desc) + "\n")
 	if d.out.Reason != "" {
-		b.WriteString(th.dim.Render(" "+d.out.Reason) + "\n")
+		b.WriteString(th.dim.Render(" "+approvalReason(d.out.Reason)) + "\n")
 	}
 	if d.out.SandboxAbsent {
-		b.WriteString(th.warn.Render(" this command is not sandboxed and can do anything your account can") + "\n")
+		b.WriteString(th.warn.Render(" FULL HOST ACCESS: this command is not sandboxed; it can access files outside the workspace and the network") + "\n")
+	}
+	if d.req.Effect == permission.EffectExecute && d.req.Network {
+		b.WriteString(th.warn.Render(" FULL NETWORK ACCESS REQUESTED: this command can send workspace data off this machine") + "\n")
 	}
 	b.WriteString("\n")
 
@@ -88,14 +92,14 @@ func (d *permissionDialog) view(width int, th *theme) string {
 		// per-host and the label says the host.
 		always = "yes, and allow this tool for the rest of the session"
 		if d.req.Path != "" {
-			always = "yes, and allow " + d.req.Path + " for the rest of the session"
+			always = "yes, and allow " + terminaltext.Escape(d.req.Path) + " for the rest of the session"
 		}
 	}
 	// The border states the stakes: accent for a routine ask, amber the moment
 	// the command leaves the sandbox. Color is information here, not chrome,
 	// and the selection bar speaks the same color as the frame.
 	frame := th.accent
-	if d.out.SandboxAbsent {
+	if d.out.SandboxAbsent || (d.req.Effect == permission.EffectExecute && d.req.Network) {
 		frame = th.warn
 	}
 	options := []string{
@@ -136,15 +140,19 @@ type pickerItem struct {
 }
 
 type pickerDialog struct {
-	title  string
-	items  []pickerItem
-	sel    int
-	onPick func(id string) tea.Cmd
+	title    string
+	items    []pickerItem
+	sel      int
+	onPick   func(id string) tea.Cmd
+	onCancel func() tea.Cmd
 }
 
 func (d *pickerDialog) update(key tea.KeyMsg, th *theme) (bool, tea.Cmd) {
 	switch key.String() {
 	case "esc":
+		if d.onCancel != nil {
+			return true, d.onCancel()
+		}
 		return true, nil
 	case "up", "k":
 		if d.sel > 0 {

@@ -22,9 +22,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Manager places markers for one route target.

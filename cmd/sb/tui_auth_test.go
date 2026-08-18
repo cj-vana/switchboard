@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/credential"
 )
 
 // The login flow's contract: the secret is taken masked, and no rendering of

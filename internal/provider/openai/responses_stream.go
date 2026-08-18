@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // maxResponsesLine bounds one event. A single event carrying large tool

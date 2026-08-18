@@ -15,11 +15,12 @@ package catalog
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Money is an amount in micro-USD, a millionth of a dollar.
@@ -32,16 +33,73 @@ type Money int64
 const (
 	MicroUSD Money = 1
 	USD            = 1_000_000 * MicroUSD
+	MaxMoney Money = Money(math.MaxInt64)
 )
 
 // PerMTok converts a dollars-per-million-tokens quote to Money.
 func PerMTok(dollars float64) Money {
-	return Money(dollars * float64(USD))
+	m, ok := moneyFromDollars(dollars)
+	if !ok {
+		return MaxMoney
+	}
+	return m
 }
 
 // Cost prices a token count against a per-million-token rate.
 func (m Money) Cost(tokens int) Money {
-	return Money(int64(m) * int64(tokens) / 1_000_000)
+	cost, ok := checkedTokenCost(m, tokens)
+	if !ok {
+		return MaxMoney
+	}
+	return cost
+}
+
+// checkedTokenCost multiplies before dividing without ever squeezing the
+// intermediate product into an int64. Provider prices can be large enough for
+// rate*tokens to overflow even though the final per-million-token cost fits.
+func checkedTokenCost(rate Money, tokens int) (Money, bool) {
+	if rate < 0 || tokens < 0 {
+		return MaxMoney, false
+	}
+
+	hi, lo := bits.Mul64(uint64(rate), uint64(tokens))
+	const perMillion = uint64(1_000_000)
+	if hi >= perMillion {
+		return MaxMoney, false
+	}
+	quotient, _ := bits.Div64(hi, lo, perMillion)
+	if quotient > math.MaxInt64 {
+		return MaxMoney, false
+	}
+	return Money(quotient), true
+}
+
+func checkedMoneyAdd(a, b Money) (Money, bool) {
+	if a < 0 || b < 0 || b > MaxMoney-a {
+		return MaxMoney, false
+	}
+	return a + b, true
+}
+
+func saturatingMoneyAdd(a, b Money) Money {
+	total, ok := checkedMoneyAdd(a, b)
+	if !ok {
+		return MaxMoney
+	}
+	return total
+}
+
+func moneyFromDollars(dollars float64) (Money, bool) {
+	if math.IsNaN(dollars) || math.IsInf(dollars, 0) || dollars < 0 {
+		return 0, false
+	}
+	scaled := dollars * float64(USD)
+	// float64(math.MaxInt64) rounds up to 2^63, so equality is already out of
+	// range for a conversion to Money.
+	if math.IsInf(scaled, 0) || scaled >= float64(math.MaxInt64) {
+		return 0, false
+	}
+	return Money(math.Round(scaled)), true
 }
 
 // UnmarshalText reads a dollar amount written as a plain decimal string, so
@@ -52,7 +110,11 @@ func (m *Money) UnmarshalText(text []byte) error {
 	if err != nil {
 		return fmt.Errorf("price %q is not a decimal amount: %w", text, err)
 	}
-	*m = Money(math.Round(dollars * float64(USD)))
+	parsed, ok := moneyFromDollars(dollars)
+	if !ok {
+		return fmt.Errorf("price %q is negative or outside the supported range", text)
+	}
+	*m = parsed
 	return nil
 }
 
@@ -237,23 +299,34 @@ func bandNarrower(candidate, current PriceBand) bool {
 // Cost prices observed usage. It reports which band produced the number,
 // because an estimate that cannot name its band is not reproducible.
 func (m ModelInfo) Cost(u provider.Usage) (Money, PriceBand, bool) {
-	billable := u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens
+	billable := saturatingTokenSum(u.InputTokens, u.CacheReadTokens, u.CacheWriteTokens)
 	band, ok := m.Band(billable)
 	if !ok {
 		return 0, PriceBand{}, false
 	}
 
-	total := band.InputPerMTok.Cost(u.InputTokens) +
-		band.OutputPerMTok.Cost(u.OutputTokens) +
-		band.CacheReadPerMTok.Cost(u.CacheReadTokens)
+	total := band.InputPerMTok.Cost(u.InputTokens)
+	total = saturatingMoneyAdd(total, band.OutputPerMTok.Cost(u.OutputTokens))
+	total = saturatingMoneyAdd(total, band.CacheReadPerMTok.Cost(u.CacheReadTokens))
 
 	// Writes are billed at the TTL actually used. Without a recorded TTL the
 	// shortest is the conservative assumption, since it is the cheapest and
 	// under-reporting a charge is the failure that matters here.
 	if u.CacheWriteTokens > 0 {
-		total += cheapestWrite(band).Cost(u.CacheWriteTokens)
+		total = saturatingMoneyAdd(total, cheapestWrite(band).Cost(u.CacheWriteTokens))
 	}
 	return total, band, true
+}
+
+func saturatingTokenSum(tokens ...int) int {
+	total := 0
+	for _, count := range tokens {
+		if count < 0 || count > math.MaxInt-total {
+			return math.MaxInt
+		}
+		total += count
+	}
+	return total
 }
 
 func cheapestWrite(b PriceBand) Money {
@@ -295,8 +368,13 @@ func (m Metering) String() string {
 // money only: a plan target is free per token and still finite.
 func (m ModelInfo) Free() bool {
 	for _, b := range m.Pricing {
-		if b.InputPerMTok != 0 || b.OutputPerMTok != 0 {
+		if b.InputPerMTok != 0 || b.OutputPerMTok != 0 || b.CacheReadPerMTok != 0 {
 			return false
+		}
+		for _, price := range b.CacheWritePerMTok {
+			if price != 0 {
+				return false
+			}
 		}
 	}
 	return true

@@ -17,15 +17,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/hooks"
-	"github.com/cj-vana/switchboard/internal/mcp"
-	"github.com/cj-vana/switchboard/internal/skills"
-	"github.com/cj-vana/switchboard/internal/tools"
-	"github.com/cj-vana/switchboard/internal/trust"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/hooks"
+	"github.com/switchboard-code/switchboard/internal/mcp"
+	"github.com/switchboard-code/switchboard/internal/skills"
+	"github.com/switchboard-code/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/trust"
 )
 
 const doctorProbeTimeout = 5 * time.Second
@@ -137,7 +137,7 @@ func doctorLadderRows(ctx context.Context, cfg *config.Config, reg *providers) [
 			// said here the same way it would be said in a session.
 			rows = append(rows, doctorRow{label: label, detail: note})
 		default:
-			rows = append(rows, doctorRow{label: label, detail: string(probed.Target.ID()) + " answers"})
+			rows = append(rows, doctorRow{label: label, detail: probed.Target.Display() + " answers"})
 		}
 	}
 	return rows

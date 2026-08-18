@@ -24,8 +24,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	route "github.com/switchboard-code/switchboard/internal/router"
 )
 
 const (

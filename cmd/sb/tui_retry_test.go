@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/checkpoint"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func appendTurn(t *testing.T, m *tuiModel, question, answer string) {
@@ -128,6 +129,61 @@ func TestRetryForksOffTheLastTurnAndReplaysItsPrompt(t *testing.T) {
 	}
 }
 
+func TestForkAndRetrySessionOperationsCannotOverlap(t *testing.T) {
+	m := testModel(t)
+	appendTurn(t, m, "question", "answer")
+
+	fork := cmdFork(m, "")
+	if fork == nil || !m.operationActive || !m.busy {
+		t.Fatalf("fork did not claim exclusive ownership: cmd=%v operation=%v busy=%v", fork != nil, m.operationActive, m.busy)
+	}
+	generation := m.operationGeneration
+	retry := cmdRetry(m, "")
+	if retry == nil {
+		t.Fatal("overlapping retry returned nothing")
+	}
+	if notice, ok := retry().(noticeMsg); !ok || !strings.Contains(notice.text, "already running") {
+		t.Fatalf("overlapping retry was not refused: %#v", notice)
+	}
+	if !m.operationActive || m.operationGeneration != generation {
+		t.Fatal("rejected retry disturbed the fork's ownership")
+	}
+
+	msg, ok := fork().(sessionSwapMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("fork result = %#v", msg)
+	}
+	defer msg.sess.Close()
+	m.onSessionSwap(msg)
+	if m.operationActive || m.busy {
+		t.Fatal("completed fork did not release exclusive ownership")
+	}
+}
+
+func TestRetrySwapClaimsReplayBeforeReturningContinuation(t *testing.T) {
+	m := testModel(t)
+	appendTurn(t, m, "question", "answer")
+
+	swap, ok := cmdRetry(m, "")().(sessionSwapMsg)
+	if !ok || swap.err != nil {
+		t.Fatalf("retry result = %#v", swap)
+	}
+	defer swap.sess.Close()
+	continuation := m.onSessionSwap(swap)
+	if continuation == nil || !m.busy || !m.turnPlanning || m.turnCancel == nil {
+		t.Fatalf("retry bind left an idle continuation gap: cmd=%v busy=%v planning=%v cancel=%v",
+			continuation != nil, m.busy, m.turnPlanning, m.turnCancel != nil)
+	}
+	if cmd := m.enqueue("interloper", ""); cmd != nil || len(m.queue) != 1 {
+		t.Fatalf("prompt was not queued behind retry replay: cmd=%v queue=%v", cmd != nil, m.queue)
+	}
+	start, ok := continuation().(retryStartMsg)
+	if !ok || start.generation != m.turnGeneration {
+		t.Fatalf("continuation does not own the claimed generation: %#v", start)
+	}
+	m.interrupt()
+}
+
 func TestRetryLabelsTheSetAsideAnswerOnTheSource(t *testing.T) {
 	m := testModel(t)
 	appendTurn(t, m, "only question", "answer")
@@ -148,6 +204,12 @@ func TestRetryLabelsTheSetAsideAnswerOnTheSource(t *testing.T) {
 func TestRetryOfTheOnlyTurnStartsFresh(t *testing.T) {
 	m := testModel(t)
 	appendTurn(t, m, "only question", "answer")
+	if err := m.app.loop.Session.AppendUsage(session.Usage{CostMicroUSD: 12_345}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.app.loop.Session.AppendRetryReserve(54_321); err != nil {
+		t.Fatal(err)
+	}
 
 	msg, ok := cmdRetry(m, "")().(sessionSwapMsg)
 	if !ok || msg.err != nil {
@@ -156,6 +218,10 @@ func TestRetryOfTheOnlyTurnStartsFresh(t *testing.T) {
 	defer msg.sess.Close()
 	if !msg.fresh || len(msg.sess.State().Messages) != 0 {
 		t.Fatalf("dropping the only turn should start fresh: fresh=%v messages=%d", msg.fresh, len(msg.sess.State().Messages))
+	}
+	state := msg.sess.State()
+	if state.AccountedCostMicroUSD() != 12_345 || state.RetryReserveMicroUSD != 54_321 {
+		t.Fatalf("first-turn retry reset budget accounting: %+v", state)
 	}
 	if start, ok := msg.andThen().(retryStartMsg); !ok || start.prompt != "only question" {
 		t.Fatalf("the replay lost the prompt: %+v", msg.andThen())

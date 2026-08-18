@@ -13,14 +13,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/advisor"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // racedProvider scripts model calls the way internal/agent's tests do: each
@@ -32,6 +33,24 @@ type racedProvider struct {
 }
 
 type racedTurn struct{ events []provider.Event }
+
+type blockingRaceAdvisorProvider struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (*blockingRaceAdvisorProvider) Name() string { return "blocking-advisor" }
+func (p *blockingRaceAdvisorProvider) Stream(context.Context, provider.RouteTarget, provider.Request) (provider.EventStream, error) {
+	close(p.entered)
+	<-p.release
+	return &racedStream{events: racedText("advice").events}, nil
+}
+func (*blockingRaceAdvisorProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+func (*blockingRaceAdvisorProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{Reachable: true, ModelPresent: true}, nil
+}
 
 func racedText(text string) racedTurn {
 	return racedTurn{events: []provider.Event{
@@ -174,6 +193,111 @@ func TestParseRaceArgs(t *testing.T) {
 	m.app.tier = m.app.config.Tiers[len(m.app.config.Tiers)-1]
 	if _, _, _, err := parseRaceArgs(m.app, "do a thing"); err == nil || !strings.Contains(err.Error(), "top rung") {
 		t.Errorf("the bare form at the top rung should refuse with the reason, got %v", err)
+	}
+}
+
+func TestRaceProbeDoesNotBlockUIOnInflightAdvisor(t *testing.T) {
+	m := raceModel(t)
+	blocking := &blockingRaceAdvisorProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	adv := advisor.New(agent.NopObserver{}, blocking, m.app.config.Tiers[1].Target, nil,
+		advisor.WithBounds(1, time.Nanosecond))
+	adv.StartTurn("task")
+	req := permission.Request{Tool: "exec", Argv: []string{"go", "test", "./..."}}
+	call := provider.ToolUse{ID: "call", Name: "exec", Input: json.RawMessage(`{"argv":["go","test","./..."]}`)}
+	for range 12 {
+		adv.ToolStart(call, req)
+		adv.ToolEnd(call, req, tools.Result{Content: "FAIL: TestX", IsError: true}, time.Second)
+	}
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("advisor consult did not enter its provider")
+	}
+	m.app.setAdvisor(adv)
+	_, generation, sourceID, err := m.startOperation("race probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	probe := raceProbeMsg{
+		operation: generation,
+		sourceID:  sourceID,
+		prompt:    "compare these answers",
+		a:         m.app.config.Tiers[0],
+		b:         m.app.config.Tiers[1],
+		ca:        &racedProvider{},
+		cb:        &racedProvider{},
+	}
+	updated := make(chan tea.Cmd, 1)
+	go func() {
+		_, cmd := m.Update(probe)
+		updated <- cmd
+	}()
+	var setup tea.Cmd
+	select {
+	case setup = <-updated:
+		if setup == nil {
+			t.Fatal("race probe returned no asynchronous setup command")
+		}
+	case <-time.After(250 * time.Millisecond):
+		close(blocking.release)
+		t.Fatal("Update blocked while waiting for the advisor ledger")
+	}
+	if !m.operationActive || !m.busy {
+		t.Fatal("race setup did not claim exclusive ownership before waiting")
+	}
+
+	setupResult := make(chan tea.Msg, 1)
+	go func() { setupResult <- setup() }()
+	select {
+	case got := <-setupResult:
+		t.Fatalf("race setup crossed the inflight advisor barrier: %#v", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(blocking.release)
+	var result raceSetupMsg
+	select {
+	case got := <-setupResult:
+		var ok bool
+		result, ok = got.(raceSetupMsg)
+		if !ok {
+			t.Fatalf("setup result = %#v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("race setup did not resume after advisor settlement")
+	}
+
+	// Invalidate before delivery so the assembled arms are closed without
+	// launching provider calls; this test is about the UI/barrier boundary.
+	m.interrupt()
+	m.onRaceSetup(result)
+}
+
+func TestRaceProbeOwnsItsSourceBeforeAsyncProbe(t *testing.T) {
+	m := raceModel(t)
+	source := m.app.loop.Session
+	probe := cmdRace(m, "t1 t2 compare these answers")
+	if probe == nil || !m.operationActive || !m.busy || m.operationSourceID != source.ID() {
+		t.Fatalf("race probe did not claim its source: cmd=%v active=%v busy=%v source=%q",
+			probe != nil, m.operationActive, m.busy, m.operationSourceID)
+	}
+	generation, sourceID := m.operationGeneration, m.operationSourceID
+	if clear := cmdClear(m, ""); clear == nil {
+		t.Fatal("clear returned nothing during race probe")
+	} else if notice, ok := clear().(noticeMsg); !ok || !strings.Contains(notice.text, "already running") {
+		t.Fatalf("clear crossed the race-probe ownership barrier: %#v", notice)
+	}
+	if m.app.loop.Session != source {
+		t.Fatal("race-probe overlap replaced the source session")
+	}
+
+	m.interrupt()
+	if !m.operationCancelling || !m.busy {
+		t.Fatal("probe cancellation released ownership before probe completion")
+	}
+	m.onRaceProbe(raceProbeMsg{operation: generation, sourceID: sourceID, err: context.Canceled})
+	if m.operationActive || m.busy {
+		t.Fatal("cancelled probe did not release ownership at completion")
 	}
 }
 
@@ -410,6 +534,238 @@ func TestRacePreflightCoversBothArms(t *testing.T) {
 	}
 	if !strings.Contains(reason, "/budget") {
 		t.Errorf("refusal %q does not say how to raise the ceiling", reason)
+	}
+
+	// A later race shares the session's pessimistic reserve for provider
+	// attempts that failed without returning billable usage.
+	before.ID = "session-with-debt"
+	bs.set(1_000 * catalog.USD)
+	if reason, blocked := racePreflight(bs, cat, before, nil, nil, opening, tierA, tierB); blocked {
+		t.Fatalf("generous ceiling refused debt-free race: %s", reason)
+	}
+	before.RetryReserveMicroUSD = int64(1_000 * catalog.USD)
+	if reason, blocked := racePreflight(bs, cat, before, nil, nil, opening, tierA, tierB); !blocked || !strings.Contains(reason, "reserved for failed attempts") {
+		t.Fatalf("race ignored retry debt: blocked=%v reason=%q", blocked, reason)
+	}
+}
+
+func TestRacePreflightRefusesKnownPaidArmWithoutConservativePrice(t *testing.T) {
+	cat := catalogWithLocalModels(t,
+		localModelSpec{name: "pricing-gap", contextWindow: 10_000, inputPerMTok: "1", outputPerMTok: "1", priceMaxInput: 500},
+		localModelSpec{name: "covered", contextWindow: 10_000, inputPerMTok: "1", outputPerMTok: "1"},
+		localModelSpec{name: "explicit-free", contextWindow: 10_000, inputPerMTok: "0", outputPerMTok: "0"},
+	)
+	gap := ollamaTier("t1", "pricing-gap")
+	covered := ollamaTier("t2", "covered")
+	opening := provider.UserText(strings.Repeat("x", 600))
+	if reason, blocked := racePreflight(nil, cat, session.State{}, nil, nil, opening, gap, covered); !blocked ||
+		!strings.Contains(reason, "no positive conservative cost bound") {
+		t.Fatalf("unpriceable paid race arm was admitted without a ceiling: blocked=%v reason=%q", blocked, reason)
+	}
+	free := ollamaTier("t3", "explicit-free")
+	if reason, blocked := racePreflight(nil, cat, session.State{}, nil, nil, opening, free, covered); blocked {
+		t.Fatalf("explicit all-zero per-token race arm was refused: %s", reason)
+	}
+}
+
+func TestRaceRetryReserveUsesTheOriginAsItsAuthoritativeLedger(t *testing.T) {
+	cat, target := pricedTarget(t)
+	info, _, _ := cat.Lookup(target)
+	bound := preflightBound(info, 10_000)
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSession := func() *session.Session {
+		sess, err := store.Create(t.TempDir(), target.ID(), cat.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { sess.Close() })
+		return sess
+	}
+	origin := newSession()
+	aSess, bSess := newSession(), newSession()
+	a := &raceArm{sess: aSess, loop: &agent.Loop{Session: aSess, Target: target}}
+	b := &raceArm{sess: bSess, loop: &agent.Loop{Session: bSess, Target: target}}
+	bs := &budgetState{}
+	raceGates(bs, cat, origin, origin.State(), a, b)
+	if err := a.loop.Budget(10_000, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loop.BudgetResult(10_000, 1, session.Usage{}, errors.New("arm failed")); err != nil {
+		t.Fatal(err)
+	}
+	if got := origin.State().RetryReserveMicroUSD; got != int64(bound) {
+		t.Fatalf("origin retry reserve = %d, want %d", got, bound)
+	}
+	for name, sess := range map[string]*session.Session{"a": aSess, "b": bSess} {
+		if got := sess.State().RetryReserveMicroUSD; got != 0 {
+			t.Fatalf("%s copied a live origin reserve: %d", name, got)
+		}
+	}
+}
+
+func TestRaceAccountingTransfersTotalCostAndDebtToEveryResumableArm(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	newSession := func(target string) *session.Session {
+		sess, err := store.Create(workspace, provider.RouteTargetID(target), "rev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sess.Close() })
+		return sess
+	}
+	origin := newSession("scripted/local/origin")
+	aSess, bSess := newSession("scripted/local/a"), newSession("scripted/local/b")
+	before := origin.State()
+	a := &raceArm{sess: aSess, baseCost: 0}
+	b := &raceArm{sess: bSess, baseCost: 0}
+	if err := aSess.AppendUsage(session.Usage{CostMicroUSD: 40_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bSess.AppendUsage(session.Usage{CostMicroUSD: 60_000}); err != nil {
+		t.Fatal(err)
+	}
+	// Represents other paid work on the origin after the arm snapshot (for
+	// example, an advisor consult that was already admitted). It must not be
+	// lost merely because it is neither arm's local Usage.
+	if err := origin.AppendUsage(session.Usage{CostMicroUSD: 10_000}); err != nil {
+		t.Fatal(err)
+	}
+	for _, cost := range []int64{40_000, 60_000} {
+		id, err := origin.BeginBudgetAttempt(100_000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := origin.SettleBudgetAttempt(id, session.BudgetOutcomeSucceeded, cost); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failed, err := origin.BeginBudgetAttempt(70_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := origin.SettleBudgetAttempt(failed, session.BudgetOutcomeFailed, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileRaceAccounting(origin, before, a, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := transferRaceAccounting(origin, before, a, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := transferRaceAccounting(origin, before, b, a); err != nil {
+		t.Fatal(err)
+	}
+	for name, sess := range map[string]*session.Session{"a": aSess, "b": bSess} {
+		state := sess.State()
+		if state.AccountedCostMicroUSD() != 110_000 {
+			t.Fatalf("%s branch can recover headroom after resume: %+v", name, state)
+		}
+		if state.RetryReserveMicroUSD != 70_000 {
+			t.Fatalf("%s branch retry debt = %d, want 70000", name, state.RetryReserveMicroUSD)
+		}
+		if state.Calls != 1 || state.Usage != (provider.Usage{}) {
+			// AppendUsage with an empty Usage intentionally records one real local
+			// call; transfers must not add another or invent tokens.
+			t.Fatalf("%s branch provider telemetry was fabricated: %+v", name, state)
+		}
+	}
+}
+
+func TestEmptyRaceArmInheritsAccountingLineage(t *testing.T) {
+	m := raceModel(t)
+	origin, err := m.app.store.Create(m.app.workspace, m.app.tier.Target.ID(), m.app.catalog.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := m.app.loop.Session
+	m.app.loop.Session = origin
+	defer func() {
+		m.app.loop.Session = original
+		_ = origin.Close()
+	}()
+	if err := origin.AppendBudgetTransfer("pre-race", 12_345, 54_321); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(origin.State().Messages); got != 0 {
+		t.Fatalf("fixture has %d messages, want an empty first-turn lineage", got)
+	}
+	arm, err := assembleRaceArm(m.app, m.app.config.Tiers[0], &racedProvider{}, agent.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer arm.sess.Close()
+	state := arm.sess.State()
+	if state.AccountedCostMicroUSD() != 12_345 || state.RetryReserveMicroUSD != 54_321 {
+		t.Fatalf("empty race arm dropped inherited accounting: %+v", state)
+	}
+}
+
+func TestFinalizedRaceWinnerCanRaceAgain(t *testing.T) {
+	m := raceModel(t)
+	first, err := assembleRaceArm(m.app, m.app.config.Tiers[0], &racedProvider{}, agent.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.sess.FinalizeRaceBranch(); err != nil {
+		t.Fatal(err)
+	}
+	origin := m.app.loop.Session
+	m.app.loop.Session = first.sess
+	defer func() {
+		_ = first.sess.Close()
+		_ = origin.Close()
+	}()
+
+	second, err := assembleRaceArm(m.app, m.app.config.Tiers[1], &racedProvider{}, agent.NopObserver{})
+	if err != nil {
+		t.Fatalf("winner's finalized lifecycle marker blocked a second race: %v", err)
+	}
+	defer second.sess.Close()
+}
+
+func TestRaceReconcileRetainsActualCostBesideUnsettledBound(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	origin, err := store.Create(workspace, "scripted/local/origin", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aSess, err := store.Create(workspace, "scripted/local/a", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bSess, err := store.Create(workspace, "scripted/local/b", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	defer aSess.Close()
+	defer bSess.Close()
+	before := origin.State()
+	a := &raceArm{sess: aSess}
+	b := &raceArm{sess: bSess}
+	if _, err := origin.BeginBudgetAttempt(100_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := aSess.AppendUsage(session.Usage{CostMicroUSD: 25_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileRaceAccounting(origin, before, a, b); err != nil {
+		t.Fatal(err)
+	}
+	state := origin.State()
+	if state.ExternalCostMicroUSD != 25_000 || state.RetryReserveMicroUSD != 100_000 {
+		t.Fatalf("unsettled race accounting = %+v", state)
 	}
 }
 

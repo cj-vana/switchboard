@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
@@ -36,7 +36,7 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 		widest := 0
 		idWidest := 0
 		for _, t := range app.config.Tiers {
-			if n := len(t.Target.ModelID); n > widest {
+			if n := len(t.Target.Display()); n > widest {
 				widest = n
 			}
 			if n := len(t.ID); n > idWidest {
@@ -49,7 +49,7 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 				bar = th.rung(rank).Render("▌ ")
 			}
 			row := bar + th.rung(rank).Render(padRight(t.ID, idWidest)) + "  " +
-				th.text.Render(padRight(t.Target.ModelID, min(widest, 40))) +
+				th.text.Render(padRight(t.Target.Display(), min(widest, 40))) +
 				"  " + th.faint.Render(meteringWord(app.catalog, t))
 			lines = append(lines, row)
 		}
@@ -57,7 +57,7 @@ func (m *tuiModel) addBanner(sess *session.Session, resumed bool) {
 		lines = append(lines, th.dim.Render("  no ladder configured; /models binds one"))
 	}
 
-	facts := []string{app.workspace, string(app.loop.Perms.Mode()), app.capability.Summary()}
+	facts := []string{app.workspace, string(app.loop.Perms.Mode()), app.loop.Perms.Execution().Summary()}
 	lines = append(lines,
 		th.faint.Render("  "+strings.Join(facts, " · ")),
 		th.faint.Render("  session "+state.ID+sessionNote(state, resumed)+" · /help for commands"),

@@ -18,7 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Fork copies a session's first keepMessages conversation messages, with the
@@ -31,7 +31,7 @@ import (
 // The source is read without the append lock, so a session open in this
 // process — the usual case — forks from its durable prefix.
 func (s *Store) Fork(id string, keepMessages int) (*Session, error) {
-	return s.ForkOnto(id, keepMessages, "")
+	return s.forkOnto(id, keepMessages, "", false)
 }
 
 // ForkOnto is Fork with the new log started against a different target,
@@ -40,7 +40,63 @@ func (s *Store) Fork(id string, keepMessages int) (*Session, error) {
 // has to name the target that actually served it, because /resume binds
 // from that record. An empty target keeps the source's.
 func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTargetID) (*Session, error) {
-	if keepMessages < 1 {
+	return s.forkOnto(id, keepMessages, target, false)
+}
+
+// ForkForRetry is the one branch operation allowed to keep zero messages. A
+// first-turn retry needs a fresh conversation prefix but must still inherit
+// every budget charge and retry reserve from the set-aside attempt; creating a
+// blank session would make repeated first-turn retries erase ceiling spend.
+func (s *Store) ForkForRetry(id string, keepMessages int) (*Session, error) {
+	return s.forkOnto(id, keepMessages, "", true)
+}
+
+// ForkAccountingOnto creates an empty conversation branch on another target
+// while carrying the source's full observed cost and retry reserve. Race arms
+// use it when the origin has accounting lineage but no messages to copy.
+func (s *Store) ForkAccountingOnto(id string, target provider.RouteTargetID) (*Session, error) {
+	return s.forkOnto(id, 0, target, true)
+}
+
+// ForkSession is Fork against a live source. Holding the source append lock
+// from the first byte read through the accounting reconciliation makes the
+// branch a single durable snapshot: an asynchronous metered call can be
+// wholly before it or wholly after it, never disappear between EOF and the
+// later state read.
+func (s *Store) ForkSession(source *Session, keepMessages int) (*Session, error) {
+	return s.forkSessionOnto(source, keepMessages, "", false)
+}
+
+// ForkSessionOnto is the live-source form of ForkOnto.
+func (s *Store) ForkSessionOnto(source *Session, keepMessages int, target provider.RouteTargetID) (*Session, error) {
+	return s.forkSessionOnto(source, keepMessages, target, false)
+}
+
+// ForkSessionForRetry is the live-source form of ForkForRetry.
+func (s *Store) ForkSessionForRetry(source *Session, keepMessages int) (*Session, error) {
+	return s.forkSessionOnto(source, keepMessages, "", true)
+}
+
+// ForkSessionAccountingOnto is the live-source form of ForkAccountingOnto.
+func (s *Store) ForkSessionAccountingOnto(source *Session, target provider.RouteTargetID) (*Session, error) {
+	return s.forkSessionOnto(source, 0, target, true)
+}
+
+func (s *Store) forkSessionOnto(source *Session, keepMessages int, target provider.RouteTargetID, allowEmpty bool) (*Session, error) {
+	if source == nil {
+		return nil, fmt.Errorf("cannot fork a nil session")
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if source.state.raceBranchPending {
+		return nil, fmt.Errorf("%w: origin session %s", ErrRaceBranchPending, source.state.raceBranchOrigin)
+	}
+	state := source.state
+	return s.forkPathOnto(source.state.ID, source.path, keepMessages, target, allowEmpty, &state)
+}
+
+func (s *Store) forkOnto(id string, keepMessages int, target provider.RouteTargetID, allowEmpty bool) (*Session, error) {
+	if keepMessages < 0 || (keepMessages == 0 && !allowEmpty) {
 		return nil, fmt.Errorf("a fork keeping no messages is an empty session; /clear is how those start")
 	}
 	matches, err := filepath.Glob(filepath.Join(s.root, "*", id+".log"))
@@ -50,8 +106,14 @@ func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTarge
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("session %s not found", id)
 	}
+	return s.forkPathOnto(id, matches[0], keepMessages, target, allowEmpty, nil)
+}
 
-	f, err := os.Open(matches[0])
+func (s *Store) forkPathOnto(id, path string, keepMessages int, target provider.RouteTargetID, allowEmpty bool, sourceState *State) (*Session, error) {
+	if keepMessages < 0 || (keepMessages == 0 && !allowEmpty) {
+		return nil, fmt.Errorf("a fork keeping no messages is an empty session; /clear is how those start")
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -65,15 +127,18 @@ func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTarge
 	var gotMagic string
 	var version int
 	if _, err := fmt.Sscanf(header, "%s %d", &gotMagic, &version); err != nil || gotMagic != magic {
-		return nil, fmt.Errorf("%s is not a switchboard session log", matches[0])
+		return nil, fmt.Errorf("%s is not a switchboard session log", path)
 	}
 	if version > SchemaVersion {
 		return nil, fmt.Errorf("%w: log is schema %d, this binary understands %d", ErrSchemaTooNew, version, SchemaVersion)
 	}
 
+	explicitRetarget := target != ""
 	var start SessionStart
 	var kept []Record
 	messages := 0
+	pastCut := false
+	raceBranchPending := false
 	for {
 		rec, _, err := decodeRecord(r)
 		if errors.Is(err, io.EOF) || errors.Is(err, ErrCorruptRecord) {
@@ -90,8 +155,25 @@ func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTarge
 			}
 			continue
 		}
+		if rec.Type == RecordRaceBranch {
+			var branch RaceBranch
+			if err := json.Unmarshal(rec.Payload, &branch); err != nil {
+				return nil, err
+			}
+			raceBranchPending = !branch.Finalized
+			// Branch lifecycle belongs to this physical log. Copying a finalized
+			// marker makes the child look like the old race branch and prevents it
+			// from participating in a later independent race.
+			continue
+		}
+		if explicitRetarget && rec.Type == RecordRuntimeBinding {
+			// An Onto fork's SessionStart names its new target. Carrying the
+			// source's moving binding would overwrite that target during replay
+			// and can also inherit a user pin into an automatic race arm.
+			continue
+		}
 		if rec.Type == RecordMessage {
-			if messages == keepMessages {
+			if !pastCut && messages == keepMessages {
 				var m provider.Message
 				if err := json.Unmarshal(rec.Payload, &m); err != nil {
 					return nil, err
@@ -101,14 +183,23 @@ func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTarge
 						"the cut falls inside a turn: message %d is %s, and a turn is dropped whole or kept whole",
 						keepMessages, m.Role)
 				}
-				break
+				pastCut = true
 			}
-			messages++
+			if !pastCut {
+				messages++
+				kept = append(kept, rec)
+			}
+			continue
 		}
-		kept = append(kept, rec)
+		if !pastCut || carriesBudgetAccounting(rec.Type) {
+			kept = append(kept, rec)
+		}
 	}
 	if start.ID == "" {
 		return nil, fmt.Errorf("session %s has no start record", id)
+	}
+	if raceBranchPending {
+		return nil, fmt.Errorf("%w: session %s", ErrRaceBranchPending, id)
 	}
 	if messages < keepMessages {
 		return nil, fmt.Errorf("session %s holds %d messages, cannot keep %d", id, messages, keepMessages)
@@ -127,6 +218,30 @@ func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTarge
 			return nil, err
 		}
 	}
+	if allowEmpty {
+		// Retry discards conversation and its Usage records, not the bill for
+		// requests already sent. Carry the dropped observed cost as an external
+		// charge so repeated retries cannot reset a hard ceiling, while keeping
+		// token/call telemetry honest for the new branch.
+		var snapshot State
+		if sourceState != nil {
+			snapshot = *sourceState
+		} else {
+			var stateErr error
+			snapshot, stateErr = ReadState(path)
+			if stateErr != nil {
+				fork.Close()
+				return nil, stateErr
+			}
+		}
+		droppedCost := snapshot.AccountedCostMicroUSD() - fork.State().AccountedCostMicroUSD()
+		if droppedCost > 0 {
+			if err := fork.AppendBudgetTransfer("retry:"+id, droppedCost, 0); err != nil {
+				fork.Close()
+				return nil, err
+			}
+		}
+	}
 	// Provenance rides the log, so an exported or audited fork names where
 	// its history came from.
 	if err := fork.AppendNote("info", fmt.Sprintf("forked from %s, keeping %d messages", id, keepMessages)); err != nil {
@@ -136,23 +251,39 @@ func (s *Store) ForkOnto(id string, keepMessages int, target provider.RouteTarge
 	return fork, nil
 }
 
+// carriesBudgetAccounting names records that survive a conversation rewind.
+// A retry can discard messages and tool work, but it cannot un-send provider
+// requests or un-spend delegated/raced calls already admitted by this ledger.
+func carriesBudgetAccounting(t RecordType) bool {
+	switch t {
+	case RecordRetryReserve, RecordBudgetAttempt, RecordBudgetSettle, RecordBudgetTransfer:
+		return true
+	default:
+		return false
+	}
+}
+
 // appendCopied writes a record carried over by a fork, keeping the source's
 // timestamp: the moment the turn happened is a fact about the turn, not
 // about the copy.
 func (s *Session) appendCopied(rec Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.poisoned != nil {
+		return fmt.Errorf("%w: %v", ErrSessionPoisoned, s.poisoned)
+	}
 	s.seq++
 	copied := Record{Seq: s.seq, At: rec.At, Type: rec.Type, Payload: rec.Payload}
 	frame, err := encodeRecord(copied)
 	if err != nil {
 		return err
 	}
-	if _, err := s.f.Write(frame); err != nil {
+	if err := s.writeFrame(frame); err != nil {
 		return fmt.Errorf("appending to forked log: %w", err)
 	}
 	if err := s.f.Sync(); err != nil {
-		return err
+		s.poisoned = fmt.Errorf("syncing copied record %d: %w", s.seq, err)
+		return fmt.Errorf("%w: %v", ErrSessionPoisoned, s.poisoned)
 	}
 	return s.apply(copied)
 }

@@ -16,9 +16,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/lsp"
-	"github.com/cj-vana/switchboard/internal/tools"
-	"github.com/cj-vana/switchboard/internal/trust"
+	"github.com/switchboard-code/switchboard/internal/lsp"
+	"github.com/switchboard-code/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/trust"
 )
 
 // lspCandidates maps workspace markers to the server that speaks for them.

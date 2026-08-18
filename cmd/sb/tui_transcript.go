@@ -7,7 +7,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/terminaltext"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // The transcript is the scrollback. Entries render to styled lines once and
@@ -33,6 +34,7 @@ const (
 )
 
 type toolEntry struct {
+	id     string
 	name   string
 	desc   string
 	done   bool
@@ -237,14 +239,15 @@ func (t *transcript) renderUncached(e *entry) []string {
 	w := t.width
 	switch e.kind {
 	case kindUser:
-		return t.renderUser(e.text, w)
+		return t.renderUser(terminaltext.Display(e.text), w)
 	case kindAssistant:
+		text := terminaltext.Display(e.text)
 		if e.live {
-			return wrapPlain(e.text, w)
+			return wrapPlain(text, w)
 		}
-		return t.md.render(e.text)
+		return t.md.render(text)
 	case kindThinking:
-		lines := wrapPlain(e.text, w)
+		lines := wrapPlain(terminaltext.Display(e.text), w)
 		for i, l := range lines {
 			lines[i] = t.th.thinking.Render(l)
 		}
@@ -260,7 +263,7 @@ func (t *transcript) renderUncached(e *entry) []string {
 	case kindRaw:
 		return strings.Split(e.text, "\n")
 	default: // kindInfo
-		lines := wrapPlain(e.text, w)
+		lines := wrapPlain(terminaltext.Display(e.text), w)
 		for i, l := range lines {
 			lines[i] = t.th.dim.Render(l)
 		}
@@ -305,9 +308,10 @@ func (t *transcript) renderTool(tool *toolEntry, expanded bool, rank int, w int)
 	if rank >= 0 {
 		rail = t.th.rung(rank)
 	}
-	head := rail.Render("│ ") + t.th.bold.Render(tool.name)
+	head := rail.Render("│ ") + t.th.bold.Render(terminaltext.Escape(tool.name))
 	if tool.desc != "" {
-		head += t.th.dim.Render(" " + truncate(tool.desc, max(w-12-len(tool.name), 8)))
+		desc := terminaltext.Display(tool.desc)
+		head += t.th.dim.Render(" " + truncate(desc, max(w-12-len(tool.name), 8)))
 	}
 	if !tool.done {
 		return []string{head}
@@ -320,7 +324,7 @@ func (t *transcript) renderTool(tool *toolEntry, expanded bool, rank int, w int)
 	}
 	lines := []string{head, rail.Render("└ ") + status}
 
-	detail := strings.TrimRight(tool.detail, "\n")
+	detail := strings.TrimRight(terminaltext.Display(tool.detail), "\n")
 	if detail == "" {
 		return lines
 	}
@@ -367,7 +371,7 @@ func (t *transcript) renderTodo(items []tools.TodoItem, rank int, w int) []strin
 		if i == len(items)-1 {
 			lead = "└ "
 		}
-		text := truncate(item.Text, max(w-8, 8))
+		text := truncate(terminaltext.Display(item.Text), max(w-8, 8))
 		var body string
 		switch item.Status {
 		case tools.TodoDone:
@@ -415,10 +419,10 @@ func (t *transcript) renderNotice(e *entry, w int) []string {
 		if e.rail {
 			lead = rail.Render("└ ") + t.th.ok.Render("✓ ")
 		}
-		return []string{lead + t.th.dim.Render(e.text)}
+		return []string{lead + t.th.dim.Render(terminaltext.Display(e.text))}
 	}
 	var lines []string
-	for i, l := range wrapPlain(e.text, max(w-2, 20)) {
+	for i, l := range wrapPlain(terminaltext.Display(e.text), max(w-2, 20)) {
 		if i == 0 {
 			lines = append(lines, style.Render(glyph+" ")+body.Render(l))
 		} else {
@@ -437,12 +441,13 @@ func (t *transcript) renderRoute(e *entry, w int) []string {
 	if e.rank >= 0 {
 		marker = t.th.rung(e.rank)
 	}
-	line := marker.Render("◆ ") + t.th.dim.Render(e.routeSummary)
+	line := marker.Render("◆ ") + t.th.dim.Render(terminaltext.Display(e.routeSummary))
 	if !e.expanded {
 		return []string{line}
 	}
 	lines := []string{line}
 	for _, l := range e.routeLines {
+		l = terminaltext.Display(l)
 		for _, wl := range wrapPlain(l, max(w-4, 20)) {
 			lines = append(lines, t.th.dim.Render("    "+wl))
 		}

@@ -2,65 +2,131 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"sync"
+	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/breakpoint"
-	"github.com/cj-vana/switchboard/internal/cachestate"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/costmodel"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
-	route "github.com/cj-vana/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/breakpoint"
+	"github.com/switchboard-code/switchboard/internal/cachestate"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/costmodel"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
 )
+
+// cacheSet keeps one tracker per target for the life of a session. Moving away
+// from a target abandons its warmth for the next call, but it does not erase
+// the provider's cache or Switchboard's observations; moving back can still
+// estimate whether that prefix survives.
+type cacheSet struct {
+	mu       sync.Mutex
+	byTarget map[provider.RouteTargetID]*agent.Cache
+}
+
+func newCacheSet(target provider.RouteTarget, cache *agent.Cache) *cacheSet {
+	set := &cacheSet{byTarget: map[provider.RouteTargetID]*agent.Cache{}}
+	if cache != nil {
+		set.byTarget[target.ID()] = cache
+	}
+	return set
+}
+
+func (s *cacheSet) For(target provider.RouteTarget, cat *catalog.Catalog) *agent.Cache {
+	if s == nil {
+		return cacheFor(target, cat)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cache, ok := s.byTarget[target.ID()]; ok {
+		return cache
+	}
+	cache := cacheFor(target, cat)
+	if cache != nil {
+		s.byTarget[target.ID()] = cache
+	}
+	return cache
+}
+
+func (s *cacheSet) Reset(target provider.RouteTarget, cache *agent.Cache) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byTarget = map[provider.RouteTargetID]*agent.Cache{}
+	if cache != nil {
+		s.byTarget[target.ID()] = cache
+	}
+}
+
+func (s *cacheSet) HitProbability(target provider.RouteTarget, cat *catalog.Catalog, req provider.Request) float64 {
+	cache := s.For(target, cat)
+	if cache == nil {
+		// Unknown catalog targets deliberately run cache-unaware. They have no
+		// controller to query, and unknown warmth is not evidence of a hit.
+		return 0
+	}
+	if expectation, ok := cache.Predict(req.System, req.Tools, req.Messages, time.Now()); ok {
+		return expectation.HitProbability
+	}
+	return 0
+}
 
 // candidatesFor turns the configured ladder into what the router scores.
 //
 // Every tier becomes a candidate, including ones that will be excluded: the
 // router reports why each was ruled out, and a user who expected a target needs
 // to see the reason rather than its absence.
-func candidatesFor(cfg *config.Config, cat *catalog.Catalog, layout *prefix.Layout, hitProbability float64) []route.Candidate {
-	promptTokens := 0
-	if layout != nil {
-		for _, b := range layout.Boundaries() {
-			if b.TokensBefore > promptTokens {
-				promptTokens = b.TokensBefore
-			}
-		}
-	}
+func candidatesFor(cfg *config.Config, cat *catalog.Catalog, promptTokens int, hitProbabilities map[provider.RouteTargetID]float64) []route.Candidate {
+	// An aggregate chars/4 floor cannot be inverted into a hard upper bound:
+	// block boundaries and framing have already been lost. Legacy callers that
+	// only have that floor therefore fail closed for finite context/budget
+	// targets. Production request paths call candidatesForContext instead.
+	return candidatesForContext(cfg, cat, promptTokens, math.MaxInt, hitProbabilities)
+}
 
+func candidatesForContext(cfg *config.Config, cat *catalog.Catalog, promptTokens, contextTokens int, hitProbabilities map[provider.RouteTargetID]float64) []route.Candidate {
 	out := make([]route.Candidate, 0, len(cfg.Tiers))
 	for rank, tier := range cfg.Tiers {
-		info, _, ok := cat.Lookup(tier.Target)
-		if !ok {
-			// No catalog entry means nothing is known about capability or
-			// price. It stays a candidate, because refusing to route to a
-			// target the user configured would be worse, but with nothing
-			// claimed on its behalf.
-			info = catalog.ModelInfo{}
-		}
-
-		c := route.Candidate{
-			Tier:         tier.ID,
-			Target:       tier.Target,
-			Info:         info,
-			Rank:         rank,
-			PromptTokens: promptTokens,
-		}
-		c.Estimate = costmodel.Estimator{}.Turn(costmodel.Inputs{
-			Target:       tier.Target,
-			Info:         info,
-			PrefixTokens: promptTokens,
-			// Output is unknown before the turn runs. A flat allowance keeps
-			// the comparison between targets honest without pretending to
-			// predict length; §6.4's latency model is where this gets real.
-			OutputTokens:   512,
-			Eligible:       info.Cache.UsageAccounting == catalog.AccountingSeparate,
-			HitProbability: hitProbability,
-		})
-		out = append(out, c)
+		out = append(out, candidateForTierContext(tier, rank, cat, promptTokens, contextTokens, hitProbabilities[tier.Target.ID()]))
 	}
 	return out
+}
+
+func candidateForTier(tier config.Tier, rank int, cat *catalog.Catalog, promptTokens int, hitProbability float64) route.Candidate {
+	// See candidatesFor: the expected-cost floor is still useful for display,
+	// but it is insufficient evidence for a hard admission decision.
+	return candidateForTierContext(tier, rank, cat, promptTokens, math.MaxInt, hitProbability)
+}
+
+func candidateForTierContext(tier config.Tier, rank int, cat *catalog.Catalog, promptTokens, contextTokens int, hitProbability float64) route.Candidate {
+	info, _, ok := cat.Lookup(tier.Target)
+	if !ok {
+		// No catalog entry means nothing is known about capability or price.
+		// Live probing remains authoritative for reachability and tools.
+		info = catalog.ModelInfo{}
+	}
+	candidate := route.Candidate{
+		Tier: tier.ID, Target: tier.Target, Info: info, Rank: rank, PromptTokens: promptTokens,
+		ContextTokens: contextTokens, ReservedOutputTokens: reservedOutputTokens(tier.Target, info),
+		CatalogKnown: ok,
+	}
+	candidate.Estimate = costmodel.Estimator{}.Turn(costmodel.Inputs{
+		Target: tier.Target, Info: info, PrefixTokens: promptTokens,
+		// Output is unknown before the turn runs. A flat allowance keeps the
+		// displayed expectation comparable while CeilingCost below remains the
+		// hard maximum-output bound.
+		OutputTokens: 512, Eligible: info.Cache.UsageAccounting == catalog.AccountingSeparate,
+		HitProbability: hitProbability,
+	})
+	candidate.CeilingCost = preflightBoundForTarget(info, tier.Target, contextTokens)
+	return candidate
+}
+
+func reservedOutputTokens(target provider.RouteTarget, info catalog.ModelInfo) int {
+	return provider.EffectiveOutputTokenReserve(target, info.MaxOutput)
 }
 
 // describeRoute renders a decision.

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func TestPipedInputRidesTheMentionConvention(t *testing.T) {
@@ -109,5 +109,30 @@ func TestHeadlessReportOutcomes(t *testing.T) {
 	}
 	if rep.Result != "partial" {
 		t.Errorf("a failed turn must still report what was produced, got %q", rep.Result)
+	}
+}
+
+func TestHeadlessReportKeepsRetryReserveSeparateFromObservedEstimate(t *testing.T) {
+	cat, target := pricedTarget(t)
+	rep := buildHeadlessReport(session.State{
+		ID:                   "sess",
+		Target:               string(target.ID()),
+		CostMicroUSD:         400_000,
+		RetryReserveMicroUSD: 100_000,
+		CatalogRevision:      "rev",
+	}, cat, config.Tier{ID: "t1", Target: target}, nil)
+	if rep.Cost.EstimatedUSD == nil || *rep.Cost.EstimatedUSD != 400_000 {
+		t.Fatalf("observed estimate = %+v", rep.Cost.EstimatedUSD)
+	}
+	if rep.Cost.RetryReserveUSD == nil || *rep.Cost.RetryReserveUSD != 100_000 {
+		t.Fatalf("separate retry reserve = %+v", rep.Cost.RetryReserveUSD)
+	}
+	raw, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, `"estimated_usd":"0.400000"`) || !strings.Contains(text, `"retry_reserve_usd":"0.100000"`) {
+		t.Fatalf("headless JSON merged or omitted accounting: %s", raw)
 	}
 }

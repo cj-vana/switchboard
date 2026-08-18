@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/tools"
-	"github.com/cj-vana/switchboard/internal/trust"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/trust"
 )
 
 func TestSetupLSPGatesOnModuleBinaryAndTrust(t *testing.T) {

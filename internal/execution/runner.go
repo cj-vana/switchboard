@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 )
@@ -81,7 +80,26 @@ var providerCredentialVars = []string{
 	"OPENAI_ORG_ID",
 	"GEMINI_API_KEY",
 	"GOOGLE_API_KEY",
+	"KIMI_API_KEY",
 	"SWITCHBOARD_TOKEN",
+}
+
+func credentialEnvKey(key string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(key))
+	for _, known := range providerCredentialVars {
+		if upper == known {
+			return true
+		}
+	}
+	// Env-backed provider references include dynamic
+	// SB_<PROVIDER>[_<ACCOUNT>]_API_KEY names. These markers also cover a new
+	// provider's conventional variable before the static list is updated.
+	for _, marker := range []string{"_API_KEY", "_AUTH_TOKEN", "_ACCESS_TOKEN", "_SESSION_TOKEN", "_PASSWORD", "_PASSWD", "_PRIVATE_KEY", "_CREDENTIAL", "_CLIENT_SECRET"} {
+		if strings.Contains(upper, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func Run(ctx context.Context, c Command) (Result, error) {
@@ -122,15 +140,11 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	// pipe open. The whole group has to go.
 	cmd := exec.Command(name, args...)
 	cmd.Dir = c.Dir
-	env := childEnv()
-	for _, kv := range c.ExtraEnv {
-		key, _, ok := strings.Cut(kv, "=")
-		if ok && slices.Contains(providerCredentialVars, key) {
-			continue
-		}
-		env = append(env, kv)
+	envNetwork := NetworkFull
+	if c.Confine != nil && c.Policy.Network == NetworkLoopback {
+		envNetwork = NetworkLoopback
 	}
-	cmd.Env = env
+	cmd.Env = commandEnv(envNetwork, c.ExtraEnv)
 	if len(c.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(c.Stdin)
 	}
@@ -141,6 +155,9 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	cmd.Stderr = out
 
 	started := time.Now()
+	if err := runCtx.Err(); err != nil {
+		return Result{Duration: time.Since(started)}, err
+	}
 	if err := cmd.Start(); err != nil {
 		return Result{Duration: time.Since(started)}, err
 	}
@@ -194,23 +211,39 @@ func Run(ctx context.Context, c Command) (Result, error) {
 	return res, nil
 }
 
-func childEnv() []string {
-	blocked := make(map[string]bool, len(providerCredentialVars))
-	for _, k := range providerCredentialVars {
-		blocked[k] = true
+func commandEnv(network NetworkAccess, extra []string) []string {
+	keep := func(kv string) bool {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok && credentialEnvKey(key) {
+			return false
+		}
+		// macOS Seatbelt permits host loopback so test fixtures work. An
+		// inherited HTTP(S) proxy on 127.0.0.1 would otherwise turn that into
+		// off-machine egress without the separate network grant. Strip proxy-
+		// related variables, including tool-specific variants and ExtraEnv,
+		// whenever loopback is the effective confined policy.
+		if network == NetworkLoopback && strings.Contains(strings.ToUpper(key), "PROXY") {
+			return false
+		}
+		return true
 	}
 
 	env := os.Environ()
-	kept := env[:0]
+	kept := make([]string, 0, len(env)+len(extra))
 	for _, kv := range env {
-		key, _, ok := strings.Cut(kv, "=")
-		if ok && blocked[key] {
-			continue
+		if keep(kv) {
+			kept = append(kept, kv)
 		}
-		kept = append(kept, kv)
+	}
+	for _, kv := range extra {
+		if keep(kv) {
+			kept = append(kept, kv)
+		}
 	}
 	return kept
 }
+
+func childEnv() []string { return commandEnv(NetworkFull, nil) }
 
 func appendLine(s, line string) string {
 	if s == "" {

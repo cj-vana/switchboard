@@ -10,10 +10,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/checkpoint"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // The redesign's invariants, asserted at the SGR level for the same reason
@@ -66,6 +66,39 @@ func TestToolCompletionCarriesAVerdict(t *testing.T) {
 	}
 	if strings.Contains(joined, "ok ") || strings.Contains(joined, "failed ") {
 		t.Fatalf("verdict words crept back in; the glyphs carry the verdict:\n%s", joined)
+	}
+}
+
+func TestTUIToolResultCannotWriteTerminalControls(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	tr := testTranscript(t, 80)
+	tr.add(&entry{kind: kindTool, expanded: true, tool: toolEntry{
+		name: "exec", done: true, took: time.Millisecond,
+		detail: "ok\x1b[2J\x1b]52;c;Y2xpcGJvYXJk\x07\rSPOOF\nnext\tcolumn",
+	}})
+	got := strings.Join(tr.flat, "\n")
+	if strings.ContainsAny(got, "\x07\r") || strings.Contains(got, "\x1b[2J") || strings.Contains(got, "\x1b]52;") {
+		t.Fatalf("TUI rendered unsafe tool output: %q", got)
+	}
+	plain := stripANSI(got)
+	if !strings.Contains(plain, `\x1b`) || !strings.Contains(plain, "next") || !strings.Contains(plain, "column") {
+		t.Fatalf("TUI lost visible escaping or layout: %q", plain)
+	}
+}
+
+func TestTUIModelAndNoticeTextCannotWriteTerminalControls(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	tr := testTranscript(t, 80)
+	tr.add(&entry{kind: kindAssistant, text: "answer\x1b[2J\x1b]52;c;Y2xpcGJvYXJk\x07"})
+	tr.add(&entry{kind: kindThinking, text: "thought\rSPOOF"})
+	tr.add(&entry{kind: kindNotice, level: "error", text: "provider\x1b[8mhidden"})
+	got := strings.Join(tr.flat, "\n")
+	if strings.ContainsAny(got, "\x07\r") || strings.Contains(got, "\x1b[2J") || strings.Contains(got, "\x1b]52;") || strings.Contains(got, "\x1b[8m") {
+		t.Fatalf("TUI rendered unsafe model/notice text: %q", got)
+	}
+	plain := stripANSI(got)
+	if !strings.Contains(plain, `\x1b`) || !strings.Contains(plain, `\x0d`) {
+		t.Fatalf("TUI omitted visible control markers: %q", plain)
 	}
 }
 
@@ -419,6 +452,11 @@ func TestBudgetReadoutWarmsBeforeTheCeiling(t *testing.T) {
 	if line := m.statusLine(); !strings.Contains(line, "38;5;214") {
 		t.Fatalf("a 70%% spent ceiling did not warm the readout:\n%q", line)
 	}
+	state.RetryReserveMicroUSD = 100_000
+	m.refreshCost(state)
+	if m.costPct != 80 || !strings.Contains(m.costLine, catalog.Money(100_000).String()+" reserve") {
+		t.Fatalf("failed-attempt reserve missing from readout: pct=%d line=%q", m.costPct, m.costLine)
+	}
 
 	state.CostMicroUSD = 900_000
 	m.refreshCost(state)
@@ -426,13 +464,18 @@ func TestBudgetReadoutWarmsBeforeTheCeiling(t *testing.T) {
 		t.Fatalf("a 90%% spent ceiling did not turn the readout red:\n%q", line)
 	}
 
-	// A switch to a rung whose metering is not dollars must drop the ratio
-	// with the branch: "local" wearing the old ceiling's red would collapse
-	// the meterings the readout exists to keep apart.
+	// A switch to a local rung must not hide dollars this same session already
+	// spent before the move. The accumulated ledger, not the active target,
+	// owns the ratio.
 	m.app.loop.Target = provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "q"}
 	m.refreshCost(state)
-	if m.costPct != 0 {
-		t.Fatalf("a local rung kept the priced rung's ratio: %d", m.costPct)
+	if m.costPct != 100 || !strings.Contains(m.costLine, "$0.9000") || !strings.Contains(m.costLine, "$0.1000 reserve") || strings.Contains(m.costLine, "local") {
+		t.Fatalf("a paid-to-local move hid accumulated dollars: pct=%d line=%q", m.costPct, m.costLine)
+	}
+	state.CostMicroUSD = 0
+	m.refreshCost(state)
+	if m.costPct != 0 || m.costLine != "local" {
+		t.Fatalf("a genuinely zero-dollar local session was misclassified: pct=%d line=%q", m.costPct, m.costLine)
 	}
 
 	m.app.budget = nil
@@ -440,6 +483,42 @@ func TestBudgetReadoutWarmsBeforeTheCeiling(t *testing.T) {
 	m.refreshCost(session.State{})
 	if m.costPct != 0 {
 		t.Fatalf("an ungoverned session kept a stale ratio: %d", m.costPct)
+	}
+}
+
+func TestCostReadoutKeepsObservedDollarsAcrossRoutingDirections(t *testing.T) {
+	cat, paid := pricedTarget(t)
+	local := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "qwen3:4b"}
+	for _, tc := range []struct {
+		name        string
+		startedOn   provider.RouteTarget
+		currentlyOn provider.RouteTarget
+	}{
+		{name: "local-to-paid", startedOn: local, currentlyOn: paid},
+		{name: "paid-to-local", startedOn: paid, currentlyOn: local},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testModel(t)
+			m.app.catalog = cat
+			m.app.loop.Target = tc.currentlyOn
+			m.refreshCost(session.State{Target: string(tc.startedOn.ID()), CostMicroUSD: 420_000})
+			if !strings.Contains(m.costLine, "$0.4200") || strings.Contains(m.costLine, "local") || strings.Contains(m.costLine, "plan") {
+				t.Fatalf("routed cost readout = %q, want the full observed dollar amount", m.costLine)
+			}
+		})
+	}
+}
+
+func TestCostReadoutShowsZeroDollarMeteringMix(t *testing.T) {
+	m := testModel(t)
+	cat, _ := pricedTarget(t)
+	m.app.catalog = cat
+	local := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "qwen3:4b"}
+	planTarget := provider.RouteTarget{Provider: "openai", Surface: "subscription", ModelID: "gpt-5.6-sol"}
+	m.app.loop.Target = planTarget
+	m.refreshCost(session.State{UsageTargets: []string{string(local.ID()), string(planTarget.ID())}})
+	if !strings.Contains(m.costLine, "mixed") || !strings.Contains(m.costLine, "local + plan") {
+		t.Fatalf("zero-dollar routed calls were flattened to the active target: %q", m.costLine)
 	}
 }
 

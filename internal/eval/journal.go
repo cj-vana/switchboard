@@ -1,8 +1,14 @@
 package eval
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"strconv"
 	"sync"
 )
 
@@ -25,11 +31,51 @@ type Journal struct {
 func NewJournal(path string) (*Journal, error) {
 	// Append, so resuming a killed run adds to the record rather than replacing
 	// what survived it.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
 	}
+	if err := repairJournalTail(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return &Journal{file: f, enc: json.NewEncoder(f)}, nil
+}
+
+// repairJournalTail removes only an invalid, unterminated final record. That
+// is the write a killed process can leave behind. Without removing it, the next
+// append would concatenate valid JSON onto the fragment and make every resumed
+// result after it unreadable.
+func repairJournalTail(f *os.File) error {
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return err
+	}
+	data, err := io.ReadAll(io.NewSectionReader(f, 0, info.Size()))
+	if err != nil {
+		return err
+	}
+	if data[len(data)-1] == '\n' {
+		return nil
+	}
+
+	start := bytes.LastIndexByte(data, '\n') + 1
+	tail := bytes.TrimSpace(data[start:])
+	switch {
+	case len(tail) == 0:
+		if err := f.Truncate(int64(start)); err != nil {
+			return err
+		}
+	case json.Valid(tail):
+		if _, err := f.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+	default:
+		if err := f.Truncate(int64(start)); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
 }
 
 // Append records one attempt and syncs it. The sync is the point: without it
@@ -64,17 +110,39 @@ func ReadJournal(path string) ([]Run, error) {
 	defer f.Close()
 
 	var out []Run
-	dec := json.NewDecoder(f)
-	for {
+	reader := bufio.NewReader(f)
+	for lineNumber := 1; ; lineNumber++ {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) == 0 && errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+
 		var r Run
-		if err := dec.Decode(&r); err != nil {
+		if err := json.Unmarshal(line, &r); err != nil {
 			// A truncated final line is what a killed run leaves behind. The
 			// records before it are still good, and discarding them because the
 			// last one is short would repeat the mistake this file prevents.
-			return out, nil
+			if errors.Is(readErr, io.EOF) && truncatedJSON(err) {
+				return out, nil
+			}
+			return nil, fmt.Errorf("decode journal line %d: %w", lineNumber, err)
 		}
 		out = append(out, r)
+
+		switch {
+		case readErr == nil:
+			continue
+		case errors.Is(readErr, io.EOF):
+			return out, nil
+		default:
+			return nil, readErr
+		}
 	}
+}
+
+func truncatedJSON(err error) bool {
+	var syntax *json.SyntaxError
+	return errors.As(err, &syntax) && syntax.Error() == "unexpected end of JSON input"
 }
 
 // Done reports which attempts a journal already holds, keyed the way a run is
@@ -82,7 +150,11 @@ func ReadJournal(path string) ([]Run, error) {
 func Done(runs []Run) map[string]bool {
 	out := map[string]bool{}
 	for _, r := range runs {
-		out[r.Arm+"\x00"+r.TaskID+"\x00"+string(rune('0'+r.Seed))] = true
+		out[attemptKey(r.Arm, r.TaskID, r.Seed)] = true
 	}
 	return out
+}
+
+func attemptKey(arm, task string, seed int) string {
+	return arm + "\x00" + task + "\x00" + strconv.Itoa(seed)
 }

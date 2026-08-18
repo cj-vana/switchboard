@@ -1,126 +1,95 @@
 # Computer use
 
-On macOS, a `computer` tool joins the suite at session assembly: the model
-can read an application's windows and controls through the system
-accessibility tree, click them, type, press key combos, and pick menu
-items. It exists because a coding session regularly dead-ends at an app no
-CLI reaches — the simulator that needs one button pressed, the browser
-showing the rendered page, the dialog holding a build hostage — and the
-choice at that point is this tool or your hands.
+On macOS, the optional `computer` tool reads and operates application controls
+through the Accessibility API. It can inspect windows, click controls, type,
+press key combinations, set field values, and choose menu items. Use it for UI
+work that has no CLI or direct API.
 
-This document records how the tool holds its permissions, what was
-verified against live applications before the schema froze, and what it
-deliberately does not do.
+The tool is assembled only where macOS and `osascript` are available. Its
+behavior was verified against live applications before the schema was fixed.
 
-## The surface
+## Actions
 
-One tool, seven actions:
+| Action | Behavior |
+| --- | --- |
+| `apps` | List running applications, window counts, and the frontmost app |
+| `state` | List one app's windows, menus, and indexed elements with role, label, value, position, and size; launch the app in the background if needed |
+| `click` | Click an indexed element from the latest state, or a screen point for a control the tree cannot name |
+| `type` | Send keystrokes; a newline presses Return |
+| `key` | Send a key or combination such as `return`, `esc`, `cmd+s`, or `cmd+shift+t` |
+| `set` | Write an accessibility value directly and read it back |
+| `menu` | Choose a path such as `File > Save`; on a miss, report the entries at the failed level |
 
-- `apps` — the running applications, window counts, which is frontmost.
-- `state` — one app's windows, menu names, and an indexed element list:
-  role, label, value, position, size. Launches the app (in the
-  background, focus untouched) when it is not running.
-- `click` — an element by index from the latest `state`, or a screen
-  point by `x,y` for the elements the tree cannot name.
-- `type` — real keystrokes into the app. A newline presses Return.
-- `key` — a key or combo: `return`, `esc`, `cmd+s`, `cmd+shift+t`.
-- `set` — write a field's accessibility value directly, and read back
-  what it now holds.
-- `menu` — a menu path, `File > Save` or `Format > Font > Bold`. A miss
-  at any level answers with what that level actually holds.
+An element index is valid only for the latest `state` of that application. The
+state record stores the accessibility path plus opaque fingerprints for the
+front window and element. Before an indexed `click` or `set`, Switchboard
+activates the app, resolves the path again, and checks both fingerprints.
 
-Element indexes are valid only against the latest `state` of that app.
-Each entry remembers its accessibility path — the chain of child ordinals
-from the front window — and an action re-resolves that path and checks
-the role found there. A mismatch answers "call state again", never a
-click on whatever sits there now.
+The element fingerprint binds its role, title, description, and value.
+Anonymous controls also bind their position and size. A replaced window,
+modal, or same-role control returns “call state again” instead of acting on the
+new element. Raw identity inputs remain inside the accessibility script and do
+not appear in mismatch logs.
 
-## One grant, probed honestly
+## Accessibility grant
 
-Everything runs through System Events and `open(1)`; no target
-application is ever scripted directly. This is a hard rule with a
-measured reason: scripting an app by name needs a separate Automation
-consent per app, and an unanswered consent dialog hangs the call for two
-minutes before failing. System Events needs one grant — Accessibility,
-to your terminal, under System Settings > Privacy & Security — and that
-one grant covers every app the tool will ever touch.
+All operations go through System Events and `open(1)`. Switchboard does not
+script target applications by name. Direct application scripting needs a
+separate Automation consent for each app, and an unanswered dialog can block
+until the AppleEvent timeout.
 
-The grant is deliberately not probed at session assembly, because the
-probe itself can pop a consent dialog and startup is no moment to
-interrupt the screen. The tool registers wherever the platform can serve
-it (macOS with `osascript`, which every macOS has); the first call
-surfaces the grant state with its remedy, and `sb doctor` probes it live,
-where a dialog is the point rather than an interruption.
+System Events uses one Accessibility grant for the terminal under System
+Settings > Privacy & Security. Switchboard does not probe the grant during
+session assembly because the probe can open a consent dialog. The first tool
+call reports the missing grant with a remedy. `sb doctor` performs the live
+probe explicitly.
 
-## The permission posture
+## Permission and secrets
 
-Every action carries the external effect, the MCP posture, because the
-action is the same kind: it happens outside the workspace and outside any
-sandbox this host verified, on your own screen. No mode auto-allows it —
-bypass included, since bypass suppresses prompts inside a granted sandbox
-and a click on your screen was never inside one. Plan mode refuses it
-outright, which also keeps `/race` arms read-only without a special case.
+Every computer action has the external permission effect. It occurs outside
+the workspace and outside command confinement, so no permission mode
+auto-approves it, including bypass and yolo. Plan mode denies it. An approval
+is scoped to the application for the current session.
 
-An approval covers the app for the session, not one byte-exact call —
-the grain web approvals use for a host. The request names the app and
-describes the act: `click [7] AXButton (Save) in TextEdit`.
+The approval detail uses non-sensitive metadata, for example
+`click [7] AXButton in TextEdit`. Accessibility titles, descriptions, values,
+and identity fingerprints do not enter approval details or action errors.
 
-Secrets are scanned in both directions. What `type` and `set` would put
-into another app passes the credential scan first and a key-shaped string
-is refused before it leaves — typing a key into a form is the
-exfiltration the webfetch URL scan exists to stop. What comes back is
-redacted unconditionally before it reaches the record, because another
-app's UI can hold anything — a password manager included — and mid-turn
-there is no one to ask.
+Text sent through `type` or `set` passes the credential scanner first. A known
+credential form is refused before it reaches the application. Text read from
+an application is redacted before it enters the session because a UI can
+contain secrets, including password-manager data.
 
-## Verified against live applications
+## Live verification notes
 
-The capability rule (tested against the target, not its docs) produced
-most of this design. Each of these contradicted a reasonable guess:
+Live tests established these operating constraints:
 
-- **Per-element attribute reads cost ~25ms each** — one Apple event per
-  read — so a naive walk of a 3000-element Safari window takes minutes.
-  Bulk per-container reads answer a whole sibling list in one event. The
-  state walk is breadth-first with bulk reads under an element cap and a
-  stated time budget: app chrome arrives first and cheap, deep web
-  content is read partially and the output says so. (A web page is
-  better read with `webfetch` anyway; the tool description says that
-  too.)
-- **Window-chrome buttons swallow synthetic clicks.** A close button
-  that lists an AXPress action takes the press and does nothing, while
-  menu items, sheet buttons, and ordinary app buttons click fine. The
-  reliable route to closing things is the menu or the keyboard
-  (`cmd+w`), and the tool description steers there.
-- **Modern SwiftUI apps expose anonymous elements.** Calculator's digit
-  buttons carry no title, no description beyond "button", no value. This
-  is why `state` reports positions and `click` takes coordinates: the
-  named path is preferred, the coordinate path is the verified fallback.
-- **Direct app scripting hangs on consent.** `Application("TextEdit")`
-  from a terminal without that specific Automation consent blocks until
-  an AppleEvent timeout. Hence the System-Events-only rule above.
-- The key sequence the live test uses to discard its scratch document —
-  `cmd+w`, the save sheet, `cmd+delete`, `cmd+q` — was verified by hand
-  first, sheet and all.
+- Per-element attribute reads cost about 25 ms each. `state` therefore uses
+  bulk per-container reads, breadth-first traversal, an element cap, and a time
+  budget. Application chrome arrives first. Deep web content may be partial,
+  and the result says so.
+- Window-chrome buttons can ignore synthetic AXPress actions. Menu commands or
+  keyboard shortcuts such as `cmd+w` are more reliable for window management.
+- Modern SwiftUI applications may expose anonymous controls. Calculator digit
+  buttons are one example. Positions and coordinate clicks provide the tested
+  fallback.
+- Direct target-app scripting can block on Automation consent. This is why the
+  implementation uses System Events only.
+- The scratch-document cleanup sequence used by the live test, including its
+  save sheet, was verified manually before automation.
 
-The wire fixtures the offline tests parse were captured from real
-osascript runs (`internal/tools/testdata/computer_*.json`), and the live
-test that captured them (`SB_LIVE=1`, macOS) drives the real tool end to
-end against a scratch TextEdit document and leaves the machine as it
-found it.
+Offline parser fixtures in `internal/tools/testdata/computer_*.json` came from
+real `osascript` runs. The `SB_LIVE=1` macOS test drives the tool end to end
+against a scratch TextEdit document and restores the application state when it
+finishes.
 
-## Stated limits
+## Limits
 
-- **No screenshots, on purpose.** A tool result is text in this
-  harness, and `screencapture` without the separate Screen Recording
-  permission silently returns wallpaper-only frames — there is no
-  cgo-free way to detect that in advance, and a capture that might be
-  lying is worse than a stated absence. The accessibility tree is the
-  interface; it is also what a model can act on precisely.
-- **No scrolling action.** Scroll-wheel synthesis is not available
-  through System Events; page and arrow keys through `key` cover most of
-  what scrolling is for.
-- **Keystrokes go to the frontmost app**, so `type`, `key`, and `click`
-  activate the target first. Reading `state` never steals focus.
-- Everything is visible on your screen as it happens. That is a feature:
-  the same visibility every routing decision gets, applied to the
-  model's hands.
+- No screenshots. `screencapture` can return wallpaper-only frames when Screen
+  Recording permission is absent, and the current implementation cannot
+  verify the frame without adding a native dependency.
+- No scroll-wheel action. Page and arrow keys cover common scrolling through
+  the `key` action.
+- `type`, `key`, and `click` activate the target because keystrokes go to the
+  frontmost application. Reading `state` does not change focus.
+- Actions are visible on the user's screen while they run.

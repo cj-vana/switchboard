@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func write(sess string, turn int, target, content string) session.FileEdit {

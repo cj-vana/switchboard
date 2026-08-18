@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // ResponsesClient serves the subscription surface.
@@ -82,7 +82,7 @@ func (c *ResponsesClient) Name() string { return Name }
 func (c *ResponsesClient) Stream(ctx context.Context, target provider.RouteTarget, req provider.Request) (provider.EventStream, error) {
 	body, err := c.buildRequest(target, req)
 	if err != nil {
-		return nil, err
+		return nil, provider.MarkUnissued(err)
 	}
 	resp, err := c.do(ctx, http.MethodPost, "/responses", body)
 	if err != nil {
@@ -302,6 +302,9 @@ func (c *ResponsesClient) buildRequest(target provider.RouteTarget, req provider
 		Input:           input,
 		MaxOutputTokens: target.Params.MaxOutputTokens,
 		Temperature:     target.Params.Temperature,
+	}
+	if req.CachePlan != nil {
+		out.PromptCacheKey = req.CachePlan.RoutingKey
 	}
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, responsesTool{

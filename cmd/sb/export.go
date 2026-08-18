@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // exportMarkdown renders one session's record. The timeline interleaves
@@ -33,7 +33,7 @@ func exportMarkdown(state session.State, timeline []session.Timeline) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Switchboard session %s\n\n", state.ID)
 	fmt.Fprintf(&b, "- workspace: %s\n- target: %s\n- started: %s\n- exported: %s\n\n",
-		state.Workspace, state.Target, state.CreatedAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+		state.Workspace, provider.DisplayRouteTargetID(provider.RouteTargetID(state.Target)), state.CreatedAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 
 	for _, ev := range timeline {
 		switch {
@@ -65,8 +65,17 @@ func exportMarkdown(state session.State, timeline []session.Timeline) string {
 		case ev.Route != nil:
 			r := ev.Route
 			line := fmt.Sprintf("> route: %s via %s (%s)", r.Tier, r.Source, r.Rationale)
-			if r.Escalations > 0 && r.EndedOn != "" {
-				line += fmt.Sprintf("; %d escalation(s), ended on %s", r.Escalations, r.EndedOn)
+			if r.Escalations > 0 && (r.EndedOn != "" || r.EndedTier != "") {
+				ended := r.EndedTier
+				if r.EndedOn != "" {
+					target := provider.DisplayRouteTargetID(r.EndedOn)
+					if ended == "" {
+						ended = target
+					} else {
+						ended += " (" + target + ")"
+					}
+				}
+				line += fmt.Sprintf("; %d escalation(s), ended on %s", r.Escalations, ended)
 			}
 			b.WriteString(line + "\n\n")
 		case ev.Race != nil:

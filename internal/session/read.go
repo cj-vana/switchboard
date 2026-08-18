@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // checkHeader validates a log's magic line and schema before any records are
@@ -100,6 +100,40 @@ func ReadRaces(path string) ([]Race, error) {
 			return nil, err
 		}
 		out = append(out, race)
+	}
+}
+
+// ReadPermissions returns the durable resolved permission audit in record
+// order. Older records decode with an empty ResolvedBy; consumers can display
+// them as legacy policy decisions without inventing whether the user approved.
+func ReadPermissions(path string) ([]Permission, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+	if err := checkHeader(r, path); err != nil {
+		return nil, err
+	}
+
+	var out []Permission
+	for {
+		rec, _, err := decodeRecord(r)
+		if errors.Is(err, io.EOF) || errors.Is(err, ErrCorruptRecord) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if rec.Type != RecordPermission {
+			continue
+		}
+		var permission Permission
+		if err := json.Unmarshal(rec.Payload, &permission); err != nil {
+			return nil, err
+		}
+		out = append(out, permission)
 	}
 }
 
@@ -210,6 +244,9 @@ func ReadUsages(path string) ([]Usage, error) {
 		// copies usage records with their At intact, and the timestamp is
 		// how an aggregate reader tells the copy from a second real call.
 		u.At = rec.At
+		if u.CallID == "" {
+			u.CallID = legacyAccountingID("call", rec)
+		}
 		out = append(out, u)
 	}
 }

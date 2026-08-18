@@ -1,0 +1,58 @@
+{
+  "name": "official-shape",
+  "interface": {
+    "displayName": "Official Shape"
+  },
+  "plugins": [
+    {
+      "name": "available-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/available-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CODEX"]
+      },
+      "category": "Engineering"
+    },
+    {
+      "name": "installed-by-default",
+      "source": {
+        "source": "local",
+        "path": "./plugins/installed-by-default"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "chatgpt-only",
+      "source": {
+        "source": "local",
+        "path": "./plugins/chatgpt-only"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE",
+        "products": ["CHATGPT"]
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "not-available",
+      "source": {
+        "source": "local",
+        "path": "./plugins/not-available"
+      },
+      "policy": {
+        "installation": "NOT_AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // The four surfaces this build reaches, as the catalog records them.

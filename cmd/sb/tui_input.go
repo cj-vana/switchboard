@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // --- slash-command suggestions ----------------------------------------------
@@ -158,7 +158,7 @@ func (m *tuiModel) runSlash(v string) tea.Cmd {
 			return noticeCmd("warn", "a turn is running; esc to interrupt it first")
 		}
 		if rest == "" {
-			return m.app.switchTier(name)
+			return m.switchTier(name)
 		}
 		return m.enqueue(rest, name)
 	}
@@ -179,12 +179,14 @@ func (m *tuiModel) runSlash(v string) tea.Cmd {
 	return noticeCmd("error", "unknown command "+name+"; try /help")
 }
 
-// cycleMode is shift+tab: default → acceptEdits → bypass → plan → default.
+// cycleMode keeps destructive postures out of an accidental keystroke:
+// default → acceptEdits → auto → plan → default. yolo and legacy bypass are
+// available only through an explicit /mode choice.
 func (m *tuiModel) cycleMode() tea.Cmd {
 	order := []permission.Mode{
 		permission.ModeDefault,
 		permission.ModeAcceptEdits,
-		permission.ModeBypass,
+		permission.ModeAuto,
 		permission.ModePlan,
 	}
 	i := slices.Index(order, m.mode)
@@ -196,10 +198,25 @@ func (m *tuiModel) setMode(mode permission.Mode) tea.Cmd {
 	m.app.loop.Perms.SetMode(mode)
 	m.mode = mode
 	m.addInfo("mode is now " + string(mode))
-	if mode == permission.ModeBypass && !m.app.capability.AutomaticExecutionAllowed() {
+	if mode == permission.ModeYOLO {
+		warning := "FULL HOST ACCESS: ordinary workspace edits and non-sensitive commands skip prompts; commands are unsandboxed with host filesystem and network reach. External and sensitive actions still ask"
+		if m.app.capability.Platform == "windows" {
+			warning += ". Windows descendant processes may survive cancellation"
+		}
+		m.addNotice("warn", warning)
+	}
+	if mode == permission.ModeAuto {
+		m.addNotice("", "auto applies ordinary workspace edits and sends ordinary non-sensitive commands to the configured cheap approver; external, sensitive, uncertain, and host-loopback-sandbox actions ask you")
+	}
+	if mode == permission.ModeBypass && !m.app.loop.Perms.Execution().SandboxActive() {
 		// Saying this once, plainly, beats letting the user discover it by
 		// being prompted anyway and reading it as a bug (§19.3).
-		m.addNotice("warn", "commands will still be approved one at a time: "+m.app.capability.Summary())
+		m.addNotice("warn", "commands will still be approved one at a time: bypass needs an active verified sandbox")
+	} else if mode == permission.ModeBypass {
+		policy := m.app.loop.Perms.Execution().CommandPolicy(false)
+		if policy.HostLoopbackShared || policy.HostIPCShared {
+			m.addNotice("warn", "commands will still ask: host-local network or IPC services retain authority outside this sandbox; bypass is promptless only when both are isolated")
+		}
 	}
 	return nil
 }
@@ -210,7 +227,7 @@ func (m *tuiModel) openTierPicker() tea.Cmd {
 	}
 	var items []pickerItem
 	for _, t := range m.app.config.Tiers {
-		desc := string(t.Target.ID())
+		desc := t.Target.Display()
 		if t.Label != "" {
 			desc = t.Label + "  " + desc
 		}
@@ -224,7 +241,7 @@ func (m *tuiModel) openTierPicker() tea.Cmd {
 	m.dlg = &pickerDialog{
 		title:  "switch tier",
 		items:  items,
-		onPick: func(id string) tea.Cmd { return m.app.switchTier(id) },
+		onPick: func(id string) tea.Cmd { return m.switchTier(id) },
 	}
 	return nil
 }

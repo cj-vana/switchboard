@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 const (
@@ -105,7 +105,7 @@ func Target(model string) provider.RouteTarget {
 func (c *Client) Stream(ctx context.Context, target provider.RouteTarget, req provider.Request) (provider.EventStream, error) {
 	body, err := c.buildRequest(target, req, true)
 	if err != nil {
-		return nil, err
+		return nil, provider.MarkUnissued(err)
 	}
 
 	resp, err := c.do(ctx, "/v1/messages", body)
@@ -430,7 +430,14 @@ const maxBreakpoints = 4
 // that lands one block off caches a different prefix than the one whose reuse
 // was scored.
 func applyCachePlan(target provider.RouteTarget, plan *provider.CachePlan, system []wireBlock, tools []wireTool, messages []wireMessage) error {
-	if plan == nil || len(plan.Breakpoints) == 0 {
+	if plan == nil {
+		return nil
+	}
+	if plan.RoutingKey != "" {
+		return &provider.CapabilityError{Target: target.ID(), Capability: "cache routing key",
+			Detail: "the Anthropic Messages API accepts cache breakpoints, not a prompt routing key"}
+	}
+	if len(plan.Breakpoints) == 0 {
 		return nil
 	}
 	if len(plan.Breakpoints) > maxBreakpoints {

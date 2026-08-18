@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,9 +17,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 const compactSystem = `You are summarizing a coding session so it can continue in a fresh context window. Write for the model that continues the work, not for a human. Capture: the task and its current state; what was tried and what failed, so nothing is repeated; decisions made and their reasons; file paths touched and what changed in each; exact commands, errors, and identifiers worth keeping; and what remains to be done, most immediate first. Plain text, no preamble, no headers about being a summary. Length proportional to what actually happened.`
@@ -73,41 +75,77 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 	if err != nil {
 		return noticeCmd("error", err.Error())
 	}
+	opCtx, generation, sourceID, err := m.startOperation("compact")
+	if err != nil {
+		return noticeCmd("warn", err.Error())
+	}
 
-	line := "compacting: summarizing " + itoa(len(state.Messages)) + " messages on " + string(summarizer.Target.ID())
+	line := "compacting: summarizing " + itoa(len(state.Messages)) + " messages on " + summarizer.Target.Display()
 	if fromSlot {
 		line += " (the summarizer slot)"
 	}
 	m.addInfo(line + "…")
 
 	app := m.app
+	sourceSess := m.app.loop.Session
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(opCtx, 5*time.Minute)
 		defer cancel()
+		finishNotice := func(level, text string) noticeMsg {
+			return noticeMsg{level: level, text: text, operation: generation, sourceID: sourceID}
+		}
+		release, err := pauseAdvisorLedger(ctx, app)
+		if err != nil {
+			return finishNotice("error", "compact could not stabilize the session ledger: "+err.Error())
+		}
+		handedOff := false
+		defer func() {
+			if !handedOff {
+				release()
+			}
+		}()
 
-		client, target := app.loop.Provider, app.tier.Target
+		client, target := app.loop.Binding().Provider, app.tier.Target
 		if fromSlot {
 			probed, slotClient, perr := app.providers.probeTier(ctx, summarizer)
 			switch {
 			case perr == nil:
 				client, target = slotClient, probed.Target
 			case auto:
-				app.p.Send(noticeMsg{level: "warn", text: "summarizer slot " + string(summarizer.Target.ID()) +
+				app.p.Send(noticeMsg{level: "warn", text: "summarizer slot " + summarizer.Target.Display() +
 					" is unreachable (" + perr.Error() + "); compacting with the current tier instead"})
 			default:
-				return noticeMsg{level: "error", text: "summarizer slot " + string(summarizer.Target.ID()) +
-					" is unreachable, session unchanged: " + perr.Error()}
+				return finishNotice("error", "summarizer slot "+summarizer.Target.Display()+
+					" is unreachable, session unchanged: "+perr.Error())
 			}
 		}
 
-		summary, err := summarize(ctx, client, target, state.Messages, instructions)
+		req := summarizeRequest(state.Messages, instructions)
+		finish, err := beginMeteredCall(app.budget, app.catalog, sourceSess, target, req, session.UsagePurposeCompact)
 		if err != nil {
-			return noticeMsg{level: "error", text: "compact failed, session unchanged: " + err.Error()}
+			return finishNotice("error", "compact stopped before summarizing, session unchanged: "+err.Error())
+		}
+		summary, usage, providerDone, callErr := summarizeRequestCall(ctx, client, target, req)
+		meterOutcome := callErr
+		if providerDone {
+			meterOutcome = nil
+		}
+		meterErr := finish(usage, meterOutcome)
+		if err := errors.Join(callErr, meterErr); err != nil {
+			return finishNotice("error", "compact failed, session unchanged: "+err.Error())
+		}
+		if err := ctx.Err(); err != nil {
+			return finishNotice("", "")
 		}
 
 		sess, err := app.store.Create(app.workspace, app.tier.Target.ID(), app.catalog.Revision)
 		if err != nil {
-			return noticeMsg{level: "error", text: "compact failed, session unchanged: " + err.Error()}
+			return finishNotice("error", "compact failed, session unchanged: "+err.Error())
+		}
+		accounting := sourceSess.State()
+		if err := sess.AppendBudgetTransfer("compact:"+accounting.ID, accounting.AccountedCostMicroUSD(), accounting.RetryReserveMicroUSD); err != nil {
+			sess.Close()
+			return finishNotice("error", "compact failed to carry the session budget, session unchanged: "+err.Error())
 		}
 		seed := compactSeedHead + state.ID + "). What follows is a summary of that conversation; treat it as established context.\n\n" + summary
 		// The acknowledgment keeps the log strictly alternating, which every
@@ -121,9 +159,11 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 		}
 		if err != nil {
 			sess.Close()
-			return noticeMsg{level: "error", text: "compact failed, session unchanged: " + err.Error()}
+			return finishNotice("error", "compact failed, session unchanged: "+err.Error())
 		}
-		return sessionSwapMsg{sess: sess, tier: app.tier, client: app.loop.Provider, fresh: false, keepFold: true}
+		handedOff = true
+		return sessionSwapMsg{sess: sess, tier: app.tier, client: app.loop.Binding().Provider, fresh: false, keepFold: true, release: release,
+			operation: generation, sourceID: sourceID, preserveRuntimeTarget: true}
 	}
 }
 
@@ -204,18 +244,25 @@ func compactThreshold(cfg *config.Config) int {
 // summarize is a one-shot request outside the loop: no tools, no session
 // append, just the conversation and an instruction to compress it.
 func summarize(ctx context.Context, client provider.Provider, target provider.RouteTarget, messages []provider.Message, instructions string) (string, error) {
+	text, _, _, err := summarizeRequestCall(ctx, client, target, summarizeRequest(messages, instructions))
+	return text, err
+}
+
+func summarizeRequest(messages []provider.Message, instructions string) provider.Request {
 	ask := "Summarize the conversation so far, per your instructions."
 	if instructions != "" {
 		ask += " Additional guidance from the user: " + instructions
 	}
-	req := provider.Request{
+	return provider.Request{
 		System:   []provider.Block{provider.Text{Text: compactSystem}},
 		Messages: append(append([]provider.Message{}, messages...), provider.UserText(ask)),
 	}
+}
 
+func summarizeRequestCall(ctx context.Context, client provider.Provider, target provider.RouteTarget, req provider.Request) (string, provider.Usage, bool, error) {
 	stream, err := client.Stream(ctx, target, req)
 	if err != nil {
-		return "", err
+		return "", provider.Usage{}, false, err
 	}
 	defer stream.Close()
 
@@ -223,16 +270,16 @@ func summarize(ctx context.Context, client provider.Provider, target provider.Ro
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			return "", err
+			return "", provider.Usage{}, false, err
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:
 			b.WriteString(ev.Text)
 		case provider.EventDone:
 			if s := strings.TrimSpace(b.String()); s != "" {
-				return s, nil
+				return s, ev.Usage, true, nil
 			}
-			return "", fmt.Errorf("the model returned an empty summary")
+			return "", ev.Usage, true, fmt.Errorf("the model returned an empty summary")
 		}
 	}
 }

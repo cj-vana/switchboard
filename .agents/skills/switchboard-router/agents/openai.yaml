@@ -1,0 +1,6 @@
+interface:
+  display_name: "Switchboard Router"
+  short_description: "Safely change and evaluate Switchboard routing"
+  default_prompt: "Use $switchboard-router to change routing without weakening feasibility or evaluation gates."
+policy:
+  allow_implicit_invocation: true

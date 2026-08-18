@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/breakpoint"
-	"github.com/cj-vana/switchboard/internal/cachestate"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/breakpoint"
+	"github.com/switchboard-code/switchboard/internal/cachestate"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func explicitPolicy() catalog.CachePolicy {
@@ -130,5 +130,20 @@ func TestATargetThatDoesNotCacheGetsNoPlan(t *testing.T) {
 	}
 	if len(events) == 0 || len(events[0].Declined) == 0 {
 		t.Error("nothing was reported, so a permanent miss would look like a bug")
+	}
+}
+
+func TestAutomaticCacheRoutingKeyReachesTheProviderPlan(t *testing.T) {
+	policy := catalog.CachePolicy{DefaultMode: catalog.CacheAutomatic, RoutingKeySupport: true}
+	c := &Cache{
+		Manager: &breakpoint.Manager{Policy: policy, Target: "openai/subscription/model"},
+		Policy:  policy, Target: "openai/subscription/model",
+	}
+	plan := c.plan([]provider.Block{provider.Text{Text: "system"}}, nil, longMessages(2))
+	if plan == nil || plan.RoutingKey == "" {
+		t.Fatalf("automatic cache plan = %+v, want a routing key", plan)
+	}
+	if len(plan.Breakpoints) != 0 {
+		t.Fatalf("automatic cache placed explicit markers: %+v", plan.Breakpoints)
 	}
 }

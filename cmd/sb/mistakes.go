@@ -20,9 +20,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 const (

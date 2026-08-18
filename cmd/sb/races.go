@@ -14,7 +14,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func runRacesCLI(w io.Writer, store *session.Store, workspace string) error {

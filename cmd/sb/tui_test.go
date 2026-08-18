@@ -1,19 +1,26 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 func testModel(t *testing.T) *tuiModel {
@@ -64,6 +71,64 @@ func TestStatusLineShowsRouteAtRest(t *testing.T) {
 	}
 }
 
+func TestParameterizedTargetLabelsStayReadableAcrossUI(t *testing.T) {
+	m := testModel(t)
+	temperature := 0.5
+	target := m.app.tier.Target
+	target.Params = provider.Params{
+		MaxOutputTokens: 2_048,
+		Temperature:     &temperature,
+		Reasoning:       &provider.Reasoning{Enabled: true, Effort: "high"},
+	}
+	m.app.tier.Target = target
+	binding := m.app.loop.Binding()
+	binding.Target = target
+	m.app.loop.Bind(binding)
+	m.tierLine = m.app.tierLine()
+	cmdWhy(m, "")
+	why := strings.Join(m.tr.flat, "\n")
+	replLine := (&repl{loop: m.app.loop, tier: m.app.tier}).tierLine()
+
+	for name, output := range map[string]string{
+		"TUI tier line":  m.app.tierLine(),
+		"REPL tier line": replLine,
+		"/why":           why,
+	} {
+		for _, readable := range []string{"ollama/local/test:7b", "think:high", "max:2048", "temp:0.5"} {
+			if !strings.Contains(output, readable) {
+				t.Errorf("%s = %q, missing %q", name, output, readable)
+			}
+		}
+		for _, opaque := range []string{"rt2:", "b2xsYW1h", "dGVzdDo3Yg"} {
+			if strings.Contains(output, opaque) {
+				t.Errorf("%s = %q, leaked opaque identity %q", name, output, opaque)
+			}
+		}
+	}
+}
+
+func TestOpeningBannerDistinguishesParameterizedRungs(t *testing.T) {
+	m := testModel(t)
+	parameterized := m.app.tier
+	parameterized.Target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	plain := m.app.tier
+	plain.ID = "t2"
+	plain.Label = "default"
+	m.app.config.Tiers = []config.Tier{parameterized, plain}
+	m.app.tier = parameterized
+	binding := m.app.loop.Binding()
+	binding.Target = parameterized.Target
+	m.app.loop.Bind(binding)
+	m.addBanner(m.app.loop.Session, false)
+	banner := stripANSI(strings.Join(m.tr.flat, "\n"))
+	if strings.Count(banner, parameterized.Target.ModelID) < 2 || !strings.Contains(banner, "think:high") {
+		t.Fatalf("opening banner did not distinguish same-model parameter variants:\n%s", banner)
+	}
+	if strings.Contains(banner, "rt2:") {
+		t.Fatalf("opening banner leaked machine identity:\n%s", banner)
+	}
+}
+
 func TestSlashSuggestionsAppear(t *testing.T) {
 	m := testModel(t)
 	m.ta.SetValue("/he")
@@ -85,6 +150,402 @@ func TestHelpCommandRenders(t *testing.T) {
 	}
 }
 
+func TestRoutingPhaseSerializesSubmittedPrompts(t *testing.T) {
+	m := testModel(t)
+	if cmd := m.launchTurn("first", nil); cmd == nil || !m.busy || m.turnCancel == nil {
+		t.Fatalf("routing did not own the busy/cancel state: busy=%v cancel=%v", m.busy, m.turnCancel != nil)
+	}
+	if cmd := m.enqueue("second", ""); cmd != nil || len(m.queue) != 1 {
+		t.Fatalf("prompt was not queued behind routing: cmd=%v queue=%v", cmd != nil, m.queue)
+	}
+	next := m.onTurnPlan(turnPlanMsg{generation: m.turnGeneration, err: errors.New("probe failed")})
+	if next == nil || len(m.queue) != 0 || !m.busy {
+		t.Fatalf("routing failure did not advance the queue: next=%v queue=%v busy=%v", next != nil, m.queue, m.busy)
+	}
+}
+
+func TestCancelledRoutingRejectsItsLateResult(t *testing.T) {
+	m := testModel(t)
+	before := m.app.loop.Session.State()
+	cmd := m.launchTurn("never send this", nil)
+	oldGeneration := m.turnGeneration
+	if cmd == nil || !m.turnPlanning {
+		t.Fatal("routing did not enter its cancellable planning phase")
+	}
+	if next := m.interrupt(); next != nil {
+		// There is no queued turn in this test.
+		t.Fatal("cancelling an unqueued plan returned work")
+	}
+	if m.busy || m.turnPlanning || m.turnCancel != nil || m.turnGeneration == oldGeneration {
+		t.Fatalf("cancel did not invalidate planning: busy=%v planning=%v cancel=%v generation=%d",
+			m.busy, m.turnPlanning, m.turnCancel != nil, m.turnGeneration)
+	}
+
+	msg := cmd().(turnPlanMsg)
+	if msg.generation != oldGeneration || !errors.Is(msg.err, context.Canceled) {
+		t.Fatalf("late result = %+v, want cancelled generation %d", msg, oldGeneration)
+	}
+	if next := m.onTurnPlan(msg); next != nil {
+		t.Fatal("stale plan launched work")
+	}
+	if after := m.app.loop.Session.State(); len(after.Messages) != len(before.Messages) {
+		t.Fatalf("cancelled planning appended a message: before=%d after=%d", len(before.Messages), len(after.Messages))
+	}
+}
+
+func TestTierSwitchOwnsBusyStateAndRejectsLateResult(t *testing.T) {
+	m := testModel(t)
+	second := config.Tier{ID: "t2", Label: "strong", Target: provider.RouteTarget{
+		Provider: "ollama", Surface: "local", ModelID: "strong:7b",
+	}}
+	m.app.config.Tiers = append(m.app.config.Tiers, second)
+	cmd := m.switchTier("t2")
+	operation, sourceID := m.operationGeneration, m.operationSourceID
+	if cmd == nil || !m.busy || !m.operationActive || m.turnCancel == nil {
+		t.Fatalf("switch did not claim ownership: busy=%v active=%v cancel=%v", m.busy, m.operationActive, m.turnCancel != nil)
+	}
+	if next := m.enqueue("wait for the switch", ""); next != nil || len(m.queue) != 1 {
+		t.Fatalf("prompt did not queue behind switch: cmd=%v queue=%v", next != nil, m.queue)
+	}
+
+	// Simulate another generation taking ownership before the old probe reports.
+	m.finishOperation(operation, false)
+	_, generation := m.startPlanning()
+	m.onTierSwitch(tierSwitchMsg{tier: second, operation: operation, sourceID: sourceID})
+	if m.app.tier.ID != "t1" || !m.busy || !m.turnPlanning || m.turnGeneration != generation {
+		t.Fatalf("late switch mutated active turn: tier=%s busy=%v planning=%v generation=%d",
+			m.app.tier.ID, m.busy, m.turnPlanning, m.turnGeneration)
+	}
+	m.finishPlanning()
+}
+
+func TestOwnedTierSwitchAppliesThenAdvancesQueue(t *testing.T) {
+	m := testModel(t)
+	second := config.Tier{ID: "t2", Label: "strong", Target: provider.RouteTarget{
+		Provider: "ollama", Surface: "local", ModelID: "strong:7b",
+	}}
+	m.app.config.Tiers = append(m.app.config.Tiers, second)
+	if cmd := m.switchTier("t2"); cmd == nil {
+		t.Fatal("switch returned no probe command")
+	}
+	operation, sourceID := m.operationGeneration, m.operationSourceID
+	m.queue = append(m.queue, "next")
+	next := m.onTierSwitch(tierSwitchMsg{tier: second, client: m.app.loop.Binding().Provider,
+		operation: operation, sourceID: sourceID})
+	if m.app.tier.ID != "t2" || m.operationActive || next == nil || !m.turnPlanning {
+		t.Fatalf("switch/queue state: tier=%s active=%v next=%v planning=%v",
+			m.app.tier.ID, m.operationActive, next != nil, m.turnPlanning)
+	}
+	m.finishPlanning()
+}
+
+func TestSharedTargetTierSwitchStillReportsFallbackSubstitution(t *testing.T) {
+	m := testModel(t)
+	shared := m.app.tier.Target
+	second := config.Tier{ID: "t2", Label: "shared fallback", Target: shared}
+	m.app.config.Tiers = append(m.app.config.Tiers, second)
+	if cmd := m.switchTier("t2"); cmd == nil {
+		t.Fatal("distinct tier switch returned no owned probe command")
+	}
+	operation, sourceID := m.operationGeneration, m.operationSourceID
+	const note = "t2 is served by its fallback shared: primary is unavailable"
+	m.onTierSwitch(tierSwitchMsg{
+		tier: second, client: m.app.loop.Binding().Provider, note: note,
+		operation: operation, sourceID: sourceID,
+	})
+	if got := strings.Join(m.tr.flat, "\n"); !strings.Contains(got, note) {
+		t.Fatalf("shared-target fallback substitution was hidden:\n%s", got)
+	}
+	raw, err := os.ReadFile(m.app.loop.Session.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), note) {
+		t.Fatalf("shared-target fallback substitution was not persisted:\n%s", raw)
+	}
+	if strings.Contains(strings.Join(m.routeLog, "\n"), "cache") {
+		t.Fatalf("shared target switch invented cache abandonment: %v", m.routeLog)
+	}
+}
+
+func TestSameTierRebindProbesAndUsesNewConfiguredTarget(t *testing.T) {
+	r, capture, _ := newOverrideREPL(t, "small", "large")
+	app := &tuiApp{
+		loop: r.loop, config: r.config, catalog: r.catalog, tier: r.tier,
+		providers: r.providers, workspace: r.workspace, sticky: r.sticky,
+		budget: r.budget, caches: r.caches,
+	}
+	m := newTUIModel(app, darkTheme(), newMarkdown(80, true), newTextarea())
+	if err := app.config.BindTier("t1", "replacement", "ollama/large", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	cmd := m.switchTier("t1")
+	if cmd == nil || !m.operationActive {
+		t.Fatalf("same tier with a new target short-circuited: cmd=%v active=%v", cmd != nil, m.operationActive)
+	}
+	raw := cmd()
+	msg, ok := raw.(tierSwitchMsg)
+	if !ok {
+		t.Fatalf("switch command returned %T, want tierSwitchMsg", raw)
+	}
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	m.onTierSwitch(msg)
+	if app.tier.Target.ModelID != "large" || app.loop.Binding().Target.ModelID != "large" {
+		t.Fatalf("same-tier rebind stayed on stale target: tier=%s binding=%s",
+			app.tier.Target.ModelID, app.loop.Binding().Target.ModelID)
+	}
+
+	// The TUI observer needs a running Bubble Tea program. This assertion only
+	// exercises the rebound runtime, so use the loop's inert observer directly.
+	app.loop.SetObserver(agent.NopObserver{})
+	if err := app.loop.TurnMessage(context.Background(), provider.UserText("use the rebound model")); err != nil {
+		t.Fatal(err)
+	}
+	capture.mu.Lock()
+	bodies := append([]string(nil), capture.bodies...)
+	capture.mu.Unlock()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"model":"large"`) || strings.Contains(bodies[0], `"model":"small"`) {
+		t.Fatalf("post-switch provider requests = %#v, want one request on large and none on small", bodies)
+	}
+}
+
+func TestCancelledTierSwitchCannotCommitSuccessfulLateProbe(t *testing.T) {
+	m := testModel(t)
+	second := config.Tier{ID: "t2", Target: provider.RouteTarget{
+		Provider: "ollama", Surface: "local", ModelID: "strong:7b",
+	}}
+	m.app.config.Tiers = append(m.app.config.Tiers, second)
+	m.switchTier("t2")
+	operation, sourceID := m.operationGeneration, m.operationSourceID
+	m.queue = append(m.queue, "after cancellation")
+	m.interrupt()
+	if !m.operationCancelling {
+		t.Fatal("interrupt did not mark the owned switch as cancelling")
+	}
+	next := m.onTierSwitch(tierSwitchMsg{tier: second, client: m.app.loop.Binding().Provider,
+		operation: operation, sourceID: sourceID})
+	if m.app.tier.ID != "t1" || m.operationActive || next == nil || !m.turnPlanning || len(m.moves) != 0 {
+		t.Fatalf("cancelled switch committed or stranded queue: tier=%s active=%v next=%v planning=%v moves=%v",
+			m.app.tier.ID, m.operationActive, next != nil, m.turnPlanning, m.moves)
+	}
+	m.finishPlanning()
+}
+
+func TestActiveTierOverrideDoesNotInventMoveOrAbandonCache(t *testing.T) {
+	m := testModel(t)
+	cache := &agent.Cache{}
+	binding := m.app.loop.Binding()
+	binding.Target = m.app.tier.Target
+	binding.Cache = cache
+	m.app.loop.Bind(binding)
+	m.app.caches = newCacheSet(m.app.tier.Target, cache)
+	m.app.sticky = route.NewSticky(route.Policy{MinimumDwell: 1}, 0)
+	m.app.sticky.Observe(route.RepeatedToolCall)
+	m.app.sticky.CallServed()
+
+	m.applyOverrideBinding(overrideProbeMsg{tier: m.app.tier, client: binding.Provider})
+	if len(m.moves) != 0 || m.app.loop.Binding().Cache != cache {
+		t.Fatalf("same-tier override changed routing/cache: moves=%v cache_preserved=%v", m.moves, m.app.loop.Binding().Cache == cache)
+	}
+	if strings.Contains(strings.Join(m.routeLog, "\n"), "cache") {
+		t.Fatalf("same-tier override claimed cache abandonment: %v", m.routeLog)
+	}
+	if m.app.sticky == nil || !m.app.sticky.Pinned() {
+		t.Fatal("same-tier override did not retain one-turn pin provenance")
+	}
+
+	m.app.sticky.StartTurn() // borrowed-turn mutations must disappear on restore
+	m.restoreOverride()
+	if len(m.moves) != 0 || m.app.loop.Binding().Cache != cache || m.app.sticky.Pinned() {
+		t.Fatalf("same-tier restore changed routing/cache: moves=%v cache_preserved=%v pinned=%v",
+			m.moves, m.app.loop.Binding().Cache == cache, m.app.sticky.Pinned())
+	}
+	if move := m.app.sticky.Assess(1); move.Direction != 1 {
+		t.Fatalf("same-tier restore lost dwell/evidence state: %+v", move)
+	}
+}
+
+func TestResumeUsesConfiguredFallbackAndPersistsSubstitution(t *testing.T) {
+	m := testModel(t)
+	server := fakeOllama(t, "resume-backup")
+	resumedTier := ollamaTier("t2", "resume-primary", "resume-backup")
+	m.app.catalog = catalogWithLocalModels(t,
+		localModelSpec{name: "resume-primary", contextWindow: 100_000},
+		localModelSpec{name: "resume-backup", contextWindow: 100_000},
+	)
+	m.app.config.Tiers = append(m.app.config.Tiers, resumedTier)
+	m.app.providers = newProviders(server.URL, m.app.config)
+	m.app.caches = newCacheSet(m.app.tier.Target, m.app.loop.Binding().Cache)
+	m.app.sticky = route.NewSticky(route.Policy{}, 0)
+
+	old, err := m.app.store.Create(m.app.workspace, resumedTier.Target.ID(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, path := old.ID(), old.Path()
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cmd := m.reopen(id)
+	if cmd == nil {
+		t.Fatal("resume returned no asynchronous command")
+	}
+	msg := cmd().(sessionSwapMsg)
+	if msg.err != nil || msg.tier.Target.ModelID != "resume-backup" || !msg.warnNote || !strings.Contains(msg.note, "fallback") {
+		t.Fatalf("resume fallback result = %#v", msg)
+	}
+	m.onSessionSwap(msg)
+	if m.app.loop.Session.ID() != id || m.app.loop.Binding().Target.ModelID != "resume-backup" {
+		t.Fatalf("resume did not land on fallback: session=%s target=%s", m.app.loop.Session.ID(), m.app.loop.Binding().Target.ModelID)
+	}
+	timeline, err := session.ReadTimeline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range timeline {
+		if event.Note != nil && event.Note.Level == "warn" && strings.Contains(event.Note.Text, "fallback") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("resume fallback substitution was not persisted on resumed session")
+	}
+}
+
+func TestCrossTierOverrideRestoresExactStateWithoutPermanentMove(t *testing.T) {
+	m := testModel(t)
+	second := config.Tier{ID: "t2", Target: provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "other:7b"}}
+	m.app.config.Tiers = append(m.app.config.Tiers, second)
+	cache := &agent.Cache{}
+	binding := m.app.loop.Binding()
+	binding.Cache = cache
+	m.app.loop.Bind(binding)
+	m.app.caches = newCacheSet(m.app.tier.Target, cache)
+	m.app.sticky = route.NewSticky(route.Policy{MinimumDwell: 1}, 0)
+	m.app.sticky.Observe(route.RepeatedToolCall)
+	m.app.sticky.CallServed()
+
+	m.applyOverrideBinding(overrideProbeMsg{tier: second, client: binding.Provider})
+	if len(m.moves) != 0 || strings.Contains(strings.Join(m.routeLog, "\n"), "cache") {
+		t.Fatalf("temporary cross-tier borrow became a permanent move: moves=%v log=%v", m.moves, m.routeLog)
+	}
+	m.app.sticky.StartTurn()
+	m.restoreOverride()
+	if m.app.tier.ID != "t1" || m.app.loop.Binding().Cache != cache || m.app.sticky.Pinned() || m.app.sticky.Rank() != 0 {
+		t.Fatalf("cross-tier restore: tier=%s cache=%v rank=%d pinned=%v",
+			m.app.tier.ID, m.app.loop.Binding().Cache == cache, m.app.sticky.Rank(), m.app.sticky.Pinned())
+	}
+	if move := m.app.sticky.Assess(1); move.Direction != 1 {
+		t.Fatalf("cross-tier restore lost prior policy evidence: %+v", move)
+	}
+}
+
+func TestCancelledSessionOperationRejectsItsLateSwap(t *testing.T) {
+	m := testModel(t)
+	source := m.app.loop.Session
+	cmd := m.clearSession()
+	if cmd == nil || !m.operationActive || !m.busy {
+		t.Fatal("clear did not claim exclusive ownership")
+	}
+	msg, ok := cmd().(sessionSwapMsg)
+	if !ok || msg.err != nil || msg.sess == nil {
+		t.Fatalf("clear result = %#v", msg)
+	}
+
+	m.interrupt()
+	if !m.operationActive || !m.operationCancelling || !m.busy {
+		t.Fatal("cancel released ownership before the operation reported completion")
+	}
+	m.onSessionSwap(msg)
+	if m.operationActive || m.busy {
+		t.Fatal("cancelled operation did not release ownership at completion")
+	}
+	if m.app.loop.Session != source {
+		t.Fatal("late clear result replaced the source after cancellation")
+	}
+	if err := msg.sess.AppendNote("info", "must be closed"); !errors.Is(err, session.ErrSessionPoisoned) {
+		t.Fatalf("late session remained writable: %v", err)
+	}
+}
+
+func TestStalePlanCannotClearANewerPlanningGeneration(t *testing.T) {
+	m := testModel(t)
+	_ = m.launchTurn("old", nil)
+	oldGeneration := m.turnGeneration
+	m.interrupt()
+	_ = m.launchTurn("new", nil)
+	newGeneration := m.turnGeneration
+
+	if cmd := m.onTurnPlan(turnPlanMsg{generation: oldGeneration, err: context.Canceled}); cmd != nil {
+		t.Fatal("stale result returned work")
+	}
+	if !m.busy || !m.turnPlanning || m.turnCancel == nil || m.turnGeneration != newGeneration {
+		t.Fatalf("stale result damaged new planning: busy=%v planning=%v cancel=%v generation=%d want=%d",
+			m.busy, m.turnPlanning, m.turnCancel != nil, m.turnGeneration, newGeneration)
+	}
+	m.interrupt()
+}
+
+func TestTUIRuntimeTierAndLoopBindingStayCoherent(t *testing.T) {
+	m := testModel(t)
+	a := m.app.tier
+	b := config.Tier{ID: "t2", Label: "heavy", Target: provider.RouteTarget{
+		Provider: "ollama", Surface: "local", ModelID: "other:14b",
+	}}
+	m.app.config.Tiers = append(m.app.config.Tiers, b)
+	m.app.caches = newCacheSet(a.Target, nil)
+	client := &racedProvider{}
+	m.app.bindRuntime(a, client)
+
+	errs := make(chan string, 1)
+	report := func(text string) {
+		select {
+		case errs <- text:
+		default:
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10_000; i++ {
+			m.app.bindRuntime(b, client)
+			m.app.bindRuntime(a, client)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20_000; i++ {
+			tier, binding := m.app.runtimeSnapshot()
+			if tier.Target.ID() != binding.Target.ID() {
+				report(fmt.Sprintf("torn runtime state: tier=%s binding=%s", tier.Target.ID(), binding.Target.ID()))
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func TestTierAutoReleasesManualPin(t *testing.T) {
+	m := testModel(t)
+	m.app.sticky = route.NewSticky(route.Policy{}, 0)
+	m.app.sticky.Pin(0)
+	if cmd := cmdTier(m, "auto"); cmd != nil {
+		t.Fatal("/tier auto unexpectedly started asynchronous work")
+	}
+	if m.app.sticky.Pinned() {
+		t.Fatal("/tier auto left the router pinned")
+	}
+}
+
 func TestUnknownCommandIsANotice(t *testing.T) {
 	m := testModel(t)
 	m.ta.SetValue("/frobnicate")
@@ -101,12 +562,33 @@ func TestUnknownCommandIsANotice(t *testing.T) {
 
 func TestModeCycleMovesAndReports(t *testing.T) {
 	m := testModel(t)
-	m.cycleMode()
-	if m.mode != permission.ModeAcceptEdits {
-		t.Fatalf("shift+tab moved to %s, want acceptEdits", m.mode)
+	for _, want := range []permission.Mode{
+		permission.ModeAcceptEdits, permission.ModeAuto, permission.ModePlan, permission.ModeDefault,
+	} {
+		m.cycleMode()
+		if m.mode != want || m.app.loop.Perms.Mode() != want {
+			t.Fatalf("shift+tab moved UI=%s engine=%s, want %s", m.mode, m.app.loop.Perms.Mode(), want)
+		}
+		if m.mode == permission.ModeYOLO || m.mode == permission.ModeBypass {
+			t.Fatalf("shift+tab entered explicit-only mode %s", m.mode)
+		}
 	}
-	if m.app.loop.Perms.Mode() != permission.ModeAcceptEdits {
-		t.Fatal("the engine was not updated")
+	cmdMode(m, "yolo")
+	if m.mode != permission.ModeYOLO || !m.app.loop.Perms.Execution().FullAccess() {
+		t.Fatal("explicit /mode yolo did not enable full access")
+	}
+}
+
+func TestModeCycleRefusesWhileTurnIsBusy(t *testing.T) {
+	m := testModel(t)
+	m.busy = true
+	before := m.mode
+	returned := m.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.mode != before || m.app.loop.Perms.Mode() != before {
+		t.Fatalf("shift+tab changed mode while busy: UI=%s engine=%s", m.mode, m.app.loop.Perms.Mode())
+	}
+	if returned == nil {
+		t.Fatal("busy shift+tab did not return a visible warning")
 	}
 }
 
@@ -187,6 +669,37 @@ func TestToolEntryCollapseAndExpand(t *testing.T) {
 	e.cache = nil
 	if got := tr.render(e); len(got) <= 2 {
 		t.Fatal("expanded tool did not show its detail")
+	}
+}
+
+func TestConcurrentSameNameToolEndsPairByCallID(t *testing.T) {
+	m := testModel(t)
+	m.onToolStart(toolStartMsg{id: "read-a", name: "read", req: permission.Request{
+		Tool: "read", Path: "a.go",
+	}})
+	m.onToolStart(toolStartMsg{id: "read-b", name: "read", req: permission.Request{
+		Tool: "read", Path: "b.go",
+	}})
+
+	m.onToolEnd(toolEndMsg{id: "read-a", name: "read", res: tools.Result{
+		Content: "failure-a", IsError: true,
+	}, took: time.Second})
+	m.onToolEnd(toolEndMsg{id: "read-b", name: "read", res: tools.Result{
+		Content: "success-b",
+	}, took: 2 * time.Second})
+
+	byID := map[string]toolEntry{}
+	for _, entry := range m.tr.entries {
+		if entry.kind == kindTool {
+			byID[entry.tool.id] = entry.tool
+		}
+	}
+	a, b := byID["read-a"], byID["read-b"]
+	if !a.done || !a.failed || a.detail != "failure-a" || a.took != time.Second || !strings.Contains(a.desc, "a.go") {
+		t.Fatalf("call A was mispaired: %+v", a)
+	}
+	if !b.done || b.failed || b.detail != "success-b" || b.took != 2*time.Second || !strings.Contains(b.desc, "b.go") {
+		t.Fatalf("call B was mispaired: %+v", b)
 	}
 }
 

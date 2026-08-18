@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cj-vana/switchboard/internal/hooks"
-	"github.com/cj-vana/switchboard/internal/trust"
+	"github.com/switchboard-code/switchboard/internal/hooks"
+	"github.com/switchboard-code/switchboard/internal/trust"
 )
 
 // loadHooks assembles the session's hook set: the user's file always, the

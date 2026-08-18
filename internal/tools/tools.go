@@ -23,9 +23,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 type Result struct {
@@ -64,6 +64,7 @@ type Tool interface {
 type Registry struct {
 	root       string
 	capability execution.Capability
+	execution  *execution.Controller
 	versions   *fileVersions
 	todos      *todoState
 	tools      map[string]Tool
@@ -119,6 +120,17 @@ func (r *Registry) recordUndo(abs string) {
 // wrapper the exec tool applies is the same one the permission engine consulted
 // when it decided whether approval was needed.
 func NewRegistry(workspace string, capability execution.Capability) (*Registry, error) {
+	// Preserve the original constructor for embedders: a verified capability is
+	// active. Product assembly uses NewRegistryWithExecution so sandbox-off is
+	// explicit and the controller is shared with the permission engine.
+	controller, _ := execution.NewController(capability, execution.SandboxAuto)
+	return NewRegistryWithExecution(workspace, controller)
+}
+
+func NewRegistryWithExecution(workspace string, controller *execution.Controller) (*Registry, error) {
+	if controller == nil {
+		controller = execution.NewDefaultController(execution.Capability{})
+	}
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
 		return nil, err
@@ -132,7 +144,8 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 
 	r := &Registry{
 		root:       root,
-		capability: capability,
+		capability: controller.Capability(),
+		execution:  controller,
 		versions:   &fileVersions{seen: map[string]string{}, whole: map[string]string{}},
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
@@ -150,6 +163,9 @@ func NewRegistry(workspace string, capability execution.Capability) (*Registry, 
 	r.add(&webfetchTool{client: client})
 	return r, nil
 }
+
+// Execution returns the controller shared with branches and delegates.
+func (r *Registry) Execution() *execution.Controller { return r.execution }
 
 func (r *Registry) add(t Tool) {
 	r.tools[t.Name()] = t

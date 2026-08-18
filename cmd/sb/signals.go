@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/permission"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // watcher feeds the escalation policy from what the loop is already reporting.
@@ -33,21 +36,22 @@ type watcher struct {
 
 	// onMove is called when the primary actually changes, so the caller can
 	// rebind the target without this needing to know how.
-	onMove func(rank int, why string)
+	// onMove probes and prepares an infallible live bind plus a post-commit
+	// presentation callback. Sticky invokes the bind only if the proposal is
+	// still current; UI/log publication likewise waits for that commit.
+	onMove func(ctx context.Context, rank int, why string) (bind func() bool, afterCommit func(), ok bool)
 
-	// pendingArgv remembers what the running command was, because a result
-	// carries no arguments and "did a test run fail" needs both.
-	pendingArgv map[string]string
+	mu    sync.Mutex
+	moves int
 }
 
-func newWatcher(inner agent.Observer, sticky *route.Sticky, maxRank int, onMove func(int, string)) *watcher {
+func newWatcher(inner agent.Observer, sticky *route.Sticky, maxRank int, onMove func(context.Context, int, string) (func() bool, func(), bool)) *watcher {
 	return &watcher{
-		inner:       inner,
-		detector:    route.NewDetector(),
-		sticky:      sticky,
-		maxRank:     maxRank,
-		onMove:      onMove,
-		pendingArgv: map[string]string{},
+		inner:    inner,
+		detector: route.NewDetector(),
+		sticky:   sticky,
+		maxRank:  maxRank,
+		onMove:   onMove,
 	}
 }
 
@@ -56,6 +60,15 @@ func newWatcher(inner agent.Observer, sticky *route.Sticky, maxRank int, onMove 
 func (w *watcher) StartTurn() {
 	w.detector.Reset()
 	w.sticky.StartTurn()
+	w.mu.Lock()
+	w.moves = 0
+	w.mu.Unlock()
+}
+
+func (w *watcher) MoveCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.moves
 }
 
 func (w *watcher) ThinkingDelta(text string) { w.inner.ThinkingDelta(text) }
@@ -65,25 +78,25 @@ func (w *watcher) TextDelta(text string) {
 	w.observe(w.detector.AssistantText(text))
 }
 
-func (w *watcher) ToolStart(name string, req permission.Request) {
-	w.inner.ToolStart(name, req)
-	if len(req.Argv) > 0 {
-		w.pendingArgv[name] = strings.Join(req.Argv, " ")
-	}
-	// The permission request carries the resolved arguments, which is what
-	// makes two calls comparable: the raw JSON would differ on formatting.
-	w.observe(w.detector.ToolCall(name, []byte(req.Path+"\x00"+strings.Join(req.Argv, " "))))
+func (w *watcher) ToolStart(call provider.ToolUse, req permission.Request) {
+	w.inner.ToolStart(call, req)
+	// The provider call carries every argument, including grep patterns, read
+	// ranges, browser actions, and MCP payloads that Path/Argv do not represent.
+	// Detector canonicalizes JSON so formatting and key order are irrelevant.
+	w.observe(w.detector.ToolCall(call.Name, call.Input))
 }
 
-func (w *watcher) ToolEnd(name string, res tools.Result, took time.Duration) {
-	w.inner.ToolEnd(name, res, took)
-	w.observe(w.detector.ToolResult(name, w.pendingArgv[name], res.Content, res.IsError))
-	delete(w.pendingArgv, name)
+func (w *watcher) ToolEnd(call provider.ToolUse, req permission.Request, res tools.Result, took time.Duration) {
+	w.inner.ToolEnd(call, req, res, took)
+	w.observe(w.detector.ToolResult(call.Name, strings.Join(req.Argv, " "), res.Content, res.IsError))
+}
 
-	// A move is assessed per model call rather than per tool call, but a tool
-	// result is the last thing to happen before the next call, so this is where
-	// the accumulated evidence is weighed.
-	w.assess()
+// ToolBatchEnd is the single routing boundary for one model call's tools. It
+// is invoked after parallel work has joined and the ordered results are in the
+// session, so a rebind affects only the next model call.
+func (w *watcher) ToolBatchEnd(ctx context.Context) {
+	w.inner.ToolBatchEnd(ctx)
+	w.assess(ctx)
 }
 
 func (w *watcher) Notice(level, text string) { w.inner.Notice(level, text) }
@@ -93,12 +106,15 @@ func (w *watcher) Notice(level, text string) { w.inner.Notice(level, text) }
 // result does: it is called from the loop's goroutine at a round boundary,
 // which is also the one safe moment to rebind the primary — no call is
 // outstanding.
-func (w *watcher) VerifierFailures(sigs []string) {
+func (w *watcher) VerifierFailures(ctx context.Context, sigs []string) {
 	w.observe(w.detector.VerifierFailures(sigs))
-	w.assess()
+	w.assess(ctx)
 }
 
-func (w *watcher) TurnUsage(u session.Usage) { w.inner.TurnUsage(u) }
+func (w *watcher) TurnUsage(u session.Usage) {
+	w.inner.TurnUsage(u)
+	w.sticky.CallServed()
+}
 
 func (w *watcher) observe(signals []route.Signal) {
 	for _, s := range signals {
@@ -106,10 +122,29 @@ func (w *watcher) observe(signals []route.Signal) {
 	}
 }
 
-func (w *watcher) assess() {
-	move := w.sticky.AfterCall(w.maxRank)
+func (w *watcher) assess(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	move := w.sticky.Assess(w.maxRank)
 	switch {
 	case move.Direction != 0:
+		if w.onMove == nil {
+			return
+		}
+		bind, afterCommit, ok := w.onMove(ctx, move.ToRank, move.Rationale)
+		if !ok || ctx.Err() != nil || !w.sticky.ApplyChecked(move, bind) {
+			return
+		}
+		if afterCommit != nil {
+			afterCommit()
+		}
+		w.mu.Lock()
+		w.moves++
+		w.mu.Unlock()
 		// §8.1 renders the reason rather than logging it, and a target changing
 		// under the user is exactly the case principle 3 is about.
 		direction := "escalated"
@@ -117,14 +152,14 @@ func (w *watcher) assess() {
 			direction = "stepped down"
 		}
 		w.inner.Notice("route", direction+": "+move.Rationale)
-		if w.onMove != nil {
-			w.onMove(w.sticky.Rank(), move.Rationale)
-		}
 
 	case move.Held:
 		// Saying that a switch was warranted and held is worth as much as the
 		// switch itself: otherwise the dwell looks like the policy doing
 		// nothing.
+		w.inner.Notice("route", move.Rationale)
+
+	case move.Boundary:
 		w.inner.Notice("route", move.Rationale)
 	}
 }

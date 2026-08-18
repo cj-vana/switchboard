@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 const (

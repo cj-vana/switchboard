@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func write(t *testing.T, body string) string {
@@ -293,5 +295,134 @@ func TestTierFallbacksRoundTripAndValidate(t *testing.T) {
 	}
 	if _, err := LoadFile(path); err == nil {
 		t.Error("a fallback entry without provider/model form must refuse to load")
+	}
+}
+
+func TestSharedTierTargetCanSaveAndLoad(t *testing.T) {
+	path := write(t, "[tiers.t1]\nmodel = \"ollama/shared\"\n")
+	c, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.BindTier("t2", "backup rank", "ollama/shared", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("BindTier saved a config that LoadFile rejects: %v", err)
+	}
+	if len(loaded.Tiers) != 2 || loaded.Tiers[0].Target.ID() != loaded.Tiers[1].Target.ID() {
+		t.Fatalf("shared target did not survive save/load: %+v", loaded.Tiers)
+	}
+}
+
+func TestBindTierPreservesFallbacksThroughSaveAndLoad(t *testing.T) {
+	path := write(t, "[tiers.t1]\nmodel = \"ollama/old\"\nfallback = [\"ollama/first\", \"ollama/second\"]\n")
+	c, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.BindTier("t1", "replacement", "ollama/new", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Tiers) != 1 || loaded.Tiers[0].Target.ModelID != "new" {
+		t.Fatalf("replacement target did not survive: %+v", loaded.Tiers)
+	}
+	fallbacks := loaded.Tiers[0].Fallbacks
+	if len(fallbacks) != 2 || fallbacks[0].ModelID != "first" || fallbacks[1].ModelID != "second" {
+		t.Fatalf("BindTier erased or reordered configured fallbacks: %+v", fallbacks)
+	}
+}
+
+func TestSaveRefusesUnrepresentableTargetsWithoutChangingFile(t *testing.T) {
+	base := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "model"}
+	temperature := 0.2
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "primary max output", want: "tier t1 target", mutate: func(c *Config) {
+			c.Tiers[0].Target.Params.MaxOutputTokens = 2_048
+		}},
+		{name: "primary temperature", want: "tier t1 target", mutate: func(c *Config) {
+			c.Tiers[0].Target.Params.Temperature = &temperature
+		}},
+		{name: "primary explicit reasoning off", want: "tier t1 target", mutate: func(c *Config) {
+			c.Tiers[0].Target.Params.Reasoning = &provider.Reasoning{Enabled: false}
+		}},
+		{name: "fallback nondefault surface", want: "tier t1 fallback 1", mutate: func(c *Config) {
+			c.Tiers[0].Fallbacks = []provider.RouteTarget{{Provider: "ollama", Surface: "remote", ModelID: "fallback"}}
+		}},
+		{name: "fallback parameters", want: "tier t1 fallback 1", mutate: func(c *Config) {
+			fallback := base
+			fallback.Params.MaxOutputTokens = 512
+			c.Tiers[0].Fallbacks = []provider.RouteTarget{fallback}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := write(t, "[tiers.t1]\nmodel = \"ollama/model\"\n")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(cfg)
+			err = cfg.Save()
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "cannot be represented") {
+				t.Fatalf("Save error = %v, want precise identity-preservation refusal", err)
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("failed Save changed the existing file:\n%s", after)
+			}
+		})
+	}
+}
+
+func TestSaveRoundTripsEveryRepresentableTargetIdentity(t *testing.T) {
+	path := write(t, `[tiers.t1]
+model = "anthropic/claude-test"
+surface = "bedrock"
+effort = "high"
+fallback = ["ollama/first", "kimi/second"]
+`)
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrimary := cfg.Tiers[0].Target.ID()
+	wantFallbacks := []provider.RouteTargetID{cfg.Tiers[0].Fallbacks[0].ID(), cfg.Tiers[0].Fallbacks[1].ID()}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Tiers[0].Target.ID(); got != wantPrimary {
+		t.Fatalf("primary identity changed across Save: got %s want %s", got, wantPrimary)
+	}
+	for index, want := range wantFallbacks {
+		if got := reloaded.Tiers[0].Fallbacks[index].ID(); got != want {
+			t.Fatalf("fallback %d identity changed across Save: got %s want %s", index+1, got, want)
+		}
 	}
 }

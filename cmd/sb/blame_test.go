@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // The full path: a log shaped the way the loop writes one, a file on disk
@@ -22,7 +22,9 @@ func TestBlameAttributesLinesAndNamesWhatItCannot(t *testing.T) {
 	}
 	workspace := t.TempDir()
 	light := provider.RouteTargetID("ollama/local/qwen3:4b")
-	heavy := provider.RouteTargetID("kimi/api/k2")
+	heavyTarget := provider.RouteTarget{Provider: "kimi", Surface: "api", ModelID: "k2"}
+	heavyTarget.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	heavy := heavyTarget.ID()
 
 	sess, err := store.Create(workspace, light, "test")
 	if err != nil {
@@ -73,7 +75,7 @@ func TestBlameAttributesLinesAndNamesWhatItCannot(t *testing.T) {
 	if !strings.Contains(out, "t1 "+string(light)) {
 		t.Errorf("the write's rung and model are missing:\n%s", out)
 	}
-	if !strings.Contains(out, string(heavy)) {
+	if !strings.Contains(out, heavyTarget.Display()) || strings.Contains(out, "rt2:") {
 		t.Errorf("the edit's model is missing:\n%s", out)
 	}
 	if !strings.Contains(out, id+"#1") || !strings.Contains(out, id+"#2") {
@@ -330,8 +332,9 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace := t.TempDir()
-	target := provider.RouteTargetID("ollama/local/qwen3:4b")
-	sess, err := store.Create(workspace, target, "test")
+	target := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "qwen3:4b"}
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	sess, err := store.Create(workspace, target.ID(), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +345,7 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 			provider.ToolUse{ID: "w2", Name: "write", Input: json.RawMessage(`{"path":"cache_test.go","content":"test\n"}`)},
 		}},
 	)
-	if err := sess.AppendUsage(session.Usage{Target: string(target)}); err != nil {
+	if err := sess.AppendUsage(session.Usage{Target: string(target.ID())}); err != nil {
 		t.Fatal(err)
 	}
 	appendMessages(t, sess,
@@ -354,7 +357,7 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 			provider.Text{Text: "The header rides every request now, with the test pinning it."},
 		}},
 	)
-	if err := sess.AppendUsage(session.Usage{Target: string(target)}); err != nil {
+	if err := sess.AppendUsage(session.Usage{Target: string(target.ID())}); err != nil {
 		t.Fatal(err)
 	}
 	id := sess.State().ID
@@ -369,7 +372,7 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 
 	out := strings.Join(blameLineLines(store, nil, workspace, abs, "cache.go", 2), "\n")
 	for _, want := range []string{
-		"written by " + string(target),
+		"written by " + target.Display(),
 		id + "#1",
 		`"wire the cache header"`,
 		"also touched: cache_test.go",
@@ -380,6 +383,9 @@ func TestBlameLineTellsTheTurnsStory(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the story is missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "rt2:") {
+		t.Fatalf("line attribution leaked opaque target identity:\n%s", out)
 	}
 
 	out = strings.Join(blameLineLines(store, nil, workspace, abs, "cache.go", 3), "\n")

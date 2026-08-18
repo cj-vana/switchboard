@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // TestRenderPreview writes a fully composed frame to SB_PREVIEW so the design

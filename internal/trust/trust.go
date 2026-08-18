@@ -12,8 +12,10 @@ package trust
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -22,6 +24,8 @@ import (
 )
 
 const FileName = "trust.toml"
+
+const maxTrustFileBytes = 1 << 20
 
 // header explains the file to whoever opens it, the same contract as
 // config.toml: the program regenerates it, hand annotation does not survive.
@@ -67,13 +71,45 @@ func Open() (*Store, error) {
 
 func OpenFile(path string) (*Store, error) {
 	s := &Store{path: path, grants: map[string]Grant{}}
-	var file struct {
-		Workspaces map[string]Grant `toml:"workspaces"`
-	}
-	if _, err := toml.DecodeFile(path, &file); err != nil {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return s, nil
 		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("reading %s: trust store must not be a symbolic link", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	defer f.Close()
+	openedInfo, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if !os.SameFile(pathInfo, openedInfo) {
+		return nil, fmt.Errorf("reading %s: trust store changed while it was opened", path)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("reading %s: trust store is not a regular file", path)
+	}
+	if runtime.GOOS != "windows" && openedInfo.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("reading %s: trust store permissions are %04o, want 0600", path, openedInfo.Mode().Perm())
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxTrustFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(raw) > maxTrustFileBytes {
+		return nil, fmt.Errorf("reading %s: trust store exceeds %d bytes", path, maxTrustFileBytes)
+	}
+	var file struct {
+		Workspaces map[string]Grant `toml:"workspaces"`
+	}
+	if _, err := toml.Decode(string(raw), &file); err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	if file.Workspaces != nil {
@@ -97,6 +133,9 @@ func resolve(workspace string) (string, error) {
 }
 
 func (s *Store) Trusted(workspace string) bool {
+	if s == nil {
+		return false
+	}
 	key, err := resolve(workspace)
 	if err != nil {
 		return false

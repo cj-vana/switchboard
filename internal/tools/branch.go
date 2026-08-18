@@ -30,6 +30,7 @@ func (r *Registry) Branch(refuse map[string]string) *Registry {
 	nr := &Registry{
 		root:       r.root,
 		capability: r.capability,
+		execution:  r.execution,
 		versions:   r.versions.clone(),
 		todos:      &todoState{},
 		tools:      map[string]Tool{},

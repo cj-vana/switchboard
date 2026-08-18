@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
 )
 
 func state(content string) checkpoint.FileState {

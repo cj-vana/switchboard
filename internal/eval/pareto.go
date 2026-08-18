@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Deriving a ladder from measurement rather than from reputation.
@@ -75,6 +75,7 @@ func DeriveFront(runs []Run, cat *catalog.Catalog, minAttempts int) Front {
 
 	var front Front
 	meterings := map[catalog.Metering]bool{}
+	meteringUnknown := false
 
 	for target, group := range byTarget {
 		if len(group) < minAttempts {
@@ -99,9 +100,20 @@ func DeriveFront(runs []Run, cat *catalog.Catalog, minAttempts int) Front {
 		p.MedianCost = medianMoney(costs)
 		p.MedianLatency = medianDuration(latencies)
 
-		if info, _, ok := cat.Lookup(targetFromID(target)); ok {
+		parsed, parseErr := targetFromID(target)
+		if parseErr != nil {
+			meteringUnknown = true
+			front.Warnings = append(front.Warnings, fmt.Sprintf(
+				"%s has an ambiguous or unreadable target identity (%v), so its metering is unknown and cost figures are not comparable",
+				provider.DisplayRouteTargetID(target), parseErr))
+		} else if info, _, ok := cat.Lookup(parsed); ok {
 			p.Metering = catalog.Metering(info.Metering.String())
 			meterings[p.Metering] = true
+		} else {
+			meteringUnknown = true
+			front.Warnings = append(front.Warnings, fmt.Sprintf(
+				"%s has no catalog metering, so cost figures are not comparable",
+				provider.DisplayRouteTargetID(target)))
 		}
 		front.Points = append(front.Points, p)
 	}
@@ -115,7 +127,7 @@ func DeriveFront(runs []Run, cat *catalog.Catalog, minAttempts int) Front {
 	// Dominance: another target solves at least as often and costs no more,
 	// with one of those strict. A dominated target has no place on a ladder,
 	// because there is never a reason to choose it.
-	sameCurrency := len(meterings) <= 1
+	sameCurrency := !meteringUnknown && len(meterings) <= 1
 	for i := range front.Points {
 		for j := range front.Points {
 			if i == j {
@@ -162,37 +174,6 @@ func DeriveFront(runs []Run, cat *catalog.Catalog, minAttempts int) Front {
 
 // targetFromID reconstructs a route target so a recorded run can be priced and
 // its metering read.
-func targetFromID(id provider.RouteTargetID) provider.RouteTarget {
-	var out provider.RouteTarget
-	fields := splitN(string(id), '/', 3)
-	if len(fields) < 3 {
-		return out
-	}
-	model := fields[2]
-	if i := indexByte(model, '+'); i >= 0 {
-		model = model[:i]
-	}
-	return provider.RouteTarget{Provider: fields[0], Surface: fields[1], ModelID: model}
-}
-
-func splitN(s string, sep byte, n int) []string {
-	var out []string
-	for len(out) < n-1 {
-		i := indexByte(s, sep)
-		if i < 0 {
-			break
-		}
-		out = append(out, s[:i])
-		s = s[i+1:]
-	}
-	return append(out, s)
-}
-
-func indexByte(s string, b byte) int {
-	for i := range len(s) {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
+func targetFromID(id provider.RouteTargetID) (provider.RouteTarget, error) {
+	return provider.ParseRouteTargetID(id)
 }

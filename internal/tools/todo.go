@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // TodoStatus is the lifecycle of one task. Three states, no more: a richer

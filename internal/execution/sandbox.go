@@ -5,8 +5,10 @@ package execution
 // There is no "nothing at all" option. A test suite that stands up a fixture
 // server on an ephemeral loopback port is the single most common thing an
 // agent runs, and denying that makes the sandbox unusable for the work. The
-// boundary that matters is egress off the machine, which Loopback denies by
-// rule rather than by DNS happening to fail.
+// On Linux a private network namespace denies egress off the machine. macOS
+// Seatbelt can restrict sockets to host loopback but cannot isolate local
+// services, so proxy environment is stripped and localhost services remain an
+// explicit trust boundary. Callers must not describe Loopback as "no network."
 type NetworkAccess string
 
 const (

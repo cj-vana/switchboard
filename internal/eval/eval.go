@@ -17,8 +17,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Provenance is where a task came from, which decides how much its result is
@@ -89,15 +89,23 @@ type Run struct {
 	// arms have to stay distinguishable.
 	Arm string
 
-	Solved   bool
-	Detail   string
+	Solved bool
+	Detail string
+	// Failure gives unsolved attempts a machine-readable category. It is
+	// optional so journals written before the field existed remain readable;
+	// FailureKind derives the category from their Detail text.
+	Failure  FailureKind `json:",omitempty"`
 	Cost     catalog.Money
 	Usage    provider.Usage
 	Duration time.Duration
 
 	// EstimatedCost is what the model predicted before the run, which §7.1
-	// requires be reported against the actual per target.
-	EstimatedCost catalog.Money
+	// requires be reported against the actual per target. EstimatedTarget names
+	// the target that estimate priced. An opening estimate is deliberately kept
+	// after an escalation for diagnosis, but it is not compared with spend from
+	// a different target (or a run that touched multiple targets).
+	EstimatedCost   catalog.Money
+	EstimatedTarget provider.RouteTargetID `json:",omitempty"`
 
 	Escalations int
 
@@ -106,6 +114,12 @@ type Run struct {
 	Denials int
 
 	Seed int
+
+	// EvaluationID binds a journal row to the exact harness, corpus, arms and
+	// fixed-arm targets, replicates, worker concurrency, prompt, catalog, and
+	// model snapshots that produced it. Older journals remain readable, but a
+	// strict gate refuses to relabel their rows with later pins.
+	EvaluationID string `json:",omitempty"`
 }
 
 // Pins are what makes a report reproducible. §8.6 requires every one of these,
@@ -121,7 +135,7 @@ type Pins struct {
 	Snapshots map[provider.RouteTargetID]string
 }
 
-func (p Pins) complete() []string {
+func (p Pins) complete(targets []provider.RouteTargetID) []string {
 	var missing []string
 	if p.HarnessCommit == "" {
 		missing = append(missing, "harness commit")
@@ -132,8 +146,19 @@ func (p Pins) complete() []string {
 	if p.PromptVersion == "" {
 		missing = append(missing, "prompt version")
 	}
-	if len(p.Snapshots) == 0 {
+	if len(targets) == 0 && len(p.Snapshots) == 0 {
 		missing = append(missing, "model snapshots")
+	}
+	uniqueTargets := map[provider.RouteTargetID]bool{}
+	for _, target := range targets {
+		if target != "" {
+			uniqueTargets[target] = true
+		}
+	}
+	for _, target := range sortedTargets(uniqueTargets) {
+		if p.Snapshots[target] == "" {
+			missing = append(missing, fmt.Sprintf("model snapshot for %s", target))
+		}
 	}
 	return missing
 }
@@ -156,6 +181,11 @@ type ArmResult struct {
 	// EstimateError is actual over estimated, per §7.1's requirement that this
 	// be reported by target with no systematic underestimation.
 	EstimateError map[provider.RouteTargetID]float64
+
+	// EstimatesUnavailable counts runs whose only estimate was for an opening
+	// target that the run later left. Mixing that estimate with the final
+	// target's actual spend would manufacture an error ratio for neither model.
+	EstimatesUnavailable int
 }
 
 // Summarize reduces runs to one arm's result.
@@ -171,6 +201,9 @@ func Summarize(arm string, runs []Run) ArmResult {
 		if r.Arm != arm {
 			continue
 		}
+		if !modelQualityOutcome(r) {
+			continue
+		}
 		res.Runs++
 		tasks[r.TaskID] = true
 		if r.Solved {
@@ -179,8 +212,18 @@ func Summarize(arm string, runs []Run) ArmResult {
 			solvedLatency = append(solvedLatency, r.Duration)
 		}
 		if r.EstimatedCost > 0 {
-			acc := estimated[r.Target]
-			estimated[r.Target] = [2]float64{acc[0] + float64(r.Cost), acc[1] + float64(r.EstimatedCost)}
+			if !comparableEstimate(r) {
+				res.EstimatesUnavailable++
+				continue
+			}
+			target := r.EstimatedTarget
+			if target == "" {
+				// Legacy fixed-arm and non-escalating routed journals predate
+				// EstimatedTarget. Their one observed target is still like-for-like.
+				target = r.Target
+			}
+			acc := estimated[target]
+			estimated[target] = [2]float64{acc[0] + float64(r.Cost), acc[1] + float64(r.EstimatedCost)}
 		}
 	}
 
@@ -197,6 +240,16 @@ func Summarize(arm string, runs []Run) ArmResult {
 		}
 	}
 	return res
+}
+
+// comparableEstimate is intentionally stricter than final-target equality. A
+// run that went A -> B -> A still includes B spend, so A's opening estimate is
+// not like-for-like even though the final target happens to be A again.
+func comparableEstimate(r Run) bool {
+	if r.Escalations > 0 {
+		return false
+	}
+	return r.EstimatedTarget == "" || r.EstimatedTarget == r.Target
 }
 
 func medianMoney(values []catalog.Money) catalog.Money {
@@ -234,6 +287,23 @@ type Gate struct {
 	// anything. §8.6 asks for results over multiple runs with uncertainty
 	// intervals.
 	MinRunsPerTask int
+
+	// ExpectedArms and ExpectedTargets let a live run state the configuration
+	// that produced it. When omitted, a journal report derives them from the
+	// recorded runs, but every observed arm still has to fill the same matrix.
+	ExpectedArms    []string
+	ExpectedTargets []provider.RouteTargetID
+
+	// RequireEvaluationID makes the gate prove every row belongs to the exact
+	// configuration being evaluated. Live and journal-report harnesses enable
+	// it; the opt-in keeps the library API compatible with older callers that
+	// construct Run values directly.
+	RequireEvaluationID bool
+
+	// EvaluationWorkers is part of the evaluation identity because provider
+	// throttling changes with concurrency. It must be positive when strict
+	// identity checking is enabled.
+	EvaluationWorkers int
 }
 
 const (
@@ -292,12 +362,6 @@ type Verdict struct {
 func (g Gate) Evaluate(tasks []Task, runs []Run, pins Pins) Verdict {
 	var v Verdict
 
-	if missing := pins.complete(); len(missing) > 0 {
-		v.Refused = true
-		v.Reasons = append(v.Reasons, fmt.Sprintf(
-			"the report is not reproducible: no %s recorded", joinWords(missing)))
-	}
-
 	tier1 := 0
 	for _, t := range tasks {
 		if t.Provenance == HandWritten {
@@ -313,31 +377,47 @@ func (g Gate) Evaluate(tasks []Task, runs []Run, pins Pins) Verdict {
 			tier1, MinimumTier1Tasks))
 	}
 
-	// Only tier 1 counts toward the gate. Tier 2 is contaminated by training
-	// cutoffs and tier 3 measures the harness, so both are reported elsewhere
-	// and neither decides this.
-	var eligible []Run
-	perTask := map[string]int{}
-	for _, r := range runs {
-		if r.Provenance != HandWritten {
-			continue
-		}
-		eligible = append(eligible, r)
-		perTask[r.TaskID]++
+	evidence := g.validateMatrix(tasks, runs)
+	eligible := evidence.Runs
+	if len(evidence.Reasons) > 0 {
+		v.Refused = true
+		v.Reasons = append(v.Reasons, evidence.Reasons...)
 	}
-
-	for task, count := range perTask {
-		if count < g.minRuns() {
+	if missing := pins.complete(evidence.Targets); len(missing) > 0 {
+		v.Refused = true
+		v.Reasons = append(v.Reasons, fmt.Sprintf(
+			"the report is not reproducible: no %s recorded", joinWords(missing)))
+	}
+	if g.RequireEvaluationID {
+		if g.EvaluationWorkers < 1 {
+			v.Refused = true
+			v.Reasons = append(v.Reasons,
+				"the evaluation identity does not record a positive worker count")
+		}
+		expected := evaluationID(
+			tasks, evidence.Arms, evidence.ArmTargets, evidence.Targets, evidence.Replicates,
+			g.EvaluationWorkers, pins)
+		missing, mismatched := 0, 0
+		for _, run := range eligible {
+			switch run.EvaluationID {
+			case "":
+				missing++
+			case expected:
+			default:
+				mismatched++
+			}
+		}
+		if missing > 0 || mismatched > 0 {
 			v.Refused = true
 			v.Reasons = append(v.Reasons, fmt.Sprintf(
-				"task %s was run %d time(s) and a median needs at least %d", task, count, g.minRuns()))
-			break
+				"journal rows are not bound to this evaluation configuration: %d missing identity, %d mismatched",
+				missing, mismatched))
 		}
 	}
 
 	arms := map[string]bool{}
-	for _, r := range eligible {
-		arms[r.Arm] = true
+	for _, arm := range evidence.Arms {
+		arms[arm] = true
 	}
 	if !arms[RoutedArm] {
 		v.Refused = true
@@ -432,6 +512,11 @@ func (g Gate) Evaluate(tasks []Task, runs []Run, pins Pins) Verdict {
 				target, (ratio-1)*100))
 		}
 	}
+	if v.Routed.EstimatesUnavailable > 0 {
+		v.Reasons = append(v.Reasons, fmt.Sprintf(
+			"%d routed estimate(s) are unavailable for reconciliation because the run changed targets; opening estimates were not attributed to another target's actual spend",
+			v.Routed.EstimatesUnavailable))
+	}
 
 	v.Passed = costOK && safetyOK
 	return v
@@ -469,7 +554,7 @@ type Interval struct {
 func CostInterval(runs []Run, arm string) Interval {
 	var costs []catalog.Money
 	for _, r := range runs {
-		if r.Arm == arm && r.Solved {
+		if r.Arm == arm && r.Solved && modelQualityOutcome(r) {
 			costs = append(costs, r.Cost)
 		}
 	}

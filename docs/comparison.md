@@ -1,409 +1,233 @@
-# Where Switchboard stands
+# Product comparison
 
-A comparison is a dated document. This one describes August 2026, names its
-sources, and separates three kinds of claim: what every terminal agent now
-does, what only Switchboard does and where in this repository to verify it,
-and what the neighbors do better. "Better than X" as a blanket sentence is
-marketing; what follows is the axes this tool bets on and the evidence per
-axis.
+This comparison is dated 2026-08-17. It separates repository-backed
+Switchboard behavior, measured results, and external product reports.
+Competitor behavior changes quickly, so external claims should be rechecked
+before use in a release announcement.
 
-## The converged baseline
+## Scope
 
-Claude Code, Codex CLI, OpenCode, and Switchboard have all converged on the
-same skeleton: an agent loop over read/write/edit/exec plus file search, web
-fetch (and in most, search), MCP for the long tail of tools, hooks at
-tool-call boundaries, custom slash commands, repo instructions read from
-`AGENTS.md` or equivalent, subagents, permission modes, a tool for asking
-the user a question with options, model fallbacks for
-availability, and session resume. On
-this skeleton none of the four is interesting; the differences are in what
-each tool believes about models, money, and safety.
+Claude Code, Codex CLI, OpenCode, and Switchboard all provide the basic coding
+agent loop: file operations, shell commands, repository instructions, session
+resume, and extensibility through MCP or an equivalent mechanism. The useful
+differences are in routing, cost controls, state recovery, verification, and
+the authority granted to extensions.
 
-## What only Switchboard does, and where to check it
+The table summarizes Switchboard's current position. “No comparable surface”
+means the public material reviewed for this dated comparison did not describe
+one. It does not prove that another product lacks an internal mechanism.
 
-**Routing on evidence, explained after the fact.** The model is a slot, and
-the session moves up a ladder of slots when the work shows it is stuck:
-repeated identical tool calls, error spikes, new failure signatures, hedging
-(`internal/router`). Every move renders inline with its reason, and `/why`
-reconstructs the decision — what was ruled out, what this session's tokens
-would have cost on every other rung. Claude Code selects among Anthropic
-models, Codex among OpenAI's, OpenCode among many providers, but in all
-three the choice is the user's, made ahead of the work; none moves on its
-own evidence mid-task, and none can be asked afterwards why this model.
+| Area | Switchboard | External baseline in this review |
+| --- | --- | --- |
+| Model selection | Ordered multi-provider target ladder with deterministic per-turn routing and evidence-based moves between completed rounds | User or configuration selects the model before the work |
+| Route explanation | `/why` records feasible and rejected targets, moves, and counterfactual cost | No comparable ladder explanation surface found |
+| Metering | Local execution, plan quota, and dollar billing remain separate | Usage is usually reported after calls |
+| Hard budget | Retry-inclusive dollar ceiling checked before routes, moves, and provider calls | No comparable model-selection budget gate found |
+| Cache state | Per-target modeled warmth with observed provider accounting | Cache discounts may be documented without a live routing belief |
+| Session branching | Append-only logs with fork, named pins, retry, recap, and line provenance | Resume and checkpoint features vary by product |
+| Verification | User-armed watch, turn bisect, paired races, and a router evaluation gate | Hooks and test commands are common; no equivalent combined surface found |
+| Command safety | Sandbox off by default; opt-in verified confinement; explicit yolo mode for unconfined host access | Products expose sandbox or approval modes with different guarantees |
+| Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP, hooks, and one subagent level | Claude Code leads in plugin and skill breadth; OpenCode leads in provider and LSP breadth |
+| Computer control | macOS Accessibility tool under the normal permission engine | Hosted or API computer-use surfaces exist; terminal integration varies |
 
-**Money that stays three different things.** A local model consumes nothing
-scarce, a plan-metered model consumes quota, a per-token model consumes
-dollars, and the catalog never collapses them into "free"
-(`internal/catalog`, §4). The estimator's error is measured and written
-down rather than guessed (`docs/estimator.md`), and the cost model widens
-its bound by that measurement. The demonstration is one line in every
-session footer: a local run says "runs locally, so there is nothing to
-bill", not "$0.00". On top of that sits `/budget`: a hard dollar ceiling
-checked against a conservative preflight bound in three places — the
-router refuses rungs whose upper bound could cross it, the escalation
-policy cannot move onto one, and the loop stops before the call that
-would (`cmd/sb/budget.go`, §15). The neighbors report spend after the
-fact; none enforces a ceiling the model-selection machinery itself obeys.
-And the receipt scales: `/cost rungs` reprices one session cold on every
-rung, and `/stats` prices the workspace's whole recorded history the same
-way — as routed, then pinned to each rung of today's ladder
-(`cmd/sb/stats.go`) — an answer no neighbor can produce, because none has
-a ladder to price a history against. The same honesty points forward:
-`/estimate <prompt>` prices that prompt on every rung before it is sent
-(`cmd/sb/estimate.go`), the next request's zones estimated the way the
-budget gate estimates them, each rung in its own metering, the active
-rung folding in the tracker's modeled hit chance and every other rung
-priced cold and saying so — a pre-send receipt that requires the ladder,
-the cache belief, and the measured estimator at once, which is why no
-neighbor prints one.
+## Routing, cost, and cache
 
-**Cache state as a belief with a surface.** Provider cache is tracked
-from what providers report, never from what was sent, as a probability
-that decays rather than an expiry the tracker cannot observe
-(`internal/cachestate`); `/cache` is that belief's surface — the modeled
-hit chance for the next send with its reason, the session's eligible-hit
-count, the alarm when a written prefix keeps coming back cold — and
-every number keeps the tracker's honesty: modeled says modeled, and a
-surface that reports no cache accounting stays unknown, because silence
-is not a miss (`cmd/sb/cache.go`). The neighbors' pricing pages mention
-cache discounts; none models whether the cache is actually holding, and
-none can be asked.
+Switchboard routes the assembled request immediately before each user turn.
+Capability, context, availability, and hard-budget checks exclude infeasible
+targets. A user pin must pass the same checks. During a turn, repeated tool
+calls, error spikes, new failure signatures, and hedging can propose a move.
+The provider binding changes only after the current model round and its tool
+work finish. See [Routing and the model ladder](routing.md).
 
-**A falsification instrument, with its runs in the tree.** `internal/eval`
-is a harness the routing thesis has to survive, not a benchmark to pass;
-`docs/eval.md` records the run that falsified a reputation-ordered ladder,
-and the raw journals sit beside it (`docs/*.jsonl`). No neighboring tool
-ships the instrument that could prove its own model-selection story wrong.
+Cost keeps three units: local execution, plan quota, and dollars. `/estimate`
+prices a prospective request, `/cost` reports the recorded session, `/stats`
+aggregates workspace history, and `/cost rungs` reprices the session cold on
+each tier. `/budget` sets a persistent dollar ceiling. The conservative gate
+is implemented in `cmd/sb/budget.go`; accounting and counterfactual commands
+read recorded calls rather than reconstructing them.
 
-**A sandbox that is verified or absent.** Automatic execution is granted
-only where a self-test demonstrated containment on this machine, and the
-value that proves the test passed is the same value that wraps the command
-(`internal/execution`, `docs/sandbox.md`). The neighbors configure sandbox
-modes and profiles; none gates automatic execution on a live self-test, and
-Switchboard refuses the substitution the others accept quietly: a permission
-prompt presented as if it were isolation.
+Cache state belongs to a target, not a model name. `/cache` reports the
+eligible prefix, modeled hit probability, reason, observed hits, and repeated
+misses. A target that does not report cache accounting remains unknown. The
+token estimator's measured error and the bound used by the cost model are in
+[Token estimator error](estimator.md).
 
-**External tools never mistaken for contained ones.** An MCP server is a
-process running outside every boundary, so its calls carry a permission
-effect no mode auto-allows — bypass included — and a spawned server
-inherits the environment minus the model credentials, with a test that
-fails if one leaks (`internal/permission`, `internal/mcp/stdio_test.go`).
-Repository-declared servers and hooks stay off until an explicit `/trust
-grant` to that checkout (`internal/trust`).
+The learned router is absent. A model can ship only after a clean evaluation
+produces at least two useful tiers and the candidate beats the deterministic
+policy after runtime and distribution costs. The current evidence and the
+failed historical matrix-integrity check are in
+[Routing evaluation](eval.md).
 
-**Undo that leaves the cache warm.** `/undo` takes back a turn's file
-changes, turn by turn, from per-turn snapshots the write and edit tools
-capture before mutating (`internal/checkpoint`). What it refuses to do is
-the differentiator: it never rewrites sent messages, because the
-append-only prefix is what keeps the provider cache warm, and a restored
-file already forces the model to re-read through the stale check. Claude
-Code's checkpoints rewind the conversation too, at the price of the
-context; here the same want is answered by `/fork`
-(`internal/session/fork.go`, §12): branch the session at a turn boundary
-into a new log and continue there, the original untouched and the fork's
-prefix byte-identical to what was already sent — so a provider still
-holding it warm serves the fork warm, and going back costs nothing in
-cache. Rewind mutates history to move; fork moves without mutating. And
-`/pin` gives the cut a name: mark a point once, `/fork <name>` returns to
-it whenever, the pin a plain record that survives resume and rides any
-fork containing it.
+## Session evidence and verification
 
-**Line-level provenance to the model that wrote it.** `git blame` answers
-"who committed this"; in an agent session the missing half is "which
-model, asked what", and the session log already holds it — every write's
-bytes and every edit's exact replacement, beside the usage record that
-names the target and the route record that names the rung. `/blame
-<path>` and `sb blame` replay those calls oldest-first — the delegate
-errands' own logs included — and align the
-result against the file on disk (`internal/blame`), so every current
-line reads as: this rung, this model, this session and turn, the turn's
-own words — or as outside the record, the label for what hands, shell
-commands, and formatters produced, because only write and edit put their
-bytes where replay can see them. A recorded edit that no longer applies
-is counted and said, never guessed into place. Bare `/blame` sums the same replay across
-every file the record touched — surviving lines by target, each beside
-its own money word in the catalog's three meterings — so the ladder's
-yield is one screen: which rungs write the lines that last, and which
-target was paid for lines that were all later overwritten. The
-neighbors keep
-transcripts and checkpoints; none can tell you which lines of a file the
-cheap model wrote and which lines nobody's model wrote at all — the
-question that decides whether a ladder's lower rungs are earning their
-keep.
+The session record is append-only. `/fork` branches from an earlier message
+prefix without rewriting the source log. `/pin` names a point, and `/retry`
+replays the recorded opening bytes on the same or another feasible tier.
+`/undo` restores captured write and edit changes without changing the sent
+conversation. Shell and manual side effects remain outside that checkpoint.
 
-**The record answers for itself.** Two commands read the workspace's
-whole history back as evidence. `/mistakes` sums failure signatures
-across sessions — a failing test-shaped run reduced to the same
-digit-stripped signature the escalation detector compares live
-(`cmd/sb/mistakes.go`), so the ledger and the routing record cannot
-disagree about what a failure was — and reports what more than one
-session met, each entry naming its sessions for `/resume`, a fork's
-copied prefix counted once. `/ladder` sums the route records per rung:
-where turns opened, whether they stayed, where the moved ones went
-(`cmd/sb/ladder.go`), under §8.4's own caveats, stated in the output.
-None of the neighbors can ask its history which failure keeps returning
-or whether the cheap rungs held, because none records routing evidence
-to ask.
+`/blame <path>` replays recorded write and edit operations against the current
+file. A surviving line can therefore be attributed to a session, turn, tier,
+target, and prompt. Lines created by a shell, formatter, hand edit, or work
+that predates the logs remain unknown. `/recap`, `/find`, `/changes`, and
+`/mistakes` expose other parts of the same record.
 
-**An outbound credential gate.** The credential posture points both ways:
-the keys the tool holds are unprintable by type
-(`internal/credential/credential.go`), and the keys the user is about to
-leak — pasted into a prompt, riding in on an @mentioned `.env` or a
-`!env` transcript — are caught before the send
-(`internal/credential/scan.go`, `cmd/sb/tui_secretgate.go`). Known issuer
-prefixes only, no entropy guessing, so a warning always means something;
-the send holds behind redact, send-as-typed, or drop; a `-p` run with no
-one to ask is refused, `-allow-secrets` being the stated widening. The
-neighbors' guidance for this is hooks the user writes themselves; none
-ships the gate, and none promises that the warning itself cannot quote
-the key. The same gate faces the web tools' egress: `websearch` and
-`webfetch` carry a permission effect no mode auto-allows, an approval
-covers a host for the session, a redirect off that host is refused
-before anything is dialed, and a key-shaped string in an outbound URL or
-query is refused with the refusal itself masked
-(`internal/tools/web.go`) — a fetch is the classic exfiltration channel,
-and here the gate that faces outward for prompts faces outward for URLs.
+`/watch <command>` runs a user-selected verifier after edit rounds and reports
+only changed results. A new mid-turn failure can contribute routing evidence.
+`/bisect` searches captured per-turn checkpoints for the green-to-red
+transition and restores the original tree on every exit path. `/race` runs a
+read-only prompt on two tiers and records the user's verdict without training
+the production router. See [Sessions and command reference](session.md) for
+the operational limits of each command.
 
-**A declared verifier wired into routing.** `/watch go test ./...` makes
-the user's own check ambient: it runs after the model's edits — the
-checkpoint recorder's capture count is the trigger, so a delegate's edits
-count too — and only the delta travels, a failure no earlier run produced
-or the run going green, because a verifier that repeats itself teaches
-its reader to stop reading it (`internal/watch`, `cmd/sb/tui_watch.go`).
-A new failure feeds the same escalation evidence as a test run the model
-made itself, which is §8.4's claim — a task-specific verifier outranks
-the agent's own sense that things went well — given a place to be
-declared. The neighbors' answer to "run my tests after edits" is a hook
-the user writes, whose output replays in full every time and informs no
-routing, because there is no routing to inform. None ships a verifier
-that speaks in deltas, colors the status bar, and moves the ladder.
+## Safety and extension authority
 
-**git bisect over turns, not commits.** When the verifier is red and
-nobody knows which turn broke it, `/bisect` binary-searches the
-session's checkpoints — the same per-turn pre-images `/undo` restores
-from — reconstructing the workspace before each probed turn, running
-the declared verifier, and naming the turn that turned it red with its
-first failing line (`internal/bisect`, `cmd/sb/tui_bisect.go`). The
-discipline is the workspace-safety one: the tree is put back on every
-exit path, cancellation included; a turn whose capture passed the
-snapshot cap refuses the whole bisect rather than restoring half a
-turn; and the verifier is the armed `/watch` command or one typed into
-`/bisect` itself, never inferred. Agent sessions produce exactly the
-situation git bisect was invented for — many small mutations, one of
-them wrong — at a granularity git never sees, because turns are not
-commits; the neighbors keep checkpoints, and none can ask them which
-one broke the build.
+Switchboard treats permission, containment, workspace trust, and extension
+activation as separate decisions.
 
-**A rerun that is a controlled experiment.** `/retry` takes the last turn
-back — files revert through the undo checkpoints, the conversation forks
-at the turn's opening — and replays the recorded opening byte-for-byte,
-optionally one rung up (`cmd/sb/tui_retry.go`). Because nothing is
-re-expanded, the second rung reads exactly what the first one read: same
-input, different model, the user's judgment as the verdict, and the
-set-aside answer's log labelled `user_corrected` for the same corpus the
-race verdicts feed. The neighbors can edit a message and regenerate, at
-the cost of rewriting history; none can hand the identical turn to a
-different model and keep both outcomes as routing evidence.
+- The sandbox starts off. `on` requires Seatbelt on macOS or a provenance-checked
+  system bubblewrap on Linux to pass a live self-test. `auto` uses a verified
+  profile when present.
+- `bypass` suppresses prompts only when verified confinement isolates host
+  network and IPC. Both current production profiles retain host IPC, so bypass
+  asks today. `yolo` is a separate explicit grant of full host reach.
+- MCP and computer-use tools act outside the command sandbox. Neither `bypass`
+  nor `yolo` auto-approves them.
+- Repository hooks, project MCP, and language servers require Switchboard
+  workspace trust. Another client's remembered trust does not transfer.
+- Native MCP definitions need explicit Switchboard activation, applicable
+  policy, trust where required, and a supported runtime feature set.
+- Plugin executable components need independent enablement and trust bound to
+  the current plugin-tree digest.
+- Prompts, attachments, command output, web requests, and computer-use text
+  are checked for known credential forms before egress.
 
-**A paired trial the user judges.** `/race` runs one prompt on two rungs
-at once, each arm a fork of the session riding the same prefix, both
-read-only until the user picks which branch continues (`cmd/sb/race.go`,
-`internal/tools/branch.go`). The pick is recorded on the session as a
-paired, human-judged comparison — same task, same context, two targets —
-which is a stronger fact about model choice than any single turn's
-outcome, and a tie is recorded as the cheaper rung sufficing: direct
-evidence of necessity, the thing watching one model succeed can never
-establish. The record is collected and deliberately not consumed by
-routing, because acting on it is gated behind the eval that has not run.
-The neighbors can switch models between turns; none can run the same turn
-on two models, show both answers, and keep the verdict as evidence — and
-none needs it less, because none has a routing thesis to falsify.
+See [Security](security.md), [Confining commands](sandbox.md), and
+[Native extension compatibility](extensions.md) for the exact boundaries.
 
-**Delegation priced on the same ladder.** Subagents exist everywhere now;
-Switchboard's `delegate` takes a rung, defaults to the cheapest, and its
-trailer names what the errand cost (`internal/delegate`). Named
-definitions exist here too — a markdown file in `.switchboard/agents/`
-with a charter, a default rung, and a tool grant that can only narrow —
-but the structural difference stands: Claude Code pins a model per agent
-definition and Codex fans out to a mini model, both static configuration,
-while here the per-task choice stays the model's, an explicit rung
-outranks the charter's default, and either is priced in the same catalog
-the router uses — the routing bet applied to orchestration. The design
-plan gates any claim that this *wins* on an eval against single-primary
-baselines (§19.2 phase 6), and that eval has not run, so the honest
-statement is: the mechanism ships, the verdict is pending.
+Native compatibility is deliberately narrower than format discovery. Safe
+Codex and Claude skill subsets assemble. Claude legacy command files are
+manual-only. Enabled plugin skills and compatible trusted plugin MCP assemble.
+Plugin hooks, agents, commands, apps, workflows, and LSP declarations remain
+inventory-only or unsupported. Native OAuth, SSE, WebSocket, helper,
+remote-execution, and approval semantics that the runtime cannot preserve fail
+closed.
 
-**The user's own screen, behind the same gate.** On macOS a first-party
-`computer` tool drives applications through the accessibility tree —
-state, click, type, key combos, menu paths
-(`internal/tools/computer.go`, [computer.md](computer.md)). OpenAI ships
-computer use as a skill of its own hosted surface and Anthropic as an API
-reference implementation; neither Claude Code nor OpenCode has it in the
-terminal agent. The distinctive part here is less the capability than its
-posture: it runs on the machine the session runs on, against the user's
-own apps, and every call passes the same permission engine as everything
-else — the external effect no mode auto-allows, an approval covering one
-app for one session, outbound keystrokes scanned for key-shaped strings,
-everything read back redacted unconditionally. The scripts were verified
-against live applications before the schema froze, and the limits are
-stated rather than papered over: no screenshots (a capture without
-Screen Recording permission silently lies), deep web content walked
-partially and saying so.
+The optional macOS `computer` tool drives application controls through the
+Accessibility API. It requires per-application approval, scans text before
+typing, redacts text read back, and does not claim screenshot support. See
+[Computer use](computer.md).
 
-## What the neighbors do better
+## Measured results
 
-Claude Code has the deepest skills and plugin ecosystem — the skills
-mechanism now exists here and its packs load by copying the folder, but
-the library and the community writing it are theirs — plus agent teams,
-IDE integrations, and MCP OAuth flows; it is the deepest single-vendor
-experience. Codex CLI has
-the most configurable profile-per-workload setup — Switchboard's
-`-profile` now covers the ladder half of that, an alternate tier set per
-workload chosen at launch, but Codex profiles reach further into
-approvals and models — plus several sandbox postures
-to choose between, and cloud execution. OpenCode has the broadest provider
-matrix, LSP coverage across more languages than Switchboard's verified
-four (Go, TypeScript, Python, and C/C++ where a compilation database
-exists), a desktop app, and the largest
-open-source community. A user
-whose work never leaves one frontier model, or who needs an IDE surface
-today, is well served there.
+The historical routing evaluation cannot support a release verdict. Its
+journal contains duplicate cells and predates the identity fields needed to
+bind rows to an exact commit, catalog, prompt, ladder, and model snapshot. The
+current evaluator refuses such a journal. Diagnostic projections also show
+only one useful tier, so there is no learned-routing decision to fit.
 
-## In practical use
+The dated head-to-head run used eleven seeded Go defects and the same verifier
+for Switchboard, Claude Code, and Codex CLI. All three solved 11 of 11 tasks.
+Switchboard completed four entirely on local tiers, used plan quota for the
+rest, and billed zero API dollars. Claude Code reported $22.35 over ten
+reporting runs; one solved task reached the watchdog limit. Codex CLI reported
+641,576 plan-metered tokens. These numbers establish behavior on that corpus,
+machine, and day. They do not rank general coding quality. See
+[Head-to-head results](head-to-head-2026-08-16.md).
 
-Capability axes are not the whole of a tool, so the practical claims get
-their evidence too. Setup is one checksum-verified install command and one
-checklist: first run detects every reachable provider, takes keys into the
-OS keychain, wires an existing Codex login in one pick, and binds t1 — no
-file is ever edited by hand (`cmd/sb/tui_onboard.go`, tested in
-`tui_onboard_test.go`). The binary emits its own shell completion
-(`sb completion zsh|bash`), with a test that reads main's dispatch and
-flag registrations so the script cannot offer what the binary refuses
-(`cmd/sb/completion.go`); /help reads in five groups with every command
-held to exactly one by test; every CLI surface with in-session relevance
-has its in-session twin — cost, stats, find, doctor, races, blame,
-mistakes, ladder, recap — each pair
-sharing one body so the two can never tell different stories; and
-enforcement announces itself before it acts, the budget readout warming
-through the context gauge's own thresholds as the ceiling nears
-(`cmd/sb/tui_status.go`), because a gate whose first word is "no" taught
-its user nothing on the way there. The §14 performance discipline is tested rather
-than asserted: completed entries render once per width and streaming text
-never touches the renderer cache (`tui_test.go`), and the transcript
-renders the viewport rather than the session —
-`BenchmarkTranscriptView50Turns` and `BenchmarkTranscriptView500Turns`
-exist to be compared, and a 500-turn session views no slower than a
-50-turn one, microseconds against the 16ms input-latency target. The
-same discipline judged ctrl+f when it landed — 18.4ms a keystroke on a
-500-turn session, past the budget — and the searchable-mirror fix is
-measured at 0.38ms with the benchmarks kept in the suite
-(`tui_search_test.go`), because a property that stops being measured
-becomes a memory. Every parser fed bytes the product does not control —
-the session record decoder, whose replay is the crash-recovery path
-itself; the search backend's HTML; the fence extractor; the edit reader
-`/blame` replays — carries a fuzz
-target beside its tests, hunted at millions of executions with no panic
-found, and AGENTS.md binds the standing rule: a finding there is a bug
-in a stated recovery path, never a wontfix. The affordances around a
-session hold the same standard: `/find` greps what past sessions
-actually said and hands back the ids `/resume` takes; ctrl+f searches
-the transcript itself, because the alternate screen hides the
-conversation from the terminal's own search — a gap every terminal
-agent shares and none of the others closes (`cmd/sb/tui_search.go`);
-`/changes` maps files to the turns that touched them from the same
-captures `/undo` restores (`cmd/sb/tui_commands.go`); `/queue` names
-what waits behind a running turn; and a bell with a marked terminal
-title says when a parked session needs its person. What this
-document deliberately does not claim is user-adoption evidence: the
-neighbors have communities and this tool is new, and no benchmark
-substitutes for that.
+The token estimator measurement covered eighteen calls on one model through
+two adapters. It undercounted by as much as 24 percent. The cost model widens
+its upper bound from that measurement; it does not treat the result as an exact
+provider invoice.
 
-## The verdict this document will stand behind
+## Current reliability reports
 
-Separate capability from breadth and the picture is clean. On breadth —
-provider count, IDE surfaces, plugin ecosystems, community — the neighbors
-lead, and those leads are functions of scale and time, not of design. On
-the capability of the core, the thing a terminal coding agent is for,
-Switchboard now concedes nothing: the converged skeleton is fully present
-(tools, MCP on both transports, hooks, subagents with named definitions,
-custom commands, skills that load the neighbors' own packs, availability
-fallbacks, per-turn undo, session fork with named pins, structural search,
-web search and fetch, and language-server symbol lookup), and
-on top of it sit fifteen axes — evidence-based routing with `/why`,
-three-way cost honesty, a hard budget the machinery itself obeys, the
-measured estimator, the falsification harness with its runs in the tree,
-verified-or-absent sandboxing, delegation priced on the ladder, the
-`/race` paired trial whose verdicts feed that harness, the `/watch`
-verifier that speaks in deltas and moves the ladder, the `/bisect` that
-binary-searches the session's own turns for the one that turned that
-verifier red, the byte-identical
-`/retry` whose verdicts join the same corpus, the outbound credential
-gate that covers the web tools' egress, the tracked cache belief
-with its `/cache` surface, line-level provenance through `/blame`,
-which reads which rung wrote which lines out of the record itself, and
-computer use built into the terminal agent under its own permission
-engine — where the neighbors have no counterpart at all.
+Public issue trackers contain useful failure reports, but an issue is not a
+prevalence estimate and may be fixed after this date. Reddit links below are
+individual community anecdotes or discussions, not verified incident rates.
+The items explain which failure modes Switchboard treats as product
+requirements.
 
-By the measure this product defines — capability per dollar, safely, with
-every model decision visible and explainable — Switchboard is the
-strongest tool in its class, and it is the only one that ships the
-instrument that could prove that sentence wrong. The instrument has now
-been pointed at the sentence once: on the eleven-task head-to-head of
-2026-08-16, completion tied at 11/11 across all three tools while only
-this one noticed that four of the tasks were reachable from rungs that
-bill nothing — the measured shape of the claim, at the small scale one
-machine and one day allow. The neighbors ask you to pick a model; this
-tool treats the pick as the product, and measures it.
+| Reported failure mode | External examples | Switchboard response |
+| --- | --- | --- |
+| Compaction breaks continuity or loses an explicitly selected workflow | [Codex #27555](https://github.com/openai/codex/issues/27555), [Codex #32169](https://github.com/openai/codex/issues/32169), [Claude Code #32407](https://github.com/anthropics/claude-code/issues/32407), [Claude Code #34872](https://github.com/anthropics/claude-code/issues/34872) | The source session stays append-only; compaction has a preview; fork and recap preserve a recoverable path. Switchboard does not claim that summaries can preserve unsupported native workflow controls. |
+| Usage is hard to explain or grows unexpectedly | [“300M tokens for a day?”](https://www.reddit.com/r/ClaudeCode/comments/1sgh2dc/300m_tokens_for_a_day/), [“Saying 'hey' cost me 22%”](https://www.reddit.com/r/ClaudeAI/comments/1s3hh29/saying_hey_cost_me_22_of_my_usage_limits/) | `/estimate` gives a pre-send range, `/budget` enforces a hard dollar ceiling, and the durable accounting ledger tags model work by purpose so turns, compaction, learning, advising, and command approval remain distinguishable. |
+| Terminal work hangs or cancellation does not settle cleanly | [Cursor terminal-action thread](https://www.reddit.com/r/cursor/comments/1msdwto/i_really_wish_cursor_would_fix_the_agent_choking/) | Cancellation is bounded and reaches active transports. macOS and Linux terminate the process group or tree; Windows terminates the direct child and warns that descendants may survive. Prompts entered during work stay visible in `/queue`; recovery paths drop them when the workspace cannot be restored safely. |
+| MCP approval has no usable unattended or parent-visible path | [Codex #18268](https://github.com/openai/codex/issues/18268), [Codex #24135](https://github.com/openai/codex/issues/24135), [Claude Code #61315](https://github.com/anthropics/claude-code/issues/61315) | External calls remain explicit permission effects. Headless and race contexts fail closed instead of waiting. Delegated agents do not inherit bridged MCP tools. |
+| Tool and plugin schemas consume context, collide, or load twice | [Claude plugin duplication thread](https://www.reddit.com/r/ClaudeAI/comments/1rij9tr/psa_your_claude_code_plugins_are_probably_loading/), [Cline tool-injection discussion](https://github.com/cline/cline/discussions/8578) | Plugins need explicit Switchboard enablement; executable components also need digest trust. Exact plugin identities and bridged tool-name collisions are resolved deterministically, MCP filters are enforced, and list changes apply on the next run. |
+| Repository automation or attached output exposes secrets | General risk, not a prevalence claim | Repository hooks require trust, MCP child environments are scrubbed or restricted, and outbound text passes the credential gate. |
+| Agent confidence or instruction following outruns verification | [LocalLLaMA software-engineering thread](https://www.reddit.com/r/LocalLLaMA/comments/1vavh2h/software_engineers_do_you_honestly_get_anything/) | Watch, bisect, race, and the evaluation gate keep test evidence separate from model claims. |
+
+Switchboard still has open limits here. Compaction quality depends on the
+configured summarizer. Shell side effects are not captured by undo or bisect.
+Unconfined user hooks and armed watch commands run with the user's authority.
+Fail-closed MCP behavior can make a native definition unavailable until its
+semantics are implemented.
+
+## Where other tools lead
+
+Claude Code has a larger skill and plugin ecosystem, agent-team workflows,
+IDE integrations, and MCP OAuth support. Codex CLI has broader configuration
+profiles, multiple sandbox postures, IDE and cloud surfaces, and a large
+installed extension base. OpenCode supports more providers and language
+servers and has a broader open-source community. Those advantages matter when
+the work depends on ecosystem breadth or a single-vendor surface.
+
+Switchboard currently supports four language-server families, one subagent
+level, and computer control only on macOS. Its plugin installer copies exact
+local sources and does not fetch from a marketplace. Advanced native MCP
+authentication, transport, and approval features remain disabled unless the
+runtime can enforce them. The router remains deterministic until the
+evaluation gate passes.
 
 ## Reproduce it
 
-The claims above are argued from the code; the head-to-head that would
-test them is runnable, not hypothetical. The eval corpus doubles as a
-baseline instrument (§8.6): `internal/eval/bench_test.go` materialises a
-deterministic one-task-per-package cut of the corpus — chosen in corpus
-order, fixed before any tool runs, so results cannot pick their tasks —
-and judges any tool's attempts with the same verifier the exit gate uses,
-the package tests plus the checks that keep "delete the failing test"
-from counting as a solve. `SB_BENCH_CUT=all` widens the cut to every
-spec, for a run that wants the corpus's full breadth rather than its
-spread; both the materialise and the verify read it, so the two cannot
-disagree about which tasks a lane holds.
+The repository provides a deterministic one-task-per-package cut of the eval
+corpus. Materialize one lane:
 
-One lane, any agent CLI:
+```sh
+SB_BENCH_MATERIALIZE=/tmp/bench/sb \
+  go test ./internal/eval/ -run TestMaterializeBench
+```
 
-    SB_BENCH_MATERIALIZE=/tmp/bench/sb go test ./internal/eval/ -run TestMaterializeBench
+For each task directory and prompt in `manifest.jsonl`, run the agent under
+test. The 2026-08-16 run used these non-interactive forms:
 
-Then, per task directory and its prompt from `manifest.jsonl`, run the
-tool under trial headless — the postures that give each tool
-edit-and-run-tests capability non-interactively are
-`sb -p "<prompt>" -mode bypass -output json`,
-`claude -p "<prompt>" --permission-mode acceptEdits --allowedTools
-"Bash(go test:*)" "Bash(go build:*)" --output-format json`, and
-`codex exec --sandbox workspace-write --skip-git-repo-check "<prompt>"` —
-and judge the lane:
+```sh
+sb -p "<prompt>" -mode bypass -output json
+claude -p "<prompt>" --permission-mode acceptEdits \
+  --allowedTools "Bash(go test:*)" "Bash(go build:*)" --output-format json
+codex exec --sandbox workspace-write --skip-git-repo-check "<prompt>"
+```
 
-    SB_BENCH_VERIFY=/tmp/bench/sb go test ./internal/eval/ -run TestVerifyBench -v
+That Switchboard build enabled verified Seatbelt confinement automatically.
+Current builds start with confinement off, and both production profiles retain
+host IPC authority that keeps bypass approvals with the human. The historical
+bypass run therefore has no equivalent prompt-free headless posture under the
+current boundary.
 
-Verdicts land in `verdicts.jsonl`, one line per task, from the same code
-for every lane. This procedure has been run:
-[head-to-head-2026-08-16.md](head-to-head-2026-08-16.md) records all
-three lanes on one machine — completion tied at 11/11 for every tool,
-switchboard alone put four of the eleven tasks entirely on local rungs
-and spent zero API dollars against claude code's $22.35 — with the raw
-journal beside it and the caveats stated in full. What this document
-refuses to ship is a comparison that could not be rerun; this one can be,
-with three commands.
+Judge the materialized lane with the same verifier:
 
-## Sources
+```sh
+SB_BENCH_VERIFY=/tmp/bench/sb \
+  go test ./internal/eval/ -run TestVerifyBench -v
+```
 
-Competitor capabilities above were checked against current public
-references in August 2026, including Anthropic's Claude Code feature and
-settings references, Codex CLI configuration and sandbox guides, and
-OpenCode's documentation and reviews. Representative links:
+`SB_BENCH_CUT=all` widens both materialization and verification to every task.
+Verdicts go to `verdicts.jsonl`. The completed run and its caveats are in
+[Head-to-head results](head-to-head-2026-08-16.md), with the raw JSONL beside
+it.
 
-- https://toolsbase.dev/en/reference/claude-code-features
-- https://hidekazu-konishi.com/entry/claude_code_features_settings_reference_2026.html
-- https://www.digitalapplied.com/blog/codex-cli-deep-dive-config-profiles-sandbox-2026
-- https://blakecrosley.com/guides/codex
-- https://www.explainx.ai/blog/opencode-open-source-ai-coding-agent-guide-2026
-- https://vibecodinghub.org/tools/opencode
+## External references
+
+Competitor breadth claims were checked against public material available in
+August 2026. The issue links in [Current reliability reports](#current-reliability-reports)
+are primary user reports. They document individual failures or requests, not
+product-wide rates.
+
+- [Claude Code feature reference](https://toolsbase.dev/en/reference/claude-code-features)
+- [Claude Code settings reference](https://hidekazu-konishi.com/entry/claude_code_features_settings_reference_2026.html)
+- [Codex CLI profiles and sandbox guide](https://www.digitalapplied.com/blog/codex-cli-deep-dive-config-profiles-sandbox-2026)
+- [Codex CLI guide](https://blakecrosley.com/guides/codex)
+- [OpenCode overview](https://www.explainx.ai/blog/opencode-open-source-ai-coding-agent-guide-2026)
+- [OpenCode feature summary](https://vibecodinghub.org/tools/opencode)

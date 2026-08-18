@@ -1,0 +1,21 @@
+{
+  "running": true,
+  "frontmost": true,
+  "windows": ["Save document"],
+  "window_id": "6a177f160b6ac33a31cb1c9035ee004e",
+  "menus": [],
+  "els": [
+    {
+      "path": [0, 2],
+      "r": "AXButton",
+      "t": "Save",
+      "d": "Save",
+      "v": "",
+      "p": [640, 480],
+      "s": [80, 24],
+      "f": "d66fe6be7d2645d2874bb27879f70a26"
+    }
+  ],
+  "walked": 1,
+  "timedOut": false
+}

@@ -1,10 +1,16 @@
 package tools
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // The live tests need the binary and skip without it, so the suite stays
@@ -106,5 +112,75 @@ func TestAstGrepEffectFollowsConfinement(t *testing.T) {
 	// any other subprocess rather than riding the read effect unwrapped.
 	if plan.Request.Effect != "execute" {
 		t.Errorf("effect without confinement = %q, want execute", plan.Request.Effect)
+	}
+}
+
+func TestAstGrepExecuteRequestCarriesExactReviewedArgv(t *testing.T) {
+	root := t.TempDir()
+	r, err := NewRegistry(root, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const binary = "/opt/tools/ast-grep"
+	tool := NewAstGrep(r, binary)
+	plan, err := tool.Plan(json.RawMessage(`{"pattern":"fmt.Errorf($MSG, $$$ARGS)","lang":"go","selector":"call_expression","path":"."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{binary, "run", "--pattern", "fmt.Errorf($MSG, $$$ARGS)", "--json=compact", "--lang", "go", "--selector", "call_expression", r.Root()}
+	if plan.Request.Effect != permission.EffectExecute || !reflect.DeepEqual(plan.Request.Argv, want) {
+		t.Fatalf("review request = effect %q argv %#v, want execute %#v", plan.Request.Effect, plan.Request.Argv, want)
+	}
+	if plan.Request.Path != "." {
+		t.Fatalf("review path = %q, want workspace-relative dot", plan.Request.Path)
+	}
+
+	// The permission packet is inspectable, not an alias of the closure's
+	// executable argv.
+	plan.Request.Argv[0] = "/tmp/tampered"
+	if plan.Request.Execution == nil {
+		t.Fatal("astgrep request omitted its execution posture")
+	}
+}
+
+func TestAstGrepConfinementPolicyUsesRegistryRootNotProcessCWD(t *testing.T) {
+	r, err := NewRegistry(t.TempDir(), execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := NewAstGrep(r, "/opt/tools/ast-grep").(*astGrepTool)
+	policy := execution.CommandPolicy{Network: execution.NetworkLoopback}
+	cmd := tool.command([]string{"/opt/tools/ast-grep", "run"}, policy)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Dir != r.Root() || cmd.Policy.Workspace != r.Root() {
+		t.Fatalf("astgrep command root drifted: dir=%q policy=%q want=%q", cmd.Dir, cmd.Policy.Workspace, r.Root())
+	}
+	if cmd.Policy.Workspace == cwd {
+		t.Fatalf("test setup did not separate process cwd %q from registry root", cwd)
+	}
+}
+
+func TestAstGrepIsAlwaysExecuteBecauseStandardSandboxAllowsWrites(t *testing.T) {
+	r, err := NewRegistry(t.TempDir(), execution.TestingVerifiedCapability())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := NewAstGrep(r, "/tmp/path-shadowed-ast-grep")
+	plan, err := tool.Plan(json.RawMessage(`{"pattern":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Request.Effect != permission.EffectExecute {
+		t.Fatalf("confined external binary effect = %q, want execute", plan.Request.Effect)
+	}
+	engine := permission.NewEngine(permission.ModePlan, execution.TestingVerifiedCapability())
+	if out := engine.Check(plan.Request); out.Decision != permission.Deny {
+		t.Fatalf("plan mode allowed PATH binary that can write workspace: %+v", out)
+	}
+	if tool.ParallelSafe() {
+		t.Fatal("external astgrep binary was marked parallel-safe despite writable sandbox paths")
 	}
 }

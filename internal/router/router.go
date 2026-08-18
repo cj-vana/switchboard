@@ -25,9 +25,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/costmodel"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/costmodel"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Source records what made a decision. §8.1 is explicit that this and Rationale
@@ -41,12 +41,21 @@ const (
 	SourceFallback  Source = "fallback"
 )
 
+// PolicyRevision identifies the exact deterministic policy that produced a
+// record. Training or auditing rows without it would mix behavior changes into
+// one apparent distribution.
+const PolicyRevision = "heuristic-v2"
+
 // SessionFeatures are the structured signals a turn carries with it.
 type SessionFeatures struct {
 	TurnDepth         int
+	PromptTokens      int
+	ContextTokens     int
 	PriorFailures     int
+	TestFailures      int
 	FilesInContext    int
 	DiffSizeSoFar     int
+	DiffSizeKnown     bool
 	RepoLanguages     []string
 	TestsInvolved     bool
 	LastTurnEscalated bool
@@ -64,10 +73,34 @@ type Candidate struct {
 	Rank int
 
 	// PromptTokens is what the assembled request would cost this target to
-	// read, which is what context fit is judged against.
+	// read according to the ordinary estimator. It remains the input to dollar
+	// estimation so the cost model can apply its own measured widening once.
 	PromptTokens int
 
+	// ContextTokens is the conservative upper bound used only for the hard
+	// context-window check. Zero preserves compatibility for callers with an
+	// exact count and falls back to PromptTokens.
+	ContextTokens int
+
+	// ReservedOutputTokens is the maximum output allowance the concrete
+	// adapter will put on this request. Context feasibility is the whole
+	// envelope, not input alone. Zero is valid only for adapters that reserve no
+	// output; production candidate builders must resolve provider defaults.
+	ReservedOutputTokens int
+
 	Estimate costmodel.Estimate
+
+	// CeilingCost is the conservative maximum-output preflight bound used for
+	// a hard budget. Estimate remains the expected working-turn cost shown to
+	// the user; conflating the two either lies in the estimate or weakens the
+	// ceiling. Zero means the candidate cannot be priced conservatively.
+	CeilingCost catalog.Money
+
+	// CatalogKnown distinguishes a missing catalog entry (which production
+	// permits as explicitly unpriced) from a paid entry whose pricing bands
+	// cannot produce a positive conservative bound. The latter must be rejected
+	// here because the immediate pre-provider budget guard rejects it too.
+	CatalogKnown bool
 }
 
 // Requirements are the hard constraints. They are checked before economics,
@@ -84,6 +117,10 @@ type Requirements struct {
 // override a cost preference and never a hard ceiling.
 type Budgets struct {
 	MaxCost catalog.Money
+
+	// MaxCostSet distinguishes an exhausted zero-dollar allowance from no
+	// dollar ceiling. Positive MaxCost values imply true for compatibility.
+	MaxCostSet bool
 }
 
 type Input struct {
@@ -103,9 +140,10 @@ type Decision struct {
 	Tier   string
 	Target provider.RouteTargetID
 
-	Confidence float64
-	Source     Source
-	Rationale  string
+	Confidence     float64
+	Source         Source
+	Rationale      string
+	PolicyRevision string
 
 	EstimatedCost costmodel.Estimate
 
@@ -160,9 +198,10 @@ func (h Heuristic) Route(in Input) (Decision, error) {
 				return Decision{
 					Tier: c.Tier, Target: c.Target.ID(),
 					Confidence: 1, Source: SourceUserPin,
-					Rationale:     "pinned by you; capability, context, and budget were checked first",
-					EstimatedCost: c.Estimate,
-					Infeasible:    excluded,
+					Rationale:      "pinned by you; capability, context, and budget were checked first",
+					PolicyRevision: PolicyRevision,
+					EstimatedCost:  c.Estimate,
+					Infeasible:     excluded,
 				}, nil
 			}
 		}
@@ -180,18 +219,23 @@ func (h Heuristic) Route(in Input) (Decision, error) {
 
 	want, reasons := h.wantedRank(in)
 
-	chosen := feasible[0]
+	var chosen Candidate
+	found := false
 	for _, c := range feasible {
-		if c.Rank <= want && c.Rank > chosen.Rank {
+		if c.Rank <= want && (!found || c.Rank > chosen.Rank ||
+			(c.Rank == chosen.Rank && string(c.Target.ID()) < string(chosen.Target.ID()))) {
 			chosen = c
+			found = true
 		}
 	}
 	// Nothing at or below the wanted rank: take the lowest available rather
 	// than exceeding what was asked for.
-	if chosen.Rank > want {
+	if !found {
 		for _, c := range feasible {
-			if c.Rank < chosen.Rank {
+			if !found || c.Rank < chosen.Rank ||
+				(c.Rank == chosen.Rank && string(c.Target.ID()) < string(chosen.Target.ID())) {
 				chosen = c
+				found = true
 			}
 		}
 	}
@@ -203,11 +247,12 @@ func (h Heuristic) Route(in Input) (Decision, error) {
 
 	return Decision{
 		Tier: chosen.Tier, Target: chosen.Target.ID(),
-		Confidence:    h.confidence(reasons),
-		Source:        SourceHeuristic,
-		Rationale:     rationale,
-		EstimatedCost: chosen.Estimate,
-		Infeasible:    excluded,
+		Confidence:     h.confidence(reasons),
+		Source:         SourceHeuristic,
+		Rationale:      rationale,
+		PolicyRevision: PolicyRevision,
+		EstimatedCost:  chosen.Estimate,
+		Infeasible:     excluded,
 	}, nil
 }
 
@@ -220,32 +265,67 @@ func (h Heuristic) filter(in Input) (feasible []Candidate, excluded []string) {
 	for _, c := range in.Candidates {
 		switch {
 		case in.Requirements.NeedsVision && !c.Info.Vision:
-			excluded = append(excluded, fmt.Sprintf("%s cannot read images, which this turn needs", c.Target.ID()))
+			excluded = append(excluded, fmt.Sprintf("%s cannot read images, which this turn needs", c.Target.Display()))
 
 		case in.Requirements.NeedsTools && c.Info.Tools == catalog.ToolsNone:
-			excluded = append(excluded, fmt.Sprintf("%s cannot call tools, so it cannot drive the loop", c.Target.ID()))
+			excluded = append(excluded, fmt.Sprintf("%s cannot call tools, so it cannot drive the loop", c.Target.Display()))
 
 		case !approved(c.Target.Provider, in.Requirements.ApprovedProviders):
-			excluded = append(excluded, fmt.Sprintf("%s is not an approved destination for this workspace", c.Target.ID()))
+			excluded = append(excluded, fmt.Sprintf("%s is not an approved destination for this workspace", c.Target.Display()))
 
-		case c.Info.ContextWindow > 0 && c.PromptTokens > c.Info.ContextWindow:
+		case !candidateFitsContext(c):
 			excluded = append(excluded, fmt.Sprintf(
-				"%s holds %d tokens and this turn needs about %d",
-				c.Target.ID(), c.Info.ContextWindow, c.PromptTokens))
+				"%s holds %d tokens and this turn may need up to %d input plus %d reserved output tokens",
+				c.Target.Display(), c.Info.ContextWindow, candidateContextTokens(c), c.ReservedOutputTokens))
 
-		case in.Budgets.MaxCost > 0 && c.Estimate.High > in.Budgets.MaxCost:
+		case c.CatalogKnown && c.Info.Metering != catalog.Local && c.Info.Metering != catalog.Plan && !c.Info.Free() && c.CeilingCost <= 0:
+			excluded = append(excluded, fmt.Sprintf(
+				"%s has no positive conservative cost bound in the catalog, so a provider call cannot be authorized",
+				c.Target.Display()))
+
+		case (in.Budgets.MaxCostSet || in.Budgets.MaxCost > 0) && candidateCeiling(c) > in.Budgets.MaxCost:
 			// The upper bound is what a ceiling is checked against. Using the
 			// expectation would approve a turn that is only affordable on
 			// average, which is not what a ceiling means.
 			excluded = append(excluded, fmt.Sprintf(
 				"%s could cost up to %s, above the %s ceiling",
-				c.Target.ID(), c.Estimate.High, in.Budgets.MaxCost))
+				c.Target.Display(), candidateCeiling(c), in.Budgets.MaxCost))
 
 		default:
 			feasible = append(feasible, c)
 		}
 	}
 	return feasible, excluded
+}
+
+func candidateContextTokens(c Candidate) int {
+	if c.ContextTokens > 0 {
+		return c.ContextTokens
+	}
+	return c.PromptTokens
+}
+
+func candidateFitsContext(c Candidate) bool {
+	window := c.Info.ContextWindow
+	if window <= 0 {
+		return true
+	}
+	input := candidateContextTokens(c)
+	output := c.ReservedOutputTokens
+	if input < 0 || output < 0 || output > window {
+		return false
+	}
+	// Subtraction avoids overflowing when an unknown input was represented by
+	// MaxInt. It also makes equality explicit: filling the entire advertised
+	// envelope is allowed, exceeding it by one token is not.
+	return input <= window-output
+}
+
+func candidateCeiling(c Candidate) catalog.Money {
+	if c.CeilingCost > 0 {
+		return c.CeilingCost
+	}
+	return c.Estimate.High
 }
 
 func approved(providerName string, allowed []string) bool {
@@ -268,6 +348,13 @@ func approved(providerName string, allowed []string) bool {
 func (h Heuristic) wantedRank(in Input) (int, []string) {
 	want := 0
 	var reasons []string
+	top := 0
+	for _, candidate := range in.Candidates {
+		if candidate.Rank > top {
+			top = candidate.Rank
+		}
+	}
+	strong := top
 
 	raise := func(to int, why string) {
 		if to > want {
@@ -280,17 +367,17 @@ func (h Heuristic) wantedRank(in Input) (int, []string) {
 	words := len(strings.Fields(prompt))
 
 	// A turn straight after a failure is §8.2's own example of escalation.
-	if in.Session.PriorFailures > 0 && in.Session.TestsInvolved {
-		raise(2, fmt.Sprintf("following %d test failure(s)", in.Session.PriorFailures))
+	if in.Session.TestFailures > 0 {
+		raise(strong, fmt.Sprintf("following %d test failure(s)", in.Session.TestFailures))
 	} else if in.Session.PriorFailures > 1 {
-		raise(2, fmt.Sprintf("following %d failed attempts", in.Session.PriorFailures))
+		raise(strong, fmt.Sprintf("following %d failed attempts", in.Session.PriorFailures))
 	}
 
 	if in.Session.FilesInContext >= h.files() {
-		raise(2, fmt.Sprintf("%d files in play", in.Session.FilesInContext))
+		raise(strong, fmt.Sprintf("%d files in play", in.Session.FilesInContext))
 	}
 	if in.Session.DiffSizeSoFar >= h.diff() {
-		raise(2, fmt.Sprintf("a diff of %d lines so far", in.Session.DiffSizeSoFar))
+		raise(strong, fmt.Sprintf("a diff of %d lines so far", in.Session.DiffSizeSoFar))
 	}
 
 	// Breadth words are a weak signal and deliberately do not raise on their

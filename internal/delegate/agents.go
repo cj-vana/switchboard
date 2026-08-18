@@ -11,7 +11,7 @@ package delegate
 //
 // Discovery is once, at session assembly. The definitions surface in the
 // delegate tool's schema, which sits in the frozen zone (§6.1), so a file
-// added mid-session is picked up by the next session, not this one.
+// added mid-process is picked up by the next Switchboard run, not this one.
 
 import (
 	"fmt"

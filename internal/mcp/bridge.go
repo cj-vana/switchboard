@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // nameCharset is what every provider accepts in a tool name. MCP servers may

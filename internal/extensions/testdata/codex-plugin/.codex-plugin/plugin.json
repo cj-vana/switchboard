@@ -1,0 +1,8 @@
+{
+  "name": "codex-tools",
+  "version": "1.0.0",
+  "skills": "./skills/",
+  "mcpServers": "./config/mcp.json",
+  "hooks": ["./config/hooks.json"],
+  "apps": "./.app.json"
+}

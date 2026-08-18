@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/provider/ollama"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
 )
 
 // summarize against a real local model: the one call /compact makes outside

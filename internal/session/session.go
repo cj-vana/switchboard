@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -22,12 +23,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // ErrSessionLocked reports that another process is appending to this session.
 // Two writers would interleave frames and corrupt the log.
 var ErrSessionLocked = errors.New("session is open in another process")
+
+// ErrSessionPoisoned means a durable append had an ambiguous or partial
+// failure. No later record may be appended behind that point: replay stops at
+// the first torn frame, so a later WAL record could otherwise appear synced
+// while being unreachable after restart.
+var ErrSessionPoisoned = errors.New("session log is poisoned by a failed append")
+
+var ErrRaceBranchPending = errors.New("race branch is not resumable until its origin ledger is reconciled")
 
 var ErrNoSessions = errors.New("no sessions recorded for this workspace")
 
@@ -59,6 +68,10 @@ type State struct {
 	Target    string
 	CreatedAt time.Time
 
+	// RuntimeBinding is the latest committed tier/target/pin state. Its zero
+	// value identifies a legacy log that only has SessionStart.Target.
+	RuntimeBinding RuntimeBinding
+
 	// Messages includes assistant messages marked Incomplete. They are kept for
 	// diagnosis and display; adapters drop them when rendering a request so an
 	// interrupted turn is never replayed as a finished one (§10.3).
@@ -67,10 +80,28 @@ type State struct {
 	Usage provider.Usage
 	Calls int
 
+	// UsageTargets is replay-derived from the existing per-call Usage records.
+	// It contains each non-empty target identity once, in first-seen order, so
+	// cost surfaces can distinguish mixed metering without another record type.
+	UsageTargets []string
+
 	// CostMicroUSD totals what the catalog priced this session at. It is an
 	// estimate and a reconciliation aid, never a substitute for the provider's
 	// invoice (§15).
 	CostMicroUSD int64
+
+	// RetryReserveMicroUSD totals conservative allowances for failed provider
+	// attempts that may still be billed despite returning no usage, plus
+	// write-ahead attempts whose settlement was never made durable. Keeping it
+	// separate preserves the distinction between observed usage and a
+	// pessimistic hard-ceiling reserve.
+	RetryReserveMicroUSD int64
+
+	// ExternalCostMicroUSD is actual priced work admitted by this session but
+	// whose provider Usage lives in another log, such as a delegate or losing
+	// race arm. It participates in the hard ceiling without fabricating tokens
+	// or calls in this session's provider telemetry.
+	ExternalCostMicroUSD int64
 
 	// Pins are the named points /fork can cut back to, in the order set,
 	// with a re-used name moving its pin rather than stacking a second.
@@ -78,19 +109,129 @@ type State struct {
 
 	// CatalogRevision is the revision the session started against.
 	CatalogRevision string
+
+	pendingBudgetAttempts  map[string]int64
+	appliedBudgetTransfers map[string]bool
+	providerCallIDs        map[string]bool
+	raceBranchOrigin       string
+	raceBranchPending      bool
+	raceBranchFinalized    bool
+	raceBranchContinuation bool
+}
+
+// AccountedCostMicroUSD is the observed dollar cost attributable to this
+// continuing session. RetryReserveMicroUSD is deliberately excluded: callers
+// display or add that pessimistic allowance separately.
+func (s State) AccountedCostMicroUSD() int64 {
+	total, err := checkedMicroUSDAdd(s.CostMicroUSD, s.ExternalCostMicroUSD)
+	if err != nil {
+		return math.MaxInt64
+	}
+	return total
+}
+
+func checkedMicroUSDAdd(current, delta int64) (int64, error) {
+	if current < 0 || delta < 0 || delta > math.MaxInt64-current {
+		return 0, fmt.Errorf("micro-USD accounting overflow")
+	}
+	return current + delta, nil
+}
+
+func (s State) checkedObservedCost(localDelta, externalDelta int64) (local, external int64, err error) {
+	local, err = checkedMicroUSDAdd(s.CostMicroUSD, localDelta)
+	if err != nil {
+		return 0, 0, err
+	}
+	external, err = checkedMicroUSDAdd(s.ExternalCostMicroUSD, externalDelta)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err = checkedMicroUSDAdd(local, external); err != nil {
+		return 0, 0, err
+	}
+	return local, external, nil
+}
+
+func (s State) checkedUsage(u Usage) (provider.Usage, error) {
+	if err := u.Usage.Validate(); err != nil {
+		return provider.Usage{}, fmt.Errorf("invalid provider usage: %w", err)
+	}
+	if u.CostMicroUSD < 0 {
+		return provider.Usage{}, fmt.Errorf("usage cost cannot be negative")
+	}
+	if u.Attempts < 0 {
+		return provider.Usage{}, fmt.Errorf("usage attempts cannot be negative")
+	}
+	if u.CallID != "" && s.providerCallIDs[u.CallID] {
+		return provider.Usage{}, fmt.Errorf("provider call %q is already recorded", u.CallID)
+	}
+	total, err := s.Usage.CheckedAdd(u.Usage)
+	if err != nil {
+		return provider.Usage{}, fmt.Errorf("provider usage accounting: %w", err)
+	}
+	if s.Calls == math.MaxInt {
+		return provider.Usage{}, fmt.Errorf("provider call accounting overflow")
+	}
+	return total, nil
+}
+
+func (s *State) recordProviderCallID(id string) {
+	if id == "" {
+		return
+	}
+	if s.providerCallIDs == nil {
+		s.providerCallIDs = make(map[string]bool)
+	}
+	s.providerCallIDs[id] = true
+}
+
+func (s *State) recordUsageTarget(target string) {
+	if target == "" {
+		return
+	}
+	for _, recorded := range s.UsageTargets {
+		if recorded == target {
+			return
+		}
+	}
+	s.UsageTargets = append(s.UsageTargets, target)
 }
 
 type Session struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
-	seq  int
+	mu       sync.Mutex
+	f        *os.File
+	path     string
+	seq      int
+	poisoned error
 
 	state State
+
+	// liveUsages only holds calls appended since this Session handle was
+	// opened. A UsageCursor can therefore name an exact live interval without
+	// rereading the whole append-only log on every turn; a reopened handle
+	// starts its first cursor after every replayed record.
+	liveUsages []sequencedUsage
+	// lastRouteUsageCursor prevents an accidentally reused window from
+	// attributing the same durable provider call to two route records.
+	lastRouteUsageCursor int
 
 	// truncated counts bytes discarded by replay because the tail of the log was
 	// unreadable. Non-zero means the user lost recorded work and must be told.
 	truncated int64
+}
+
+type sequencedUsage struct {
+	seq   int
+	usage Usage
+}
+
+// UsageCursor is an opaque boundary in one live session handle. Route
+// accounting uses it to correlate only provider calls durably appended after
+// the turn began. Its fields stay private so callers cannot fabricate a
+// sequence or reuse a cursor against another session.
+type UsageCursor struct {
+	sessionID string
+	seq       int
 }
 
 // Create starts a session. catalogRevision pins the price and capability data
@@ -173,6 +314,16 @@ func (s *Store) Latest(workspace string) (*Session, error) {
 	if len(infos) == 0 {
 		return nil, ErrNoSessions
 	}
+	// A completed race keeps both fully accounted answers explicitly
+	// resumable, but --continue must select the branch the user chose rather
+	// than a later-touched alternative. If all records predate this marker,
+	// fall back to the ordinary mtime ordering for compatibility.
+	for _, info := range infos {
+		state, stateErr := ReadState(info.Path)
+		if stateErr == nil && !state.raceAlternative() {
+			return openPath(info.Path)
+		}
+	}
 	return openPath(infos[0].Path)
 }
 
@@ -213,15 +364,15 @@ func (s *Store) ListAll() (map[string][]Info, error) {
 			if !hasValidHeader(path) {
 				continue
 			}
-			ws, err := ReadWorkspace(path)
-			if err != nil {
+			state, err := ReadState(path)
+			if err != nil || state.RaceBranchPending() {
 				continue
 			}
 			fi, err := e.Info()
 			if err != nil {
 				continue
 			}
-			out[ws] = append(out[ws], Info{
+			out[state.Workspace] = append(out[state.Workspace], Info{
 				ID:       strings.TrimSuffix(e.Name(), ".log"),
 				Path:     path,
 				Modified: fi.ModTime(),
@@ -258,12 +409,17 @@ func (s *Store) List(workspace string) ([]Info, error) {
 		// A crash between creating the file and syncing its header leaves a stub
 		// that cannot be replayed. Skipping it keeps `--continue` from resuming
 		// into a parse failure on a session that never held anything.
-		if !hasValidHeader(filepath.Join(s.root, workspaceKey(workspace), e.Name())) {
+		path := filepath.Join(s.root, workspaceKey(workspace), e.Name())
+		if !hasValidHeader(path) {
+			continue
+		}
+		state, err := ReadState(path)
+		if err != nil || state.RaceBranchPending() {
 			continue
 		}
 		infos = append(infos, Info{
 			ID:       strings.TrimSuffix(e.Name(), ".log"),
-			Path:     filepath.Join(s.root, workspaceKey(workspace), e.Name()),
+			Path:     path,
 			Modified: fi.ModTime(),
 			Size:     fi.Size(),
 		})
@@ -302,6 +458,12 @@ func openPath(path string) (*Session, error) {
 		f.Close()
 		return nil, err
 	}
+	f, err = migrateForAppend(f, path)
+	if err != nil {
+		releaseLock(f)
+		f.Close()
+		return nil, err
+	}
 
 	sess := &Session{f: f, path: path}
 	if err := sess.replay(); err != nil {
@@ -309,7 +471,63 @@ func openPath(path string) (*Session, error) {
 		f.Close()
 		return nil, err
 	}
+	if sess.state.raceBranchPending {
+		releaseLock(f)
+		f.Close()
+		return nil, fmt.Errorf("%w: origin session %s", ErrRaceBranchPending, sess.state.raceBranchOrigin)
+	}
 	return sess, nil
+}
+
+// migrateForAppend upgrades old readable logs before this process is allowed
+// to append records whose execution semantics older binaries cannot preserve.
+// Schema 1, 2, and 3 have same-width
+// headers, so the version byte can be replaced in place while the file is
+// exclusively locked. This works on Windows too, where replacing the path of
+// an open, non-share-delete file is not permitted. Sync completes the upgrade
+// before any schema-3 record may be appended.
+func migrateForAppend(old *os.File, path string) (*os.File, error) {
+	if _, err := old.Seek(0, io.SeekStart); err != nil {
+		return old, err
+	}
+	r := bufio.NewReader(old)
+	header, err := r.ReadString('\n')
+	if err != nil {
+		return old, fmt.Errorf("reading session header: %w", err)
+	}
+	var gotMagic string
+	var version int
+	if _, err := fmt.Sscanf(strings.TrimSpace(header), "%s %d", &gotMagic, &version); err != nil || gotMagic != magic {
+		return old, fmt.Errorf("%s is not a switchboard session log", path)
+	}
+	if version > SchemaVersion {
+		return old, fmt.Errorf("%w: log is schema %d, this binary understands %d", ErrSchemaTooNew, version, SchemaVersion)
+	}
+	if version == SchemaVersion {
+		return old, nil
+	}
+	if version != 1 && version != 2 {
+		return old, fmt.Errorf("cannot migrate session schema %d to %d", version, SchemaVersion)
+	}
+	oldHeader := []byte(header)
+	newHeader := []byte(fmt.Sprintf("%s %d\n", magic, SchemaVersion))
+	if len(oldHeader) != len(newHeader) {
+		return old, fmt.Errorf("cannot migrate session schema header in place (%d bytes to %d)", len(oldHeader), len(newHeader))
+	}
+	n, err := old.WriteAt(newHeader, 0)
+	if err == nil && n != len(newHeader) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return old, fmt.Errorf("writing session schema migration: %w", err)
+	}
+	if err := old.Sync(); err != nil {
+		return old, fmt.Errorf("syncing session schema migration: %w", err)
+	}
+	if _, err := old.Seek(0, io.SeekStart); err != nil {
+		return old, err
+	}
+	return old, nil
 }
 
 // replay folds the log into state, truncating at the first unreadable record.
@@ -388,9 +606,77 @@ func (s *Session) apply(rec Record) error {
 		if err := json.Unmarshal(rec.Payload, &p); err != nil {
 			return err
 		}
-		s.state.Usage = s.state.Usage.Add(p.Usage)
-		s.state.CostMicroUSD += p.CostMicroUSD
+		usage, err := s.state.checkedUsage(p)
+		if err != nil {
+			return fmt.Errorf("usage in record %d: %w", rec.Seq, err)
+		}
+		local, external, err := s.state.checkedObservedCost(p.CostMicroUSD, 0)
+		if err != nil {
+			return fmt.Errorf("usage cost in record %d: %w", rec.Seq, err)
+		}
+		s.state.Usage = usage
+		s.state.CostMicroUSD, s.state.ExternalCostMicroUSD = local, external
 		s.state.Calls++
+		s.state.recordProviderCallID(p.CallID)
+		s.state.recordUsageTarget(p.Target)
+	case RecordRetryReserve:
+		var p RetryReserve
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		reserve, err := checkedMicroUSDAdd(s.state.RetryReserveMicroUSD, p.CostMicroUSD)
+		if err != nil {
+			return fmt.Errorf("retry reserve in record %d: %w", rec.Seq, err)
+		}
+		s.state.RetryReserveMicroUSD = reserve
+	case RecordBudgetAttempt:
+		var p BudgetAttempt
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		if err := s.state.applyBudgetAttempt(p); err != nil {
+			return fmt.Errorf("budget attempt in record %d: %w", rec.Seq, err)
+		}
+	case RecordBudgetSettle:
+		var p BudgetSettlement
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		if err := s.state.applyBudgetSettlement(p); err != nil {
+			return fmt.Errorf("budget settlement in record %d: %w", rec.Seq, err)
+		}
+	case RecordBudgetTransfer:
+		var p BudgetTransfer
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		if err := s.state.applyBudgetTransfer(p); err != nil {
+			return fmt.Errorf("budget transfer in record %d: %w", rec.Seq, err)
+		}
+	case RecordRaceBranch:
+		var p RaceBranch
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		if p.OriginID == "" {
+			return fmt.Errorf("race branch in record %d has no origin", rec.Seq)
+		}
+		if s.state.raceBranchOrigin != "" && s.state.raceBranchOrigin != p.OriginID {
+			return fmt.Errorf("race branch in record %d changes origin", rec.Seq)
+		}
+		s.state.raceBranchOrigin = p.OriginID
+		s.state.raceBranchPending = !p.Finalized
+		s.state.raceBranchFinalized = p.Finalized
+		s.state.raceBranchContinuation = p.Finalized && p.Continuation
+	case RecordRuntimeBinding:
+		var p RuntimeBinding
+		if err := json.Unmarshal(rec.Payload, &p); err != nil {
+			return err
+		}
+		if p.Tier == "" || p.Target == "" {
+			return fmt.Errorf("runtime binding in record %d has an empty tier or target", rec.Seq)
+		}
+		s.state.RuntimeBinding = p
 	case RecordPin:
 		var p Pin
 		if err := json.Unmarshal(rec.Payload, &p); err != nil {
@@ -408,6 +694,9 @@ func (s *Session) apply(rec Record) error {
 }
 
 func (s *Session) append(t RecordType, payload any) error {
+	if s.poisoned != nil {
+		return fmt.Errorf("%w: %v", ErrSessionPoisoned, s.poisoned)
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -422,12 +711,28 @@ func (s *Session) append(t RecordType, payload any) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.f.Write(frame); err != nil {
-		return fmt.Errorf("appending to session log: %w", err)
+	if err := s.writeFrame(frame); err != nil {
+		return err
 	}
 	// Records are few per turn, so paying for durability here is cheap and it is
 	// what makes resume-after-interruption a guarantee rather than a hope.
-	return s.f.Sync()
+	if err := s.f.Sync(); err != nil {
+		s.poisoned = fmt.Errorf("syncing record %d: %w", s.seq, err)
+		return fmt.Errorf("%w: %v", ErrSessionPoisoned, s.poisoned)
+	}
+	return nil
+}
+
+func (s *Session) writeFrame(frame []byte) error {
+	n, err := s.f.Write(frame)
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		s.poisoned = fmt.Errorf("writing record %d (%d of %d bytes): %w", s.seq, n, len(frame), err)
+		return fmt.Errorf("%w: %v", ErrSessionPoisoned, s.poisoned)
+	}
+	return nil
 }
 
 func (s *Session) AppendMessage(m provider.Message) error {
@@ -441,22 +746,356 @@ func (s *Session) AppendMessage(m provider.Message) error {
 }
 
 func (s *Session) AppendUsage(u Usage) error {
+	_, err := s.AppendUsageRecord(u)
+	return err
+}
+
+// AppendUsageRecord appends one provider receipt and returns the exact stored
+// value, including the Session-assigned durable CallID. Observers must receive
+// this returned record rather than their pre-append copy or later telemetry
+// cannot correlate the callback with the durable log.
+func (s *Session) AppendUsageRecord(u Usage) (Usage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if u.CallID == "" {
+		u.CallID = fmt.Sprintf("call:%s:%d", s.state.ID, s.seq+1)
+	}
+	usage, err := s.state.checkedUsage(u)
+	if err != nil {
+		return Usage{}, err
+	}
+	local, external, err := s.state.checkedObservedCost(u.CostMicroUSD, 0)
+	if err != nil {
+		return Usage{}, err
+	}
 	if err := s.append(RecordUsage, u); err != nil {
+		return Usage{}, err
+	}
+	s.state.Usage = usage
+	s.state.CostMicroUSD, s.state.ExternalCostMicroUSD = local, external
+	s.state.Calls++
+	s.state.recordProviderCallID(u.CallID)
+	s.state.recordUsageTarget(u.Target)
+	s.liveUsages = append(s.liveUsages, sequencedUsage{seq: s.seq, usage: u})
+	return u, nil
+}
+
+// AppendRetryReserve durably accounts for a failed provider attempt without
+// pretending it returned successful usage.
+func (s *Session) AppendRetryReserve(costMicroUSD int64) error {
+	if costMicroUSD == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reserve, err := checkedMicroUSDAdd(s.state.RetryReserveMicroUSD, costMicroUSD)
+	if err != nil {
 		return err
 	}
-	s.state.Usage = s.state.Usage.Add(u.Usage)
-	s.state.CostMicroUSD += u.CostMicroUSD
-	s.state.Calls++
+	if err := s.append(RecordRetryReserve, RetryReserve{CostMicroUSD: costMicroUSD}); err != nil {
+		return err
+	}
+	s.state.RetryReserveMicroUSD = reserve
 	return nil
 }
 
-// AppendRoute records §8.4's training signal for one turn.
+// BeginBudgetAttempt writes and syncs the conservative bound before a provider
+// request may be issued. The returned ID is the only token that can settle the
+// attempt; losing it is safe because replay keeps the attempt pending.
+func (s *Session) BeginBudgetAttempt(costMicroUSD int64) (string, error) {
+	if costMicroUSD <= 0 {
+		return "", fmt.Errorf("budget attempt cost must be positive")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := fmt.Sprintf("%s:%d", s.state.ID, s.seq+1)
+	p := BudgetAttempt{ID: id, CostMicroUSD: costMicroUSD}
+	if err := s.state.validateBudgetAttempt(p); err != nil {
+		return "", err
+	}
+	if err := s.append(RecordBudgetAttempt, p); err != nil {
+		return "", err
+	}
+	if err := s.state.applyBudgetAttempt(p); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SettleBudgetAttempt records the known outcome of a write-ahead attempt.
+// externalCostMicroUSD is zero for a call whose Usage is in this log and the
+// actual priced cost for a delegate/race call whose Usage lives elsewhere.
+func (s *Session) SettleBudgetAttempt(attemptID, outcome string, externalCostMicroUSD int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := BudgetSettlement{AttemptID: attemptID, Outcome: outcome, ExternalCostMicroUSD: externalCostMicroUSD}
+	if err := s.state.validateBudgetSettlement(p); err != nil {
+		return err
+	}
+	if err := s.append(RecordBudgetSettle, p); err != nil {
+		return err
+	}
+	return s.state.applyBudgetSettlement(p)
+}
+
+// AppendBudgetTransfer atomically attributes work from another authoritative
+// ledger to this continuing session. Source must be stable for that transfer;
+// duplicates are refused so a race verdict cannot silently double charge.
+func (s *Session) AppendBudgetTransfer(source string, externalCostMicroUSD, retryReserveMicroUSD int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := BudgetTransfer{Source: source, ExternalCostMicroUSD: externalCostMicroUSD, RetryReserveMicroUSD: retryReserveMicroUSD}
+	if err := s.state.validateBudgetTransfer(p); err != nil {
+		return err
+	}
+	if err := s.append(RecordBudgetTransfer, p); err != nil {
+		return err
+	}
+	return s.state.applyBudgetTransfer(p)
+}
+
+func (s *Session) MarkRaceBranchPending(originID string) error {
+	if originID == "" {
+		return fmt.Errorf("race branch origin is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.raceBranchOrigin != "" {
+		return fmt.Errorf("session is already a race branch")
+	}
+	if err := s.append(RecordRaceBranch, RaceBranch{OriginID: originID}); err != nil {
+		return err
+	}
+	s.state.raceBranchOrigin = originID
+	s.state.raceBranchPending = true
+	return nil
+}
+
+func (s *Session) FinalizeRaceBranch() error {
+	return s.finalizeRaceBranch(true)
+}
+
+// FinalizeRaceBranchAlternative makes a fully reconciled branch explicitly
+// resumable without letting --continue choose it over the user's verdict.
+func (s *Session) FinalizeRaceBranchAlternative() error {
+	return s.finalizeRaceBranch(false)
+}
+
+func (s *Session) finalizeRaceBranch(continuation bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.raceBranchOrigin == "" || !s.state.raceBranchPending {
+		return fmt.Errorf("session is not a pending race branch")
+	}
+	if err := s.append(RecordRaceBranch, RaceBranch{OriginID: s.state.raceBranchOrigin, Finalized: true, Continuation: continuation}); err != nil {
+		return err
+	}
+	s.state.raceBranchPending = false
+	s.state.raceBranchFinalized = true
+	s.state.raceBranchContinuation = continuation
+	return nil
+}
+
+func (s State) RaceBranchPending() bool { return s.raceBranchPending }
+
+func (s State) raceAlternative() bool {
+	return s.raceBranchOrigin != "" && s.raceBranchFinalized && !s.raceBranchContinuation
+}
+
+func (s *State) validateBudgetAttempt(p BudgetAttempt) error {
+	if p.ID == "" || p.CostMicroUSD <= 0 {
+		return fmt.Errorf("invalid pending attempt")
+	}
+	if _, exists := s.pendingBudgetAttempts[p.ID]; exists {
+		return fmt.Errorf("attempt %q is already pending", p.ID)
+	}
+	if _, err := checkedMicroUSDAdd(s.RetryReserveMicroUSD, p.CostMicroUSD); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *State) applyBudgetAttempt(p BudgetAttempt) error {
+	if err := s.validateBudgetAttempt(p); err != nil {
+		return err
+	}
+	if s.pendingBudgetAttempts == nil {
+		s.pendingBudgetAttempts = make(map[string]int64)
+	}
+	s.pendingBudgetAttempts[p.ID] = p.CostMicroUSD
+	reserve, _ := checkedMicroUSDAdd(s.RetryReserveMicroUSD, p.CostMicroUSD)
+	s.RetryReserveMicroUSD = reserve
+	return nil
+}
+
+func (s *State) validateBudgetSettlement(p BudgetSettlement) error {
+	bound, exists := s.pendingBudgetAttempts[p.AttemptID]
+	if p.AttemptID == "" || !exists || bound <= 0 {
+		return fmt.Errorf("attempt %q is not pending", p.AttemptID)
+	}
+	if p.ExternalCostMicroUSD < 0 {
+		return fmt.Errorf("external cost cannot be negative")
+	}
+	if _, _, err := s.checkedObservedCost(0, p.ExternalCostMicroUSD); err != nil {
+		return err
+	}
+	switch p.Outcome {
+	case BudgetOutcomeSucceeded:
+		if s.RetryReserveMicroUSD < bound {
+			return fmt.Errorf("pending attempt %q exceeds total retry reserve", p.AttemptID)
+		}
+		return nil
+	case BudgetOutcomeFailed:
+		if p.ExternalCostMicroUSD != 0 {
+			return fmt.Errorf("a failed attempt cannot carry observed external cost")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown budget outcome %q", p.Outcome)
+	}
+}
+
+func (s *State) applyBudgetSettlement(p BudgetSettlement) error {
+	if err := s.validateBudgetSettlement(p); err != nil {
+		return err
+	}
+	bound := s.pendingBudgetAttempts[p.AttemptID]
+	delete(s.pendingBudgetAttempts, p.AttemptID)
+	if p.Outcome == BudgetOutcomeSucceeded {
+		s.RetryReserveMicroUSD -= bound
+	}
+	local, external, _ := s.checkedObservedCost(0, p.ExternalCostMicroUSD)
+	s.CostMicroUSD, s.ExternalCostMicroUSD = local, external
+	return nil
+}
+
+func (s *State) validateBudgetTransfer(p BudgetTransfer) error {
+	if p.Source == "" {
+		return fmt.Errorf("budget transfer source is required")
+	}
+	if p.ExternalCostMicroUSD < 0 || p.RetryReserveMicroUSD < 0 {
+		return fmt.Errorf("budget transfer amounts cannot be negative")
+	}
+	if _, _, err := s.checkedObservedCost(0, p.ExternalCostMicroUSD); err != nil {
+		return err
+	}
+	if _, err := checkedMicroUSDAdd(s.RetryReserveMicroUSD, p.RetryReserveMicroUSD); err != nil {
+		return err
+	}
+	if s.appliedBudgetTransfers[p.Source] {
+		return fmt.Errorf("budget transfer %q was already applied", p.Source)
+	}
+	return nil
+}
+
+func (s *State) applyBudgetTransfer(p BudgetTransfer) error {
+	if err := s.validateBudgetTransfer(p); err != nil {
+		return err
+	}
+	if s.appliedBudgetTransfers == nil {
+		s.appliedBudgetTransfers = make(map[string]bool)
+	}
+	s.appliedBudgetTransfers[p.Source] = true
+	local, external, _ := s.checkedObservedCost(0, p.ExternalCostMicroUSD)
+	reserve, _ := checkedMicroUSDAdd(s.RetryReserveMicroUSD, p.RetryReserveMicroUSD)
+	s.CostMicroUSD, s.ExternalCostMicroUSD = local, external
+	s.RetryReserveMicroUSD = reserve
+	return nil
+}
+
+// BeginUsageWindow snapshots the durable sequence immediately before a routed
+// turn. The returned cursor is bound to this session and can only be consumed
+// by AppendRouteWithUsage.
+func (s *Session) BeginUsageWindow() UsageCursor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return UsageCursor{sessionID: s.state.ID, seq: s.seq}
+}
+
+// AppendRouteWithUsage fills a route's accounting from the exact durable
+// purpose=turn calls appended since cursor, then appends the route atomically
+// with respect to every other session writer. This avoids ledger subtraction:
+// concurrent background usage and retry-reserve settlement cannot enter the
+// route, and a decreasing or saturated aggregate can never yield a negative
+// delta.
+func (s *Session) AppendRouteWithUsage(cursor UsageCursor, r Route) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cursor.sessionID == "" || cursor.sessionID != s.state.ID || cursor.seq < 0 || cursor.seq > s.seq {
+		return errors.New("route usage cursor does not belong to this session boundary")
+	}
+	if cursor.seq <= s.lastRouteUsageCursor {
+		return errors.New("route usage cursor was already consumed")
+	}
+	var usage provider.Usage
+	var cost int64
+	var callIDs []string
+	seen := make(map[string]bool)
+	for _, record := range s.liveUsages {
+		if record.seq <= cursor.seq || record.usage.EffectivePurpose() != UsagePurposeTurn {
+			continue
+		}
+		if record.usage.CallID == "" || seen[record.usage.CallID] {
+			return errors.New("route usage has no unique durable call identity")
+		}
+		seen[record.usage.CallID] = true
+		var err error
+		usage, err = usage.CheckedAdd(record.usage.Usage)
+		if err != nil {
+			return fmt.Errorf("route usage accounting: %w", err)
+		}
+		cost, err = checkedMicroUSDAdd(cost, record.usage.CostMicroUSD)
+		if err != nil {
+			return fmt.Errorf("route cost accounting: %w", err)
+		}
+		callIDs = append(callIDs, record.usage.CallID)
+	}
+	r.Usage = usage
+	r.CostMicroUSD = cost
+	r.UsageCallIDs = callIDs
+	if err := s.appendRouteLocked(r); err != nil {
+		return err
+	}
+	s.lastRouteUsageCursor = cursor.seq
+	return nil
+}
+
+// AppendRoute records §8.4's training signal for one turn. Callers that own a
+// live model turn should use AppendRouteWithUsage so its accounting is bound
+// to durable provider-call identities.
 func (s *Session) AppendRoute(r Route) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.appendRouteLocked(r)
+}
+
+func (s *Session) appendRouteLocked(r Route) error {
+	if r.VerificationStatus == "" {
+		switch {
+		case r.Verified:
+			// Older callers only had Verified; a verified result necessarily ran.
+			r.VerificationRan = true
+			r.VerificationStatus = RouteVerificationPassed
+		case r.VerificationRan:
+			r.VerificationStatus = RouteVerificationFailed
+		default:
+			r.VerificationStatus = RouteVerificationUnavailable
+		}
+	}
+	if r.FailureKind != "" && !validRouteFailureKind(r.FailureKind) {
+		return fmt.Errorf("unknown route failure kind %q", r.FailureKind)
+	}
 	return s.append(RecordRoute, r)
+}
+
+func validRouteFailureKind(kind string) bool {
+	switch kind {
+	case RouteFailureProvider, RouteFailureBudget, RouteFailureContext, RouteFailureRoundLimit,
+		RouteFailureVerification, RouteFailureCancelled, RouteFailureInternal:
+		return true
+	default:
+		return false
+	}
 }
 
 // AppendRace records a paired trial's verdict. It lands on the session that
@@ -478,6 +1117,27 @@ func (s *Session) AppendNote(level, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.append(RecordNote, Note{Level: level, Text: text})
+}
+
+// AppendRuntimeBinding durably commits the tier, exact parameterized target,
+// and pin posture that a reopened process must reconstruct. Callers append it
+// only for permanent manual actions or committed automatic moves; temporary
+// one-turn and process-only inference-parameter overrides deliberately do not.
+func (s *Session) AppendRuntimeBinding(tier string, target provider.RouteTargetID, pinned bool) error {
+	if tier == "" || target == "" {
+		return fmt.Errorf("runtime binding requires a tier and target")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := RuntimeBinding{Tier: tier, Target: target, Pinned: pinned}
+	if p == s.state.RuntimeBinding {
+		return nil
+	}
+	if err := s.append(RecordRuntimeBinding, p); err != nil {
+		return err
+	}
+	s.state.RuntimeBinding = p
+	return nil
 }
 
 // AppendPin marks the current point in the conversation under a name. The
@@ -523,6 +1183,25 @@ func (s *Session) State() State {
 	out := s.state
 	out.Messages = append([]provider.Message(nil), s.state.Messages...)
 	out.Pins = append([]Pin(nil), s.state.Pins...)
+	out.UsageTargets = append([]string(nil), s.state.UsageTargets...)
+	if s.state.pendingBudgetAttempts != nil {
+		out.pendingBudgetAttempts = make(map[string]int64, len(s.state.pendingBudgetAttempts))
+		for id, amount := range s.state.pendingBudgetAttempts {
+			out.pendingBudgetAttempts[id] = amount
+		}
+	}
+	if s.state.appliedBudgetTransfers != nil {
+		out.appliedBudgetTransfers = make(map[string]bool, len(s.state.appliedBudgetTransfers))
+		for source, applied := range s.state.appliedBudgetTransfers {
+			out.appliedBudgetTransfers[source] = applied
+		}
+	}
+	if s.state.providerCallIDs != nil {
+		out.providerCallIDs = make(map[string]bool, len(s.state.providerCallIDs))
+		for id, recorded := range s.state.providerCallIDs {
+			out.providerCallIDs[id] = recorded
+		}
+	}
 	return out
 }
 

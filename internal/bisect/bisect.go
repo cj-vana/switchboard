@@ -20,7 +20,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/cj-vana/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
 )
 
 // Verdict is one verifier run's answer.

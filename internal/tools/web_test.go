@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // The search parser is written against a captured response, not the

@@ -3,15 +3,19 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/terminaltext"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // renderer writes a turn to a terminal. It tracks what kind of output it last
@@ -20,6 +24,7 @@ import (
 type renderer struct {
 	w     *bufio.Writer
 	color bool
+	mu    sync.Mutex
 
 	lastKind  string
 	atLineTop bool
@@ -91,29 +96,33 @@ func (r *renderer) line(s string) {
 
 func (r *renderer) ThinkingDelta(text string) {
 	r.section("thinking")
-	r.write(r.style(dim, text))
+	r.write(r.style(dim, terminaltext.Display(text)))
 	r.flush()
 }
 
 func (r *renderer) TextDelta(text string) {
 	r.section("text")
-	r.write(text)
+	r.write(terminaltext.Display(text))
 	r.flush()
 }
 
-func (r *renderer) ToolStart(name string, req permission.Request) {
+func (r *renderer) ToolStart(call provider.ToolUse, req permission.Request) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.section("tool")
-	r.line(r.style(bold, name) + " " + r.style(dim, describeRequest(req)))
+	r.line(r.style(bold, call.Name) + " " + r.style(dim, describeRequest(req)))
 	r.flush()
 }
 
-func (r *renderer) ToolEnd(name string, res tools.Result, took time.Duration) {
+func (r *renderer) ToolEnd(_ provider.ToolUse, _ permission.Request, res tools.Result, took time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	status := "ok in " + formatDuration(took)
 	if res.IsError {
 		status = "failed in " + formatDuration(took)
 	}
 
-	detail := firstLine(res.Content)
+	detail := firstLine(terminaltext.Display(res.Content))
 	if detail != "" {
 		status += ": " + detail
 	}
@@ -125,13 +134,15 @@ func (r *renderer) ToolEnd(name string, res tools.Result, took time.Duration) {
 	r.flush()
 }
 
+func (r *renderer) ToolBatchEnd(context.Context) {}
+
 func (r *renderer) Notice(level, text string) {
 	r.section("notice")
 	prefix := "  note: "
 	if level == "warn" || level == "error" {
 		prefix = "  " + level + ": "
 	}
-	r.line(r.style(dim, prefix+text))
+	r.line(r.style(dim, prefix+terminaltext.Display(text)))
 	r.flush()
 }
 
@@ -153,9 +164,38 @@ func describeRequest(req permission.Request) string {
 		return tools.Describe(req.Argv, req.Shell)
 	}
 	if req.Detail != "" {
-		return req.Detail
+		return terminaltext.Escape(req.Detail)
 	}
-	return req.Path
+	return terminaltext.Escape(req.Path)
+}
+
+func approvalDescription(req permission.Request) string {
+	return boundedApprovalText(describeRequest(req), 160)
+}
+
+func approvalReason(reason string) string {
+	return boundedApprovalText(terminaltext.Escape(reason), 120)
+}
+
+// boundedApprovalText keeps the executable, reach warnings, and decision
+// controls in the visible modal even when model-controlled argv is enormous.
+// The prefix identifies the executable and early flags; the tail retains the
+// target/scope. The marker makes it impossible to mistake this for the full
+// byte-for-byte command recorded in the durable audit.
+func boundedApprovalText(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	const markerRoom = 36
+	content := limit - markerRoom
+	if content < 16 {
+		content = 16
+	}
+	head := content * 2 / 3
+	tail := content - head
+	omitted := len(runes) - head - tail
+	return string(runes[:head]) + fmt.Sprintf(" … [%d chars omitted] … ", omitted) + string(runes[len(runes)-tail:])
 }
 
 // formatDuration keeps a fast tool from reporting "0s", which reads as a
@@ -195,15 +235,18 @@ type terminalAsker struct {
 func (a *terminalAsker) Ask(_ context.Context, req permission.Request, out permission.Outcome) (permission.Response, error) {
 	r := a.out
 	r.section("prompt")
-	r.line(r.style(bold, "approve "+req.Tool) + " " + describeRequest(req))
-	r.line(r.style(dim, "  "+out.Reason))
+	r.line(r.style(bold, "approve "+terminaltext.Escape(req.Tool)) + " " + approvalDescription(req))
+	r.line(r.style(dim, "  "+approvalReason(out.Reason)))
 
 	// Design principle 4: a prompt is not containment, and the moment the user
 	// approves is the moment that has to be plain.
 	if out.SandboxAbsent {
-		r.line(r.style(dim, "  this command is not sandboxed and can do anything your account can"))
+		r.line(r.style(dim, "  FULL HOST ACCESS: this command is not sandboxed; it can access files outside the workspace and the network"))
 	}
-	r.line("  [y] once   [a] always, this exact command   [n] no")
+	if req.Effect == permission.EffectExecute && req.Network {
+		r.line(r.style(dim, "  FULL NETWORK ACCESS REQUESTED: this command can send workspace data off this machine"))
+	}
+	r.line("  [y] once   [a] " + permissionRememberHint(req) + "   [n] no")
 	r.w.WriteString("  > ")
 	r.atLineTop = false
 	r.flush()
@@ -226,6 +269,16 @@ func (a *terminalAsker) Ask(_ context.Context, req permission.Request, out permi
 	default:
 		return permission.Response{}, nil
 	}
+}
+
+func permissionRememberHint(req permission.Request) string {
+	if req.Effect != permission.EffectExternal {
+		return "always, this exact command"
+	}
+	if req.Path != "" {
+		return "allow " + terminaltext.Escape(req.Path) + " for the rest of the session"
+	}
+	return "allow this tool for the rest of the session"
 }
 
 // terminalQuestioner resolves the ask tool against the same stdin the REPL

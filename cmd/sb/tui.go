@@ -15,20 +15,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/checkpoint"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/delegate"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/skills"
-	"github.com/cj-vana/switchboard/internal/tools"
-	"github.com/cj-vana/switchboard/internal/trust"
+	"github.com/switchboard-code/switchboard/internal/advisor"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/delegate"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/skills"
+	"github.com/switchboard-code/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/trust"
 )
 
 // Messages flowing from the loop goroutine (and async commands) into the
@@ -38,16 +39,24 @@ type deltaMsg struct {
 	text     string
 }
 type toolStartMsg struct {
+	id   string
 	name string
 	req  permission.Request
 }
 type toolEndMsg struct {
+	id   string
 	name string
 	res  tools.Result
 	took time.Duration
 }
 type noticeMsg struct {
 	level, text string
+
+	// operation identifies an exclusive asynchronous UI operation. Such a
+	// notice is also its completion signal, so Update can release busy state
+	// only if it still belongs to the session that launched it.
+	operation uint64
+	sourceID  string
 }
 type usageMsg struct{ u session.Usage }
 type askMsg struct {
@@ -56,12 +65,24 @@ type askMsg struct {
 	respond chan permission.Response
 }
 type turnDoneMsg struct {
-	err   error
-	after session.State
+	generation uint64
+	err        error
+	after      session.State
+}
+type turnPlanMsg struct {
+	generation uint64
+	prompt     string
+	images     []provider.Image
+	tier       config.Tier
+	client     provider.Provider
+	note       string
+	plan       turnPlan
+	err        error
 }
 type tierNowMsg struct {
 	line string
 	rank int // destination rung, for the junction marker's heat color
+	tier config.Tier
 
 	// abandoned is the priced warmth the move left behind, "" when there
 	// was nothing honest to price. It rides the same message as the move
@@ -69,23 +90,47 @@ type tierNowMsg struct {
 	abandoned string
 }
 type tierSwitchMsg struct {
-	tier   config.Tier
-	client provider.Provider
-	silent bool   // a /tN override restoring what it borrowed, not a user switch
-	note   string // a fallback substitution, rendered before content is sent
-	err    error
+	tier      config.Tier
+	client    provider.Provider
+	silent    bool   // a /tN override restoring what it borrowed, not a user switch
+	note      string // a fallback substitution, rendered before content is sent
+	err       error
+	operation uint64
+	sourceID  string
 }
 type sessionSwapMsg struct {
-	sess   *session.Session
-	tier   config.Tier
-	client provider.Provider
-	fresh  bool
-	note   string // rendered after the swap; how a fork says where it came from
-	err    error
+	sess     *session.Session
+	tier     config.Tier
+	client   provider.Provider
+	fresh    bool
+	note     string // rendered after the swap; how a fork says where it came from
+	warnNote bool   // a fallback substitution, persisted on the resumed session
+	pinned   bool   // reconstructed durable manual/automatic routing posture
+
+	// preserveRuntimeTarget keeps a process-only /think parameter change out
+	// of a derived session. Ordinary clear/fork/retry/compact operations carry
+	// the previous durable target even while the new process keeps serving the
+	// live parameter override. Resume and race select their target explicitly.
+	preserveRuntimeTarget bool
+	err                   error
+
+	// operation/sourceID bind an asynchronous swap to the exclusive operation
+	// and source session that launched it. A late result can never replace a
+	// session that has since moved on.
+	operation uint64
+	sourceID  string
+
+	// release runs after the new session has been installed (or the swap was
+	// rejected). Fork/compaction use it to keep asynchronous advisor calls out
+	// of the source ledger between their snapshot and the bind.
+	release func()
 
 	// andThen, when set, runs once the swap has landed — how /retry sends
 	// its replay into the forked session rather than the one it left.
 	andThen tea.Cmd
+	// continueTurn makes onSessionSwap claim turn-planning ownership before
+	// returning andThen, closing the event-loop gap between bind and replay.
+	continueTurn bool
 
 	// keepFold carries a queued watch or bisect verdict across the swap.
 	// A fold is a report to the conversation that made the edits, so only
@@ -95,12 +140,14 @@ type sessionSwapMsg struct {
 	keepFold bool
 }
 type overrideProbeMsg struct {
-	prompt string
-	images []provider.Image
-	tier   config.Tier
-	client provider.Provider
-	note   string
-	err    error
+	generation uint64
+	prompt     string
+	images     []provider.Image
+	tier       config.Tier
+	client     provider.Provider
+	note       string
+	plan       turnPlan
+	err        error
 }
 type updateCheckMsg struct {
 	latest string
@@ -114,6 +161,25 @@ type copyMsg struct {
 }
 type disarmQuitMsg struct{}
 type doctorDoneMsg struct{ report string }
+type extensionActionMsg struct {
+	kind      string
+	output    string
+	err       error
+	operation uint64
+	sourceID  string
+}
+
+type turnExecution struct {
+	generation uint64
+	watcher    *watcher
+	advisor    *advisor.Advisor
+	startedOn  config.Tier
+	before     session.State
+	usage      session.UsageCursor
+	started    time.Time
+	decision   *route.Decision
+	features   route.SessionFeatures
+}
 
 func noticeCmd(level, text string) tea.Cmd {
 	return func() tea.Msg { return noticeMsg{level: level, text: text} }
@@ -219,17 +285,33 @@ type tuiModel struct {
 	// exit that left it hanging would leave the turn unable to end.
 	pendingQuestion chan tools.Answer
 
-	restoreTier *config.Tier
-	lastTitle   string
-	quitArmed   bool
-	quitting    bool
+	restoreTier      *config.Tier
+	restoreBinding   agent.Binding
+	restoreSticky    route.StickySnapshot
+	restoreStickySet bool
+	lastTitle        string
+	quitArmed        bool
+	quitting         bool
 
 	// watchFails is the last /watch run's failure count for the status
 	// chip: 0 is green, -1 means the verifier itself could not run.
 	watchFails int
 
-	turnCtx    context.Context
-	initialCmd tea.Cmd
+	turnCtx        context.Context
+	turnGeneration uint64
+	turnPlanning   bool
+
+	// An operation owns the same busy/cancel surface as a turn while work that
+	// can replace or materially mutate the session runs off the UI goroutine.
+	// It serializes /clear, /resume, /fork, /retry, /compact, /learn, and race
+	// setup, plus extension and advisor lifecycle actions, and makes every late
+	// result conditional on the launching session.
+	operationActive     bool
+	operationCancelling bool
+	operationGeneration uint64
+	operationSourceID   string
+	operationName       string
+	initialCmd          tea.Cmd
 }
 
 // runTUI is the Bubble Tea front end: same wiring as the REPL, with the
@@ -276,25 +358,27 @@ func runTUI(
 
 	obs := &tuiObserver{}
 	app := &tuiApp{
-		loop:       loop,
-		store:      store,
-		config:     cfg,
-		catalog:    cat,
-		tier:       tier,
-		providers:  reg,
-		capability: capability,
-		workspace:  workspace,
-		route:      routeDec,
-		sticky:     sticky,
-		obs:        obs,
-		trust:      trustStore,
-		mcp:        mcpEnv,
-		undo:       undoRec,
-		agents:     agents,
-		agentNotes: agentNotes,
-		skills:     skillList,
-		budget:     budget,
-		onboarded:  onboarded,
+		loop:        loop,
+		store:       store,
+		config:      cfg,
+		catalog:     cat,
+		tier:        tier,
+		runtimeTier: tier,
+		providers:   reg,
+		capability:  capability,
+		workspace:   workspace,
+		route:       routeDec,
+		sticky:      sticky,
+		obs:         obs,
+		trust:       trustStore,
+		mcp:         mcpEnv,
+		undo:        undoRec,
+		agents:      agents,
+		agentNotes:  agentNotes,
+		skills:      skillList,
+		budget:      budget,
+		caches:      newCacheSet(tier.Target, loop.Cache),
+		onboarded:   onboarded,
 	}
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()
@@ -309,7 +393,7 @@ func runTUI(
 	// a delegate's stumbles must never escalate the primary.
 	subagentForward.set(obs)
 	app.watcher = newWatcher(obs, sticky, len(cfg.Tiers)-1, app.moveTo)
-	loop.Observer = app.watcher
+	loop.SetObserver(app.watcher)
 	loop.Asker = &tuiAsker{p: p}
 	loop.Tools.SetQuestioner(&tuiQuestioner{p: p})
 	// The injection seam is composed once and never swapped: the advisor and
@@ -342,7 +426,12 @@ func runTUI(
 	// An advisor slot in the config is the standing request to watch every
 	// session; /advisor off remains the per-session override.
 	if _, bound := cfg.Slots["advisor"]; bound {
-		initial = append(initial, startAdvisor(app))
+		ctx, generation, sourceID, startErr := m.startOperation("advisor on")
+		if startErr != nil {
+			m.addNotice("error", "advisor could not start: "+startErr.Error())
+		} else {
+			initial = append(initial, startAdvisor(ctx, app, generation, sourceID))
+		}
 	}
 	// The tab's title answers "which terminal was that" for a user with six
 	// of them: this workspace, this tier. It goes through syncTitle so the
@@ -407,6 +496,11 @@ func newTUIModel(app *tuiApp, th *theme, md *markdown, ta textarea.Model) *tuiMo
 	if app.watchSt == nil {
 		app.watchSt = &watchState{}
 	}
+	app.runtimeMu.Lock()
+	if app.runtimeTier.ID == "" {
+		app.runtimeTier = app.tier
+	}
+	app.runtimeMu.Unlock()
 	m := &tuiModel{
 		app:       app,
 		th:        th,
@@ -487,6 +581,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case noticeMsg:
+		if msg.operation != 0 {
+			return m, m.onOperationNotice(msg)
+		}
 		m.addNotice(msg.level, msg.text)
 		return m, nil
 
@@ -540,12 +637,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ring()
 		return m, tea.Batch(m.onTurnDone(msg), m.syncTitle())
 
+	case turnPlanMsg:
+		return m, m.onTurnPlan(msg)
+
 	case tierNowMsg:
 		// The policy moved the primary mid-turn: the junction marker wears
 		// the destination rung's heat, the same color every routing surface
 		// speaks. The warmth the move priced rides beside it, in the
 		// transcript and in /why's record both.
 		m.tr.finalize(m.tr.last())
+		m.app.tier = msg.tier
 		m.tr.add(&entry{kind: kindNotice, level: "route", text: msg.line, rank: msg.rank})
 		m.routeLog = append(m.routeLog, msg.line)
 		if msg.abandoned != "" {
@@ -617,6 +718,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case raceProbeMsg:
 		return m, m.onRaceProbe(msg)
 
+	case raceSetupMsg:
+		return m, m.onRaceSetup(msg)
+
 	case raceToolMsg:
 		m.onRaceTool(msg)
 		return m, nil
@@ -636,8 +740,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.enqueue(msg.prompt, "")
 
 	case advisorReadyMsg:
-		m.onAdvisorReady(msg)
-		return m, nil
+		return m, m.onAdvisorReady(msg)
+
+	case extensionActionMsg:
+		return m, m.onExtensionAction(msg)
 
 	case disarmQuitMsg:
 		m.quitArmed = false
@@ -694,6 +800,9 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case "shift+tab":
+		if m.busy || m.turnPlanning || m.operationActive {
+			return noticeCmd("warn", "a turn is running; esc to interrupt it before changing mode")
+		}
 		return m.cycleMode()
 	case "ctrl+t":
 		return m.openTierPicker()
@@ -741,7 +850,7 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		if m.busy {
 			return noticeCmd("warn", "a turn is running; esc to interrupt it first")
 		}
-		return m.app.switchTier(m.app.config.Tiers[idx].ID)
+		return m.switchTier(m.app.config.Tiers[idx].ID)
 	}
 
 	if m.suggestionsVisible() {
@@ -838,8 +947,33 @@ func (m *tuiModel) interrupt() tea.Cmd {
 		m.addNotice("", "cancelling the race; the session stays where it was")
 		return nil
 	}
+	if m.operationActive && m.turnCancel != nil {
+		name := m.operationName
+		if !m.operationCancelling {
+			m.operationCancelling = true
+			m.turnCancel()
+			// Keep exclusive ownership until the command reports completion. A
+			// metered provider may ignore cancellation long enough to settle its
+			// durable attempt; a fork in that gap would copy pending debt that is
+			// later settled only on the source.
+			m.addNotice("", "cancelling "+name+"; waiting for its ledger to settle")
+		}
+		return nil
+	}
 	if m.busy && m.turnCancel != nil {
 		m.turnCancel()
+		if m.turnPlanning {
+			// Invalidate the async result before freeing the prompt. A provider
+			// probe is allowed to return after cancellation; its old generation
+			// must never bind a target or launch a model call.
+			m.turnGeneration++
+			m.turnPlanning = false
+			m.busy = false
+			m.turnCancel = nil
+			m.turnCtx = nil
+			m.addNotice("", "routing cancelled; nothing was sent")
+			return m.nextQueuedTurn()
+		}
 		m.addNotice("", "cancelling the turn; the session stays resumable")
 		return nil
 	}
@@ -904,21 +1038,13 @@ func (m *tuiModel) enqueue(prompt, override string) tea.Cmd {
 }
 
 func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
+	var overrideTier config.Tier
 	if override != "" {
-		tier, ok := m.app.config.Tier(override)
+		var ok bool
+		overrideTier, ok = m.app.config.Tier(override)
 		if !ok {
 			return noticeCmd("error", "no tier "+override+" is configured; try /tiers")
 		}
-		probe := func(p string) tea.Cmd {
-			return func() tea.Msg {
-				probed, client, note, err := m.app.providers.probeTierFallback(context.Background(), tier)
-				return overrideProbeMsg{prompt: p, tier: probed, client: client, note: note, err: err}
-			}
-		}
-		if leaks := credential.ScanPrompt(prompt); len(leaks) > 0 {
-			return m.openSecretGate(leaks, prompt, probe)
-		}
-		return probe(prompt)
 	}
 
 	// The transcript shows what was typed; the model gets that plus what the
@@ -927,77 +1053,318 @@ func (m *tuiModel) startTurn(prompt, override string) tea.Cmd {
 	m.addUser(prompt)
 	expanded, images := m.expandMentions(prompt)
 	prompt = m.watchContext(m.adviceContext(m.shellContext(expanded)))
-	if len(images) > 0 {
-		if reason, refused := m.visionRefusal(); refused {
-			m.addNotice("error", reason)
-			return nil
+	launch := func(p string) tea.Cmd {
+		if override != "" {
+			return m.launchOverrideTurn(p, images, overrideTier)
 		}
+		return m.launchTurn(p, images)
 	}
 	// The scan runs on the expanded prompt, because an @mentioned .env or a
 	// `!env` transcript is exactly the outbound copy a key rides in on.
 	if leaks := credential.ScanPrompt(prompt); len(leaks) > 0 {
-		return m.openSecretGate(leaks, prompt, func(p string) tea.Cmd {
-			return m.launchTurn(p, images)
-		})
+		return m.openSecretGate(leaks, prompt, launch)
 	}
-	return m.launchTurn(prompt, images)
+	return launch(prompt)
+}
+
+// launchOverrideTurn uses the same fully expanded opening as an automatically
+// routed turn, but pins feasibility to the requested rung for this turn only.
+func (m *tuiModel) launchOverrideTurn(prompt string, images []provider.Image, tier config.Tier) tea.Cmd {
+	ctx, generation := m.startPlanning()
+	sticky := m.app.sticky
+	return func() tea.Msg {
+		result := overrideProbeMsg{generation: generation, prompt: prompt, images: images}
+		if err := ctx.Err(); err != nil {
+			result.err = err
+			return result
+		}
+		opening := provider.UserText(prompt)
+		for _, image := range images {
+			opening.Content = append(opening.Content, image)
+		}
+		plan := prospectiveTurnPlan(m.app.loop, sticky, opening, m.app.workspace)
+		result.plan = plan
+		rank := m.app.rankOf(tier)
+		if rank < 0 {
+			result.err = fmt.Errorf("the requested tier %s is not on the configured ladder", tier.ID)
+			return result
+		}
+		probed, client, note, err := m.app.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
+			return checkTurnFeasible(m.app.loop, m.app.catalog, m.app.providers, m.app.budget, candidate, rank, plan, opening)
+		})
+		if err != nil {
+			result.err = fmt.Errorf("the requested tier %s cannot serve the turn: %w", tier.ID, err)
+			return result
+		}
+		if err := ctx.Err(); err != nil {
+			result.err = err
+			return result
+		}
+		retargetTurnPlan(&plan, m.app.loop, m.app.catalog, m.app.caches, probed, rank, opening)
+		result.plan = plan
+		result.tier, result.client, result.note = probed, client, note
+		return result
+	}
+}
+
+// startPlanning gives every async route/probe a cancellable generation that
+// stays with the model turn if planning succeeds.
+func (m *tuiModel) startPlanning() (context.Context, uint64) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.turnGeneration++
+	m.turnCtx = ctx
+	m.turnCancel = cancel
+	m.turnPlanning = true
+	m.busy = true
+	return ctx, m.turnGeneration
+}
+
+func (m *tuiModel) finishPlanning() {
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.turnCancel = nil
+	m.turnCtx = nil
+	m.turnPlanning = false
+	m.busy = false
+}
+
+// startOperation gives an asynchronous session-affecting action exclusive
+// ownership of the prompt and a cancellable generation. The model is the sole
+// caller, so the check and claim are atomic with respect to every UI command.
+func (m *tuiModel) startOperation(name string) (context.Context, uint64, string, error) {
+	if m.busy || m.turnPlanning || m.operationActive {
+		return nil, 0, "", fmt.Errorf("a turn or session operation is already running")
+	}
+	if m.app == nil || m.app.loop == nil || m.app.loop.Session == nil {
+		return nil, 0, "", fmt.Errorf("there is no active session")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.operationGeneration++
+	m.operationActive = true
+	m.operationCancelling = false
+	m.operationSourceID = m.app.loop.Session.ID()
+	m.operationName = name
+	m.turnCtx = ctx
+	m.turnCancel = cancel
+	m.busy = true
+	return ctx, m.operationGeneration, m.operationSourceID, nil
+}
+
+func (m *tuiModel) operationMatches(generation uint64, sourceID string) bool {
+	return generation != 0 && m.operationActive &&
+		generation == m.operationGeneration && sourceID == m.operationSourceID &&
+		m.app != nil && m.app.loop != nil && m.app.loop.Session != nil &&
+		m.app.loop.Session.ID() == sourceID && !m.turnPlanning
+}
+
+// finishOperation releases exclusive ownership. keepBusy hands ownership to a
+// race whose arms are about to launch; ordinary completions free the prompt.
+func (m *tuiModel) finishOperation(generation uint64, keepBusy bool) bool {
+	if generation == 0 || !m.operationActive || generation != m.operationGeneration {
+		return false
+	}
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.turnCancel = nil
+	m.turnCtx = nil
+	m.operationActive = false
+	m.operationCancelling = false
+	m.operationSourceID = ""
+	m.operationName = ""
+	m.busy = keepBusy
+	return true
+}
+
+func (m *tuiModel) onOperationNotice(msg noticeMsg) tea.Cmd {
+	if !m.operationMatches(msg.operation, msg.sourceID) {
+		return nil
+	}
+	m.finishOperation(msg.operation, false)
+	if msg.text != "" {
+		m.addNotice(msg.level, msg.text)
+	}
+	return m.nextQueuedTurn()
 }
 
 // launchTurn is startTurn's tail, split off so the secret gate can hold a
 // turn while the user decides what leaves the machine.
 func (m *tuiModel) launchTurn(prompt string, images []provider.Image) tea.Cmd {
-	m.beginTurn(prompt)
-	go m.runTurn(m.turnCtx, prompt, images)
-	return m.spin.Tick
+	ctx, generation := m.startPlanning()
+	currentTier := m.app.tier
+	binding := m.app.loop.Binding()
+	sticky := m.app.sticky
+	return func() tea.Msg {
+		result := turnPlanMsg{generation: generation, prompt: prompt, images: images}
+		if err := ctx.Err(); err != nil {
+			result.err = err
+			return result
+		}
+		opening := provider.UserText(prompt)
+		for _, image := range images {
+			opening.Content = append(opening.Content, image)
+		}
+		if _, onLadder := m.app.config.Tier(currentTier.ID); !onLadder {
+			result.plan = prospectiveTurnPlan(m.app.loop, sticky, opening, m.app.workspace)
+			probed, client := currentTier, binding.Provider
+			if m.app.providers != nil {
+				var err error
+				probed, client, err = m.app.providers.probeTier(ctx, currentTier)
+				if err != nil {
+					result.err = fmt.Errorf("the current target cannot serve the turn: %w", err)
+					return result
+				}
+			}
+			if err := checkTurnFeasible(m.app.loop, m.app.catalog, m.app.providers, m.app.budget,
+				probed, 0, result.plan, opening); err != nil {
+				result.err = fmt.Errorf("the current target cannot serve the turn: %w", err)
+				return result
+			}
+			result.tier = probed
+			result.client = client
+			result.err = ctx.Err()
+			return result
+		}
+		tier, client, note, plan, err := resolveUserTurn(ctx, m.app.loop, m.app.config, m.app.catalog,
+			m.app.providers, m.app.budget, m.app.caches, sticky, currentTier, binding.Provider, opening, m.app.workspace)
+		result.plan = plan
+		if err != nil {
+			result.err = err
+			return result
+		}
+		if err := ctx.Err(); err != nil {
+			result.err = err
+			return result
+		}
+		result.tier, result.client, result.note = tier, client, note
+		return result
+	}
 }
 
-// visionRefusal says why an attached image cannot ride to the active
-// target. The evidence order is the §4 one: a live probe that attested
-// image input wins, then a catalog entry that carries vision from its own
-// verification; with neither, the attach is refused with the reason rather
-// than sent to fail — or worse, to be silently ignored.
-func (m *tuiModel) visionRefusal() (string, bool) {
-	target := m.app.tier.Target
-	if attested, _ := m.app.providers.probedVision(target); attested {
-		return "", false
+func (m *tuiModel) onTurnPlan(msg turnPlanMsg) tea.Cmd {
+	if msg.generation != m.turnGeneration || !m.turnPlanning {
+		return nil
 	}
-	if info, _, ok := m.app.catalog.Lookup(target); ok && info.Vision {
-		return "", false
+	if msg.err != nil {
+		m.finishPlanning()
+		if !errors.Is(msg.err, context.Canceled) {
+			m.addNotice("error", "routing refused the turn: "+msg.err.Error())
+		}
+		return m.nextQueuedTurn()
 	}
-	return string(target.ID()) + " has no evidence it takes images — neither its live probe nor the catalog says so; " +
-		"switch to a rung whose model does, or send the prompt without the image mention", true
+	if msg.tier.ID != m.app.tier.ID || msg.tier.Target.ID() != m.app.tier.Target.ID() {
+		pinned := m.app.sticky != nil && m.app.sticky.Pinned()
+		if err := persistRuntimeBinding(m.app.loop.Session, msg.tier, pinned); err != nil {
+			m.finishPlanning()
+			m.addNotice("error", "automatic tier selection was not saved: "+err.Error())
+			return m.nextQueuedTurn()
+		}
+		_, oldBinding := m.app.runtimeSnapshot()
+		abandoned := ""
+		if oldBinding.Target.ID() != msg.tier.Target.ID() {
+			abandoned = abandonedCacheNote(oldBinding.Cache, m.app.catalog, time.Now())
+		}
+		m.app.tier = msg.tier
+		m.app.bindRuntime(msg.tier, msg.client)
+		if abandoned != "" {
+			m.addInfo(abandoned)
+			m.routeLog = append(m.routeLog, abandoned)
+			m.app.loop.Session.AppendNote("info", abandoned)
+		}
+		m.tierLine = m.app.tierLine()
+		m.refreshCtxWindow()
+		m.recordMove(m.app.rankOf(msg.tier))
+	}
+	if msg.note != "" {
+		m.addNotice("warn", msg.note)
+		m.app.loop.Session.AppendNote("warn", msg.note)
+	}
+	if msg.plan.Decision.Source != "" {
+		m.app.route = &msg.plan.Decision
+		m.app.routeFeatures = msg.plan.Features
+		routeLine := fmt.Sprintf("%s: %s", msg.plan.Decision.Tier, msg.plan.Decision.Rationale)
+		m.addNotice("route", routeLine)
+		m.routeLog = append(m.routeLog, routeLine)
+	} else {
+		m.app.route = nil
+		m.app.routeFeatures = msg.plan.Features
+	}
+	if m.app.sticky != nil {
+		if rank := m.app.rankOf(m.app.tier); rank >= 0 {
+			m.app.sticky.Rebase(rank)
+		}
+	}
+	m.turnPlanning = false
+	m.beginTurn(msg.prompt)
+	m.launchModelTurn(msg.prompt, msg.images)
+	return m.spin.Tick
 }
 
 // onOverrideProbe rebinds to the named tier for one turn, remembering what to
 // restore when it ends.
 func (m *tuiModel) onOverrideProbe(msg overrideProbeMsg) tea.Cmd {
-	if msg.err != nil {
-		m.addNotice("error", msg.err.Error())
+	if msg.generation != m.turnGeneration || !m.turnPlanning {
 		return nil
 	}
-	prev := m.app.tier
-	m.restoreTier = &prev
-	abandoned := abandonedCacheNote(m.app.loop.Cache, m.app.catalog, time.Now())
-	m.app.tier = msg.tier
-	m.app.loop.Target = msg.tier.Target
-	m.app.loop.Provider = msg.client
-	m.app.loop.Cache = cacheFor(msg.tier.Target, m.app.catalog)
-	if abandoned != "" {
-		m.addInfo(abandoned)
-		m.routeLog = append(m.routeLog, abandoned)
-		m.app.loop.Session.AppendNote("info", abandoned)
+	if msg.err != nil {
+		m.finishPlanning()
+		if !errors.Is(msg.err, context.Canceled) {
+			m.addNotice("error", msg.err.Error())
+		}
+		return m.nextQueuedTurn()
 	}
-	m.tierLine = m.app.tierLine()
-	m.refreshCtxWindow()
-	m.recordMove(m.app.rankOf(msg.tier))
-
-	m.addUser(msg.prompt)
+	m.applyOverrideBinding(msg)
+	m.turnPlanning = false
 	m.beginTurn(msg.prompt)
-	go m.runTurn(m.turnCtx, msg.prompt, msg.images)
+	m.launchModelTurn(msg.prompt, msg.images)
 	return m.spin.Tick
 }
 
+func (m *tuiModel) applyOverrideBinding(msg overrideProbeMsg) {
+	prev, binding := m.app.runtimeSnapshot()
+	m.restoreTier = &prev
+	m.restoreBinding = binding
+	m.restoreStickySet = m.app.sticky != nil
+	if m.app.sticky != nil {
+		m.restoreSticky = m.app.sticky.Snapshot()
+	}
+	changed := msg.tier.ID != m.app.tier.ID || msg.tier.Target.ID() != m.app.tier.Target.ID()
+	if changed {
+		m.app.tier = msg.tier
+		m.app.bindRuntime(msg.tier, msg.client)
+		m.tierLine = m.app.tierLine()
+		m.refreshCtxWindow()
+	}
+	rank := m.app.rankOf(msg.tier)
+	if m.app.sticky != nil && rank >= 0 {
+		m.app.sticky.Pin(rank)
+	}
+	m.app.routeFeatures = msg.plan.Features
+	m.app.route = &route.Decision{
+		Tier: msg.tier.ID, Target: msg.tier.Target.ID(), Confidence: 1,
+		Source: route.SourceUserPin, Rationale: "one-turn tier override requested by you",
+		PolicyRevision: route.PolicyRevision, EstimatedCost: msg.plan.Decision.EstimatedCost,
+	}
+}
+
+func (m *tuiModel) nextQueuedTurn() tea.Cmd {
+	if len(m.queue) == 0 || m.busy {
+		return nil
+	}
+	next := m.queue[0]
+	m.queue = m.queue[1:]
+	return m.startTurn(next, "")
+}
+
 func (m *tuiModel) beginTurn(prompt string) {
+	if m.turnCtx == nil || m.turnCancel == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		m.turnGeneration++
+		m.turnCancel = cancel
+		m.turnCtx = ctx
+	}
+	m.turnPlanning = false
 	m.busy = true
 	m.started = time.Now()
 	m.turnIn, m.turnOut = 0, 0
@@ -1006,18 +1373,39 @@ func (m *tuiModel) beginTurn(prompt string) {
 	m.turnStarted = m.app.tier
 	m.turnBefore = m.app.loop.Session.State()
 	m.tr.scrollToBottom()
-	ctx, cancel := context.WithCancel(context.Background())
-	m.turnCancel = cancel
-	m.turnCtx = ctx
-	m.app.watchSt.beginTurn(ctx)
+	m.app.watchSt.beginTurn(m.turnCtx)
+}
+
+func (m *tuiModel) launchModelTurn(prompt string, images []provider.Image) {
+	decision := m.app.route
+	if decision != nil {
+		copy := *decision
+		decision = &copy
+	}
+	features := m.app.routeFeatures
+	features.RepoLanguages = append([]string(nil), features.RepoLanguages...)
+	run := turnExecution{
+		generation: m.turnGeneration,
+		watcher:    m.app.watcher,
+		advisor:    m.app.currentAdvisor(),
+		startedOn:  m.turnStarted,
+		before:     m.turnBefore,
+		usage:      m.app.loop.Session.BeginUsageWindow(),
+		started:    m.started,
+		decision:   decision,
+		features:   features,
+	}
+	go m.runTurn(m.turnCtx, prompt, images, run)
 }
 
 // runTurn drives one turn on its own goroutine. Everything it reports arrives
 // as messages; the session stays the only thing it writes.
-func (m *tuiModel) runTurn(ctx context.Context, prompt string, images []provider.Image) {
-	m.app.watcher.StartTurn()
-	if m.app.advisor != nil {
-		m.app.advisor.StartTurn(prompt)
+func (m *tuiModel) runTurn(ctx context.Context, prompt string, images []provider.Image, run turnExecution) {
+	if run.watcher != nil {
+		run.watcher.StartTurn()
+	}
+	if run.advisor != nil {
+		run.advisor.StartTurn(prompt)
 	}
 	opening := provider.UserText(prompt)
 	for _, img := range images {
@@ -1026,23 +1414,37 @@ func (m *tuiModel) runTurn(ctx context.Context, prompt string, images []provider
 	err := m.app.loop.TurnMessage(ctx, opening)
 
 	after := m.app.loop.Session.State()
-	if rerr := appendRouteRecord(m.app.loop.Session, prompt, m.turnStarted, m.app.tier, m.turnBefore, after, m.started, err, m.app.route, m.app.sticky); rerr != nil {
+	moves := 0
+	if run.watcher != nil {
+		moves = run.watcher.MoveCount()
+	}
+	endedOn, _ := m.app.runtimeSnapshot()
+	if rerr := appendRouteRecord(m.app.loop.Session, prompt, run.startedOn, endedOn, run.before, run.usage, run.started, err, run.decision, run.features, moves); rerr != nil {
 		m.app.p.Send(noticeMsg{level: "warn", text: "the routing record for this turn was not saved: " + rerr.Error()})
 	}
-	m.app.p.Send(turnDoneMsg{err: err, after: after})
+	m.app.p.Send(turnDoneMsg{generation: run.generation, err: err, after: after})
 }
 
 func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
+	if msg.generation != m.turnGeneration {
+		return nil
+	}
 	m.busy = false
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
 	m.turnCancel = nil
 	m.turnCtx = nil
+	m.turnPlanning = false
 	// The final round's edits have no later round boundary; this is theirs.
 	// Batched into every exit path, because a tier restore or a queued
 	// prompt does not unhappen the edits.
 	watchCmd := m.watchTurnEnd()
 	m.tr.finalizeAll()
 	m.refreshCost(msg.after)
-	m.app.route = nil // the opening decision describes the opening choice only
+	// Keep the completed turn's opening decision inspectable through /why.
+	// The next turn replaces it before sending anything, and a manual switch
+	// below replaces it with explicit user-pin provenance.
 
 	// The working line's past tense: what ran, for how long, on how many
 	// tokens, said once and left in the record. It speaks the rail's own
@@ -1068,15 +1470,11 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		m.addNotice("error", msg.err.Error())
 	}
 
-	// A /tN override borrows a tier for one turn. Restoring over a mid-turn
-	// escalation would undo the policy's move, so only restore when the target
-	// is still the borrowed one.
+	// A /tN override borrows a binding and policy state for one turn. Its pin
+	// prevents mid-turn moves, so restoration is an exact in-memory transaction
+	// and never depends on a second provider probe.
 	if m.restoreTier != nil {
-		restore := *m.restoreTier
-		m.restoreTier = nil
-		if m.app.tier.ID == m.turnStarted.ID {
-			return tea.Batch(watchCmd, m.restoreCmd(restore))
-		}
+		m.restoreOverride()
 	}
 
 	// Auto-compaction runs ahead of the queue: a queued prompt sent into a
@@ -1114,20 +1512,55 @@ func (m *tuiModel) shouldAutoCompact() bool {
 	return m.callTokens >= m.ctxWindow*at/100
 }
 
-// restoreCmd returns to the tier a /tN override borrowed, once the turn that
-// borrowed it is done.
-func (m *tuiModel) restoreCmd(tier config.Tier) tea.Cmd {
-	return func() tea.Msg {
-		probed, client, note, err := m.app.providers.probeTierFallback(context.Background(), tier)
-		return tierSwitchMsg{tier: probed, client: client, note: note, err: err, silent: true}
+func (m *tuiModel) restoreOverride() {
+	tier := *m.restoreTier
+	m.app.runtimeMu.Lock()
+	m.app.loop.Bind(m.restoreBinding)
+	m.app.runtimeTier = tier
+	m.app.runtimeMu.Unlock()
+	m.app.tier = tier
+	if m.restoreStickySet && m.app.sticky != nil {
+		m.app.sticky.Restore(m.restoreSticky)
 	}
+	m.restoreTier = nil
+	m.restoreBinding = agent.Binding{}
+	m.restoreStickySet = false
+	m.tierLine = m.app.tierLine()
+	m.refreshCtxWindow()
 }
 
 func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
-	if msg.err != nil {
-		m.addNotice("error", msg.err.Error())
+	if !m.operationMatches(msg.operation, msg.sourceID) {
 		return nil
 	}
+	if m.operationCancelling {
+		name := m.operationName
+		m.finishOperation(msg.operation, false)
+		m.addNotice("", name+" cancelled")
+		return m.nextQueuedTurn()
+	}
+	if msg.err != nil {
+		name := m.operationName
+		m.finishOperation(msg.operation, false)
+		if errors.Is(msg.err, context.Canceled) {
+			m.addNotice("", name+" cancelled")
+		} else {
+			m.addNotice("error", msg.err.Error())
+		}
+		return m.nextQueuedTurn()
+	}
+	if !msg.silent {
+		if err := persistRuntimeBinding(m.app.loop.Session, msg.tier, true); err != nil {
+			m.finishOperation(msg.operation, false)
+			m.addNotice("error", "tier switch was not saved: "+err.Error())
+			return m.nextQueuedTurn()
+		}
+	}
+	changed := msg.tier.ID != m.app.tier.ID || msg.tier.Target.ID() != m.app.tier.Target.ID()
+	targetChanged := msg.tier.Target.ID() != m.app.tier.Target.ID()
+	// A fallback substitution is a fact about the configured rung even when
+	// two rungs ultimately share the same concrete target. Only cache
+	// abandonment is conditional on the target identity changing.
 	if msg.note != "" {
 		m.addNotice("warn", msg.note)
 		m.app.loop.Session.AppendNote("warn", msg.note)
@@ -1135,14 +1568,40 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 	// What the old target held warm is priced before the bind discards its
 	// tracker: afterwards there is nothing left to ask. A spoken note goes
 	// in the session record too, so the export and a later reading keep it.
-	abandoned := abandonedCacheNote(m.app.loop.Cache, m.app.catalog, time.Now())
+	abandoned := ""
+	if targetChanged {
+		abandoned = abandonedCacheNote(m.app.loop.Binding().Cache, m.app.catalog, time.Now())
+	}
 	if abandoned != "" {
 		m.app.loop.Session.AppendNote("info", abandoned)
 	}
-	m.app.bind(msg.tier, msg.client, true)
+	pin := true
+	if changed {
+		m.app.bind(msg.tier, msg.client, pin)
+	} else if m.app.sticky != nil {
+		if rank := m.app.rankOf(msg.tier); pin && rank >= 0 {
+			m.app.sticky.Pin(rank)
+		} else if !pin {
+			m.app.sticky.Unpin()
+		}
+	}
+	if msg.silent && !pin {
+		m.app.route = nil
+	} else {
+		rationale := "tier selected by you"
+		if msg.silent {
+			rationale = "restored after a one-turn override"
+		}
+		m.app.route = &route.Decision{
+			Tier: msg.tier.ID, Target: msg.tier.Target.ID(), Confidence: 1,
+			Source: route.SourceUserPin, Rationale: rationale, PolicyRevision: route.PolicyRevision,
+		}
+	}
 	m.tierLine = m.app.tierLine()
 	m.refreshCtxWindow()
-	m.recordMove(m.app.rankOf(msg.tier))
+	if changed {
+		m.recordMove(m.app.rankOf(msg.tier))
+	}
 	if !msg.silent {
 		m.tr.add(&entry{kind: kindNotice, level: "route", text: "now on " + m.tierLine,
 			rank: m.app.rankOf(msg.tier)})
@@ -1150,17 +1609,16 @@ func (m *tuiModel) onTierSwitch(msg tierSwitchMsg) tea.Cmd {
 		if abandoned != "" {
 			m.routeLog = append(m.routeLog, abandoned)
 		}
-		m.cacheSwitchNote(msg.tier, abandoned)
-		return nil
+		if targetChanged {
+			m.cacheSwitchNote(msg.tier, abandoned)
+		}
+		m.finishOperation(msg.operation, false)
+		return m.nextQueuedTurn()
 	}
 	// A silent switch is a /tN override restoring what it borrowed; a queued
 	// prompt waits for the restore so it runs on the tier the user is on.
-	if len(m.queue) > 0 {
-		next := m.queue[0]
-		m.queue = m.queue[1:]
-		return m.startTurn(next, "")
-	}
-	return nil
+	m.finishOperation(msg.operation, false)
+	return m.nextQueuedTurn()
 }
 
 // cacheSwitchNote says what a switch abandons: cache state is scoped to a
@@ -1179,13 +1637,83 @@ func (m *tuiModel) cacheSwitchNote(tier config.Tier, abandoned string) {
 }
 
 func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
-	if msg.err != nil {
-		m.addNotice("error", msg.err.Error())
+	if msg.release != nil {
+		defer msg.release()
+	}
+	if msg.operation != 0 {
+		if !m.operationMatches(msg.operation, msg.sourceID) {
+			if msg.sess != nil && msg.sess != m.app.loop.Session {
+				_ = msg.sess.Close()
+			}
+			return nil
+		}
+		if m.operationCancelling {
+			if msg.sess != nil && msg.sess != m.app.loop.Session {
+				_ = msg.sess.Close()
+			}
+			m.finishOperation(msg.operation, false)
+			return m.nextQueuedTurn()
+		}
+	} else if m.busy || m.turnPlanning || m.operationActive {
+		// Synchronous swaps (currently a finished race) are valid only while
+		// idle. This final guard prevents a future caller from closing the log
+		// underneath a live turn.
+		if msg.sess != nil && msg.sess != m.app.loop.Session {
+			_ = msg.sess.Close()
+		}
+		m.addNotice("error", "session change refused while another operation is running")
 		return nil
 	}
+	if msg.err != nil {
+		if msg.operation != 0 {
+			m.finishOperation(msg.operation, false)
+		}
+		m.addNotice("error", msg.err.Error())
+		return m.nextQueuedTurn()
+	}
+	if msg.sess == nil {
+		if msg.operation != 0 {
+			m.finishOperation(msg.operation, false)
+		}
+		m.addNotice("error", "session change returned no session")
+		return m.nextQueuedTurn()
+	}
 	old := m.app.loop.Session
+	runtimeBinding := session.RuntimeBinding{Tier: msg.tier.ID, Target: msg.tier.Target.ID(), Pinned: msg.pinned}
+	if msg.preserveRuntimeTarget {
+		// A fork or retry may cut before the source's latest binding record.
+		// The operation nevertheless continues from the source's current durable
+		// routing posture, so that posture must win over an older binding copied
+		// into the child. Otherwise the live child can run on the current tier
+		// while its log says to resume on the earlier one. A process-only /think
+		// still stays out of the log because this reads the source WAL rather than
+		// the live, parameter-adjusted msg.tier.
+		durable := session.RuntimeBinding{}
+		if old != nil {
+			durable = old.State().RuntimeBinding
+		}
+		if durable.Target == "" {
+			durable = msg.sess.State().RuntimeBinding
+		}
+		if durable.Target != "" {
+			runtimeBinding = durable
+		}
+	}
+	if err := msg.sess.AppendRuntimeBinding(runtimeBinding.Tier, runtimeBinding.Target, runtimeBinding.Pinned); err != nil {
+		if msg.operation != 0 {
+			m.finishOperation(msg.operation, false)
+		}
+		if msg.sess != m.app.loop.Session {
+			_ = msg.sess.Close()
+		}
+		m.addNotice("error", "session runtime binding was not saved: "+err.Error())
+		return m.nextQueuedTurn()
+	}
 	m.app.loop.Session = msg.sess
-	m.app.bind(msg.tier, msg.client, false)
+	if m.app.caches != nil {
+		m.app.caches.Reset(msg.tier.Target, cacheFor(msg.tier.Target, m.app.catalog))
+	}
+	m.app.bind(msg.tier, msg.client, runtimeBinding.Pinned)
 	if old != nil && old != msg.sess {
 		old.Close()
 	}
@@ -1206,7 +1734,12 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 		m.replayHistory(msg.sess.State())
 	}
 	if msg.note != "" {
-		m.addNotice("", msg.note)
+		level := ""
+		if msg.warnNote {
+			level = "warn"
+			_ = m.app.loop.Session.AppendNote("warn", msg.note)
+		}
+		m.addNotice(level, msg.note)
 	}
 	m.tierLine = m.app.tierLine()
 	m.mode = m.app.loop.Perms.Mode()
@@ -1215,11 +1748,26 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	// The old session's occupancy does not describe the new one, and leaving
 	// it would re-trigger the auto-compaction that produced this swap.
 	m.callTokens = 0
+	if msg.operation != 0 {
+		m.finishOperation(msg.operation, false)
+	}
 
 	// A swap that carries its own continuation runs it now; /retry's replay
 	// belongs to the fork it just landed in, ahead of anything queued.
 	if msg.andThen != nil {
-		return msg.andThen
+		if !msg.continueTurn {
+			return msg.andThen
+		}
+		_, generation := m.startPlanning()
+		continuation := msg.andThen
+		return func() tea.Msg {
+			next := continuation()
+			if retry, ok := next.(retryStartMsg); ok {
+				retry.generation = generation
+				return retry
+			}
+			return next
+		}
 	}
 
 	// Prompts queued behind the turn that triggered an auto-compaction run
@@ -1289,17 +1837,21 @@ func (m *tuiModel) activeRank() int {
 
 func (m *tuiModel) onToolStart(msg toolStartMsg) {
 	m.tr.finalize(m.tr.last())
-	m.tr.add(&entry{kind: kindTool, tool: toolEntry{name: msg.name, desc: describeRequest(msg.req)}, rank: m.activeRank()})
+	m.tr.add(&entry{kind: kindTool, tool: toolEntry{id: msg.id, name: msg.name, desc: describeRequest(msg.req)}, rank: m.activeRank()})
 }
 
 func (m *tuiModel) onToolEnd(msg toolEndMsg) {
-	// Pair by name, newest first: a delegate's sub-tool rails land between
-	// the delegate's own start and end, so the entry finishing is not
-	// necessarily the last one.
+	// The call ID is the only sound correlation key when same-name tools run
+	// concurrently. Keep the name fallback only for synthetic UI events whose
+	// producers do not have a provider call ID.
 	idx := -1
 	for i := len(m.tr.entries) - 1; i >= 0; i-- {
 		e := m.tr.entries[i]
-		if e.kind == kindTool && !e.tool.done && e.tool.name == msg.name {
+		if e.kind != kindTool || e.tool.done {
+			continue
+		}
+		if (msg.id != "" && e.tool.id == msg.id) ||
+			(msg.id == "" && e.tool.id == "" && e.tool.name == msg.name) {
 			idx = i
 			break
 		}
@@ -1353,20 +1905,73 @@ func (m *tuiModel) refreshCost(state session.State) {
 	// priced rung to a local one must not leave "local" wearing the old
 	// ceiling's warning color.
 	m.costPct = 0
+	spent := catalog.Money(state.AccountedCostMicroUSD())
+	if spent > 0 {
+		m.costLine = spent.String()
+		if state.ExternalCostMicroUSD > 0 {
+			m.costLine += " incl delegate/race"
+		} else {
+			m.costLine += " routed"
+		}
+		// Accumulated spend remains governed even when the active target is now
+		// local or plan-metered. Hiding the ratio after a move would hide the
+		// dollars the same session has already consumed.
+		if m.app.budget != nil {
+			if c := m.app.budget.get(); c > 0 {
+				debt := m.app.budget.syncRetryDebt(state.ID, catalog.Money(state.RetryReserveMicroUSD))
+				if debt > 0 {
+					m.costLine += " + " + debt.String() + " reserve"
+				}
+				m.costLine += " of " + c.String()
+				accounted := addMoney(spent, debt)
+				if accounted >= c {
+					m.costPct = 100
+				} else {
+					m.costPct = int(float64(accounted) * 100 / float64(c))
+				}
+			}
+		}
+		return
+	}
+	if kinds, known := routedMeteringKinds(m.app.catalog, state); known {
+		if len(kinds) > 1 {
+			m.costLine = "mixed: " + strings.Join(kinds, " + ")
+			return
+		}
+		switch kinds[0] {
+		case "local":
+			m.costLine = "local"
+		case "plan":
+			m.costLine = "plan"
+		case "dollar-metered":
+			m.costLine = spent.String()
+		case "no per-token cost":
+			m.costLine = "free"
+		default:
+			m.costLine = "unpriced"
+		}
+		return
+	}
 	// The three zero-dollar meterings stay distinct (§4), here as everywhere:
 	// a plan target consumed quota, not nothing.
-	info, _, ok := m.app.catalog.Lookup(m.app.loop.Target)
+	info, _, ok := m.app.catalog.Lookup(m.app.loop.Binding().Target)
 	switch {
 	case !ok:
 		m.costLine = "unpriced"
 	case info.Metering == catalog.Local:
 		m.costLine = "local"
+		if state.ExternalCostMicroUSD > 0 {
+			m.costLine += " + " + catalog.Money(state.ExternalCostMicroUSD).String() + " delegate/race"
+		}
 	case info.Metering == catalog.Plan:
 		m.costLine = "plan"
+		if state.ExternalCostMicroUSD > 0 {
+			m.costLine += " + " + catalog.Money(state.ExternalCostMicroUSD).String() + " delegate/race"
+		}
 	case info.Free():
 		m.costLine = "free"
 	default:
-		m.costLine = catalog.Money(state.CostMicroUSD).String()
+		m.costLine = spent.String()
 		// The ceiling rides the readout so a governed session shows it at
 		// rest, the same principle as the tier: visible, not on demand. The
 		// percentage feeds the readout's color, so a ceiling being neared
@@ -1374,15 +1979,24 @@ func (m *tuiModel) refreshCost(state session.State) {
 		// before the refusal, not as it.
 		if m.app.budget != nil {
 			if c := m.app.budget.get(); c > 0 {
+				debt := m.app.budget.syncRetryDebt(state.ID, catalog.Money(state.RetryReserveMicroUSD))
+				if debt > 0 {
+					m.costLine += " + " + debt.String() + " reserve"
+				}
 				m.costLine += " of " + c.String()
-				m.costPct = int(int64(state.CostMicroUSD) * 100 / int64(c))
+				accounted := addMoney(spent, debt)
+				if accounted >= c {
+					m.costPct = 100
+				} else {
+					m.costPct = int(float64(accounted) * 100 / float64(c))
+				}
 			}
 		}
 	}
 }
 
 func (m *tuiModel) refreshCtxWindow() {
-	if info, _, ok := m.app.catalog.Lookup(m.app.loop.Target); ok {
+	if info, _, ok := m.app.catalog.Lookup(m.app.loop.Binding().Target); ok {
 		m.ctxWindow = info.ContextWindow
 		return
 	}

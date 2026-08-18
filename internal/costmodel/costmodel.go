@@ -19,10 +19,11 @@ package costmodel
 
 import (
 	"fmt"
+	"math"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Token estimate error, measured rather than assumed. docs/estimator.md records
@@ -94,7 +95,14 @@ type Estimate struct {
 // Spread is what a warm cache saves on this turn. It is the quantity §6.4's
 // switch arithmetic values when it asks what a lost prefix would have been
 // worth.
-func (e Estimate) Spread() catalog.Money { return e.MissCost - e.HitCost }
+func (e Estimate) Spread() catalog.Money {
+	miss := nonnegativeMoney(e.MissCost)
+	hit := nonnegativeMoney(e.HitCost)
+	if miss <= hit {
+		return 0
+	}
+	return miss - hit
+}
 
 type Estimator struct{}
 
@@ -111,8 +119,9 @@ func (e Estimator) Turn(in Inputs) Estimate {
 	est.HitCost = e.cost(in, hitUsage(in))
 	est.MissCost = e.cost(in, missUsage(in))
 
-	p := est.HitProbability
-	est.Expected = catalog.Money(float64(est.HitCost)*p + float64(est.MissCost)*(1-p))
+	p := clamp(est.HitProbability)
+	est.HitProbability = p
+	est.Expected = weightedMoney(est.HitCost, est.MissCost, p)
 
 	// Bounds widen for the token estimate's measured bias, upward only, because
 	// it has never been observed to overcount.
@@ -162,12 +171,12 @@ func hitUsage(in Inputs) provider.Usage {
 func missUsage(in Inputs) provider.Usage {
 	if !in.Eligible {
 		return provider.Usage{
-			InputTokens:  in.PrefixTokens + in.FreshTokens,
+			InputTokens:  saturatingTokenAdd(in.PrefixTokens, in.FreshTokens),
 			OutputTokens: in.OutputTokens,
 		}
 	}
 	return provider.Usage{
-		CacheWriteTokens: in.PrefixTokens + in.FreshTokens,
+		CacheWriteTokens: saturatingTokenAdd(in.PrefixTokens, in.FreshTokens),
 		OutputTokens:     in.OutputTokens,
 	}
 }
@@ -177,11 +186,72 @@ func (e Estimator) cost(in Inputs, usage provider.Usage) catalog.Money {
 	if !ok {
 		return 0
 	}
-	return total
+	return nonnegativeMoney(total)
 }
 
 func scale(tokens int, factor float64) int {
-	return int(float64(tokens)*factor + 0.5)
+	if tokens < 0 || math.IsNaN(factor) || factor < 0 {
+		return math.MaxInt
+	}
+	scaled := float64(tokens)*factor + 0.5
+	if math.IsInf(scaled, 0) || scaled >= float64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(scaled)
+}
+
+func saturatingTokenAdd(a, b int) int {
+	if a < 0 || b < 0 || a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
+}
+
+func nonnegativeMoney(amount catalog.Money) catalog.Money {
+	if amount < 0 {
+		return catalog.MaxMoney
+	}
+	return amount
+}
+
+func weightedMoney(hit, miss catalog.Money, hitProbability float64) catalog.Money {
+	hit = nonnegativeMoney(hit)
+	miss = nonnegativeMoney(miss)
+	p := clamp(hitProbability)
+	return moneyFromFloat(float64(hit)*p + float64(miss)*(1-p))
+}
+
+func scaleMoney(amount catalog.Money, factor float64) catalog.Money {
+	amount = nonnegativeMoney(amount)
+	if math.IsNaN(factor) || factor <= 0 {
+		return 0
+	}
+	if factor >= 1 {
+		return amount
+	}
+	return moneyFromFloat(float64(amount) * factor)
+}
+
+func moneyFromFloat(amount float64) catalog.Money {
+	if math.IsNaN(amount) || amount < 0 {
+		return catalog.MaxMoney
+	}
+	// float64(MaxMoney) is 2^63, one past the signed integer range.
+	if math.IsInf(amount, 0) || amount >= float64(catalog.MaxMoney) {
+		return catalog.MaxMoney
+	}
+	return catalog.Money(amount)
+}
+
+func saturatingSignedMoneyAdd(a, b catalog.Money) catalog.Money {
+	if b > 0 && a > catalog.MaxMoney-b {
+		return catalog.MaxMoney
+	}
+	const minMoney = catalog.Money(math.MinInt64)
+	if b < 0 && a < minMoney-b {
+		return minMoney
+	}
+	return a + b
 }
 
 // Switch is the incremental cost of moving from one target to another.
@@ -223,8 +293,8 @@ func (e Estimator) SwitchCost(from, to Inputs, returnProbability, sourceSurvival
 	// What a warm source would have saved, if the session returns and the entry
 	// is still there.
 	expiry := 1 - clamp(sourceSurvival)
-	s.LostWarmValue = catalog.Money(float64(fromEstimate.Spread()) * clamp(returnProbability) * expiry)
-	s.Total = s.Difference + s.LostWarmValue
+	s.LostWarmValue = scaleMoney(fromEstimate.Spread(), clamp(returnProbability)*expiry)
+	s.Total = saturatingSignedMoneyAdd(s.Difference, s.LostWarmValue)
 
 	s.Notes = append(s.Notes, fmt.Sprintf(
 		"the source cache is not evicted by switching; %.0f%% chance it has expired before a return, "+

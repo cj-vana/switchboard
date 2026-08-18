@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // fakeTransport is an in-memory wire, with a scripted server on the far end.
@@ -17,6 +18,67 @@ type fakeTransport struct {
 	toServer   chan []byte
 	fromServer chan []byte
 	closed     chan struct{}
+}
+
+type fatalReadTransport struct {
+	fail      chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+type blockedServerReplyTransport struct {
+	incoming  chan []byte
+	closed    chan struct{}
+	started   chan struct{}
+	sendDone  chan error
+	startOnce sync.Once
+	closeOnce sync.Once
+}
+
+func newBlockedServerReplyTransport(capacity int) *blockedServerReplyTransport {
+	return &blockedServerReplyTransport{
+		incoming: make(chan []byte, capacity),
+		closed:   make(chan struct{}),
+		started:  make(chan struct{}),
+		sendDone: make(chan error, capacity),
+	}
+}
+
+func (t *blockedServerReplyTransport) Send(ctx context.Context, _ []byte) error {
+	t.startOnce.Do(func() { close(t.started) })
+	select {
+	case <-ctx.Done():
+		t.sendDone <- ctx.Err()
+		return ctx.Err()
+	case <-t.closed:
+		err := errors.New("closed")
+		t.sendDone <- err
+		return err
+	}
+}
+
+func (t *blockedServerReplyTransport) Recv() ([]byte, error) {
+	select {
+	case message := <-t.incoming:
+		return message, nil
+	case <-t.closed:
+		return nil, errors.New("closed")
+	}
+}
+
+func (t *blockedServerReplyTransport) Close() error {
+	t.closeOnce.Do(func() { close(t.closed) })
+	return nil
+}
+
+func (t *fatalReadTransport) Send(context.Context, []byte) error { return nil }
+func (t *fatalReadTransport) Recv() ([]byte, error) {
+	<-t.fail
+	return nil, errors.New("fatal read")
+}
+func (t *fatalReadTransport) Close() error {
+	t.closeOnce.Do(func() { close(t.closed) })
+	return nil
 }
 
 func newFakeTransport() *fakeTransport {
@@ -27,10 +89,12 @@ func newFakeTransport() *fakeTransport {
 	}
 }
 
-func (f *fakeTransport) Send(msg []byte) error {
+func (f *fakeTransport) Send(ctx context.Context, msg []byte) error {
 	select {
 	case f.toServer <- append([]byte(nil), msg...):
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-f.closed:
 		return errors.New("closed")
 	}
@@ -98,18 +162,27 @@ func serveScript(f *fakeTransport, tools []ToolInfo, onCall func(name string, ar
 		default:
 			result = "{}"
 		}
-		msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, *req.ID, result)
+		var msg string
+		if rpcError, ok := strings.CutPrefix(result, "ERROR:"); ok {
+			msg = fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":%s}`, *req.ID, rpcError)
+		} else {
+			msg = fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, *req.ID, result)
+		}
 		f.fromServer <- []byte(msg)
 	}
 }
 
 func connectFake(t *testing.T, tools []ToolInfo, onCall func(string, json.RawMessage) string) (*Client, *fakeTransport) {
+	return connectFakeSpec(t, Spec{Name: "fake", Command: "unused"}, tools, onCall)
+}
+
+func connectFakeSpec(t *testing.T, spec Spec, tools []ToolInfo, onCall func(string, json.RawMessage) string) (*Client, *fakeTransport) {
 	t.Helper()
 	f := newFakeTransport()
 	go serveScript(f, tools, onCall)
 
 	c := &Client{
-		spec:      Spec{Name: "fake", Command: "unused"},
+		spec:      spec,
 		logf:      func(string, string) {},
 		transport: f,
 		pending:   map[int64]chan rpcResponse{},
@@ -128,6 +201,40 @@ func connectFake(t *testing.T, tools []ToolInfo, onCall func(string, json.RawMes
 	return c, f
 }
 
+func paginatedToolClient(t *testing.T, page func(cursor string, request int) string) (*Client, *fakeTransport) {
+	t.Helper()
+	f := newFakeTransport()
+	go func() {
+		request := 0
+		for {
+			select {
+			case raw := <-f.toServer:
+				var req struct {
+					ID     *int64 `json:"id"`
+					Method string `json:"method"`
+					Params struct {
+						Cursor string `json:"cursor"`
+					} `json:"params"`
+				}
+				if json.Unmarshal(raw, &req) != nil || req.ID == nil || req.Method != "tools/list" {
+					continue
+				}
+				request++
+				f.fromServer <- []byte(fmt.Sprintf(
+					`{"jsonrpc":"2.0","id":%d,"result":%s}`,
+					*req.ID,
+					page(req.Params.Cursor, request),
+				))
+			case <-f.closed:
+				return
+			}
+		}
+	}()
+	c := newClient(Spec{Name: "pages"}, f, nil)
+	t.Cleanup(func() { _ = c.Close() })
+	return c, f
+}
+
 var echoTool = []ToolInfo{{
 	Name:        "echo",
 	Description: "echoes",
@@ -143,6 +250,140 @@ func TestConnectDiscoversTools(t *testing.T) {
 	}
 	if !strings.Contains(c.ServerLine(), "fake 1.0") || !strings.Contains(c.ServerLine(), "2025-06-18") {
 		t.Errorf("ServerLine() = %q, want name, version, and protocol", c.ServerLine())
+	}
+}
+
+func TestListToolsRejectsRepeatedCursor(t *testing.T) {
+	c, _ := paginatedToolClient(t, func(_ string, request int) string {
+		return fmt.Sprintf(`{"tools":[{"name":"tool-%d"}],"nextCursor":"loop"}`, request)
+	})
+	err := c.listToolsWithLimits(context.Background(), listToolsLimits{pages: 10, tools: 10, bytes: 4 << 10})
+	if err == nil || !strings.Contains(err.Error(), "repeated cursor") {
+		t.Fatalf("listTools error = %v, want repeated-cursor rejection", err)
+	}
+	if got := c.Tools(); len(got) != 0 {
+		t.Fatalf("failed pagination published partial tools: %+v", got)
+	}
+}
+
+func TestListToolsBoundsPagesBeforeAnotherRequest(t *testing.T) {
+	requests := 0
+	c, _ := paginatedToolClient(t, func(_ string, request int) string {
+		requests = request
+		return fmt.Sprintf(`{"tools":[],"nextCursor":"cursor-%d"}`, request)
+	})
+	err := c.listToolsWithLimits(context.Background(), listToolsLimits{pages: 2, tools: 10, bytes: 4 << 10})
+	if err == nil || !strings.Contains(err.Error(), "2 pages") {
+		t.Fatalf("listTools error = %v, want page bound", err)
+	}
+	if requests != 2 {
+		t.Fatalf("tools/list requests = %d, want no request beyond page bound", requests)
+	}
+}
+
+func TestListToolsBoundsTotalToolCount(t *testing.T) {
+	c, _ := paginatedToolClient(t, func(string, int) string {
+		return `{"tools":[{"name":"one"},{"name":"two"},{"name":"three"}]}`
+	})
+	err := c.listToolsWithLimits(context.Background(), listToolsLimits{pages: 2, tools: 2, bytes: 4 << 10})
+	if err == nil || !strings.Contains(err.Error(), "2 tools") {
+		t.Fatalf("listTools error = %v, want tool-count bound", err)
+	}
+}
+
+func TestListToolsBoundsAggregateBytes(t *testing.T) {
+	c, _ := paginatedToolClient(t, func(string, int) string {
+		return `{"tools":[]}`
+	})
+	err := c.listToolsWithLimits(context.Background(), listToolsLimits{pages: 2, tools: 2, bytes: 8})
+	if err == nil || !strings.Contains(err.Error(), "8 bytes") {
+		t.Fatalf("listTools error = %v, want aggregate-byte bound", err)
+	}
+}
+
+func TestUnsupportedVersionErrorRedactsRawSupportedSecrets(t *testing.T) {
+	const secret = "unsupported-version-secret"
+	rpcErr := sanitizeRPCError(&RPCError{
+		Code:    -32022,
+		Message: "unsupported",
+		Data:    json.RawMessage(`{"supported":["unsupported-version-secret"]}`),
+	}, []string{secret})
+	_, err := negotiationFromUnsupported(rpcErr)
+	if err == nil {
+		t.Fatal("unsupported version unexpectedly negotiated")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("protocol version error leaked configured secret: %v", err)
+	}
+}
+
+func TestToolFiltersApplyToDiscoveryAndDirectCalls(t *testing.T) {
+	tools := []ToolInfo{{Name: "allowed"}, {Name: "denied"}, {Name: "unlisted"}}
+	called := make(chan string, 1)
+	c, _ := connectFakeSpec(t, Spec{
+		Name:             "filtered",
+		Command:          "unused",
+		EnabledTools:     []string{"allowed", "denied"},
+		EnabledToolsSet:  true,
+		DisabledTools:    []string{"denied"},
+		DisabledToolsSet: true,
+	}, tools, func(name string, _ json.RawMessage) string {
+		called <- name
+		return `{"content":[]}`
+	})
+	if got := c.Tools(); len(got) != 1 || got[0].Name != "allowed" {
+		t.Fatalf("filtered tools = %+v, want only allowed", got)
+	}
+	for _, name := range []string{"denied", "unlisted"} {
+		_, err := c.Call(context.Background(), name, nil)
+		var filtered *ToolFilteredError
+		if !errors.As(err, &filtered) || filtered.Tool != name {
+			t.Fatalf("Call(%q) error = %v, want ToolFilteredError", name, err)
+		}
+	}
+	select {
+	case name := <-called:
+		t.Fatalf("filtered tool %q reached the server", name)
+	default:
+	}
+}
+
+func TestExplicitEmptyEnabledToolsExposesAndCallsNothing(t *testing.T) {
+	c, _ := connectFakeSpec(t, Spec{
+		Name:            "empty-allowlist",
+		Command:         "unused",
+		EnabledToolsSet: true,
+	}, echoTool, nil)
+	if got := c.Tools(); len(got) != 0 {
+		t.Fatalf("tools = %+v, want none", got)
+	}
+	if _, err := c.Call(context.Background(), "echo", nil); err == nil {
+		t.Fatal("call bypassed explicit empty enabled-tool filter")
+	}
+}
+
+func TestToolTimeoutAndEarlierCallerDeadline(t *testing.T) {
+	c, _ := connectFake(t, echoTool, func(string, json.RawMessage) string { return "" })
+	c.spec.ToolTimeout = 40 * time.Millisecond
+	started := time.Now()
+	_, err := c.Call(context.Background(), "echo", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("configured timeout error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("configured tool timeout took %v", elapsed)
+	}
+
+	c.spec.ToolTimeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	_, err = c.Call(ctx, "echo", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("caller timeout error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("earlier caller deadline took %v", elapsed)
 	}
 }
 
@@ -220,6 +461,26 @@ func TestProtocolRefusalIsAToolError(t *testing.T) {
 	}
 }
 
+func TestProtocolRefusalPreservesTypedErrorData(t *testing.T) {
+	c, _ := connectFake(t, echoTool, func(string, json.RawMessage) string {
+		return `ERROR:{"code":-32602,"message":"invalid arguments","data":{"field":"path"}}`
+	})
+
+	result, err := c.Call(context.Background(), "echo", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || result.RPCError == nil || result.RPCError.Code != -32602 {
+		t.Fatalf("result = %+v, want typed JSON-RPC refusal", result)
+	}
+	var data struct {
+		Field string `json:"field"`
+	}
+	if err := json.Unmarshal(result.RPCError.Data, &data); err != nil || data.Field != "path" {
+		t.Fatalf("RPC error data = %s, %v", result.RPCError.Data, err)
+	}
+}
+
 func TestServerRequestsAreAnswered(t *testing.T) {
 	f := newFakeTransport()
 	// Serve exactly the handshake, then stop reading: after this the test
@@ -274,6 +535,105 @@ func TestServerRequestsAreAnswered(t *testing.T) {
 	if !strings.Contains(string(reply), `"id":901`) || !strings.Contains(string(reply), "-32601") {
 		t.Errorf("sampling reply = %s, want method-not-found", reply)
 	}
+
+	// String IDs are valid JSON-RPC IDs and must be echoed as strings, not
+	// coerced into the client's integer request-id namespace.
+	f.fromServer <- []byte(`{"jsonrpc":"2.0","id":"server/ping-雪","method":"ping"}`)
+	reply = <-f.toServer
+	var stringReply struct {
+		ID     string         `json:"id"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(reply, &stringReply); err != nil {
+		t.Fatalf("string-id ping reply = %s: %v", reply, err)
+	}
+	if stringReply.ID != "server/ping-雪" || stringReply.Result == nil {
+		t.Fatalf("string-id ping reply = %s, want exact string ID and result", reply)
+	}
+}
+
+func TestJSONRPCIDValidationSeparatesClientAndServerNamespaces(t *testing.T) {
+	for _, test := range []struct {
+		raw          string
+		serverValid  bool
+		clientValid  bool
+		clientNumber int64
+	}{
+		{raw: `"string-id"`, serverValid: true},
+		{raw: `42`, serverValid: true, clientValid: true, clientNumber: 42},
+		{raw: `-7`, serverValid: true, clientValid: true, clientNumber: -7},
+		{raw: `1.5`, serverValid: true},
+		{raw: `1e2`, serverValid: true},
+		{raw: `null`},
+		{raw: `true`},
+		{raw: `{}`},
+		{raw: `[]`},
+	} {
+		t.Run(test.raw, func(t *testing.T) {
+			if got := validServerRequestID(json.RawMessage(test.raw)); got != test.serverValid {
+				t.Errorf("validServerRequestID(%s) = %t, want %t", test.raw, got, test.serverValid)
+			}
+			number, ok := clientResponseID(json.RawMessage(test.raw))
+			if ok != test.clientValid || ok && number != test.clientNumber {
+				t.Errorf("clientResponseID(%s) = (%d, %t), want (%d, %t)", test.raw, number, ok, test.clientNumber, test.clientValid)
+			}
+		})
+	}
+}
+
+func TestBlockedServerReplyDoesNotWedgeResponseDispatchAndTimesOut(t *testing.T) {
+	transport := newBlockedServerReplyTransport(8)
+	c := newClient(Spec{Name: "blocked-server-reply"}, transport, nil)
+	c.answerTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { _ = c.Close() })
+
+	response := make(chan rpcResponse, 1)
+	c.mu.Lock()
+	c.pending[77] = response
+	c.mu.Unlock()
+	transport.incoming <- []byte(`{"jsonrpc":"2.0","id":"server-request","method":"ping"}`)
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("server-request reply did not start")
+	}
+
+	transport.incoming <- []byte(`{"jsonrpc":"2.0","id":77,"result":{"ok":true}}`)
+	select {
+	case got := <-response:
+		if string(got.Result) != `{"ok":true}` || got.fatal != nil {
+			t.Fatalf("dispatched response = %+v", got)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("blocked server-request reply wedged the receive loop")
+	}
+	select {
+	case err := <-transport.sendDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("server-request reply error = %v, want bounded deadline", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server-request reply did not honor its deadline")
+	}
+}
+
+func TestServerReplyQueueOverflowFailsClosed(t *testing.T) {
+	requests := serverReplyQueueSize + serverReplyWorkers + 8
+	transport := newBlockedServerReplyTransport(requests)
+	c := newClient(Spec{Name: "reply-overflow"}, transport, nil)
+	c.answerTimeout = 10 * time.Second
+	t.Cleanup(func() { _ = c.Close() })
+	for i := range requests {
+		transport.incoming <- []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":"request-%d","method":"ping"}`, i))
+	}
+	select {
+	case <-transport.closed:
+	case <-time.After(time.Second):
+		t.Fatal("overflowing the server-response queue did not close the connection")
+	}
+	if err := c.Err(); err == nil || !strings.Contains(err.Error(), "queue exceeds") {
+		t.Fatalf("client error = %v, want bounded queue failure", err)
+	}
 }
 
 func TestDeadTransportFailsPendingAndFutureCalls(t *testing.T) {
@@ -302,6 +662,20 @@ func TestDeadTransportFailsPendingAndFutureCalls(t *testing.T) {
 	}
 	if _, err := c.Call(context.Background(), "echo", nil); err == nil {
 		t.Error("calls after death must fail immediately")
+	}
+}
+
+func TestFatalReadLoopClosesTransportWithoutDeadlock(t *testing.T) {
+	transport := &fatalReadTransport{fail: make(chan struct{}), closed: make(chan struct{})}
+	c := newClient(Spec{Name: "fatal"}, transport, nil)
+	close(transport.fail)
+	select {
+	case <-transport.closed:
+	case <-time.After(time.Second):
+		t.Fatal("fatal read loop did not close its transport")
+	}
+	if err := c.Err(); err == nil || !strings.Contains(err.Error(), "fatal read") {
+		t.Fatalf("client error = %v, want sticky fatal read", err)
 	}
 }
 

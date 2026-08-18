@@ -1,11 +1,14 @@
 package session
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // forkFixture records two turns: a plain exchange, then a turn with a tool
@@ -75,6 +78,85 @@ func TestForkCopiesThePrefixAndItsUsage(t *testing.T) {
 	}
 	if state.Workspace != src.State().Workspace || state.CatalogRevision != "rev-1" {
 		t.Error("workspace and catalog revision must carry over")
+	}
+}
+
+func TestForkCarriesRetryReserveEvenWhenItsTurnIsDropped(t *testing.T) {
+	store, src := forkFixture(t)
+	if err := src.AppendRetryReserve(77); err != nil {
+		t.Fatal(err)
+	}
+
+	full, err := store.Fork(src.ID(), 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer full.Close()
+	if got := full.State().RetryReserveMicroUSD; got != 77 {
+		t.Fatalf("full fork retry reserve = %d, want 77", got)
+	}
+
+	earlier, err := store.Fork(src.ID(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer earlier.Close()
+	if got := earlier.State().RetryReserveMicroUSD; got != 77 {
+		t.Fatalf("earlier fork erased dropped-turn retry reserve: %d", got)
+	}
+}
+
+func TestFirstTurnRetryCarriesObservedCostAndDebtWithoutUsage(t *testing.T) {
+	store, src := forkFixture(t)
+	if err := src.AppendRetryReserve(77); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.ForkForRetry(src.ID(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retry.Close()
+	state := retry.State()
+	if len(state.Messages) != 0 {
+		t.Fatalf("first-turn retry retained %d conversation messages", len(state.Messages))
+	}
+	if state.RetryReserveMicroUSD != 77 {
+		t.Fatalf("retry debt = %d, want 77", state.RetryReserveMicroUSD)
+	}
+	if state.CostMicroUSD != 0 || state.ExternalCostMicroUSD != 600 || state.AccountedCostMicroUSD() != 600 {
+		t.Fatalf("dropped observed cost was not transferred exactly: %+v", state)
+	}
+	if state.Calls != 0 || state.Usage != (provider.Usage{}) {
+		t.Fatalf("retry cost transfer invented provider usage: %+v", state)
+	}
+}
+
+func TestRepeatedRetryCannotResetPriorCeilingSpend(t *testing.T) {
+	store, src := forkFixture(t)
+	first, err := store.ForkForRetry(src.ID(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.AppendMessage(provider.UserText("again")); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.AppendMessage(provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.Text{Text: "again answer"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.AppendUsage(Usage{CostMicroUSD: 125}); err != nil {
+		t.Fatal(err)
+	}
+	firstID := first.ID()
+	first.Close()
+
+	second, err := store.ForkForRetry(firstID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if got := second.State().AccountedCostMicroUSD(); got != 725 {
+		t.Fatalf("second retry accounted cost = %d, want cumulative 725", got)
 	}
 }
 
@@ -158,5 +240,150 @@ func TestReadStateNeedsNoLock(t *testing.T) {
 	}
 	if state.ID != src.ID() {
 		t.Errorf("ID = %s, want the source's own", state.ID)
+	}
+}
+
+func TestLiveForkTakesOneAccountingSnapshot(t *testing.T) {
+	store, src := forkFixture(t)
+	src.mu.Lock()
+	started := make(chan struct{})
+	done := make(chan *Session, 1)
+	errs := make(chan error, 1)
+	go func() {
+		close(started)
+		fork, err := store.ForkSessionForRetry(src, 0)
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- fork
+	}()
+	<-started
+	select {
+	case fork := <-done:
+		fork.Close()
+		src.mu.Unlock()
+		t.Fatal("live fork did not wait for the source append lock")
+	case err := <-errs:
+		src.mu.Unlock()
+		t.Fatalf("live fork failed before source unlock: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	p := BudgetAttempt{ID: fmt.Sprintf("%s:%d", src.state.ID, src.seq+1), CostMicroUSD: 1_234}
+	if err := src.append(RecordBudgetAttempt, p); err != nil {
+		src.mu.Unlock()
+		t.Fatal(err)
+	}
+	if err := src.state.applyBudgetAttempt(p); err != nil {
+		src.mu.Unlock()
+		t.Fatal(err)
+	}
+	src.mu.Unlock()
+
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case fork := <-done:
+		defer fork.Close()
+		if got := fork.State().RetryReserveMicroUSD; got != 1_234 {
+			t.Fatalf("fork omitted WAL committed before its snapshot: reserve=%d", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("live fork did not finish")
+	}
+}
+
+func TestRaceBranchLifecycleDoesNotRideANewFork(t *testing.T) {
+	store, src := forkFixture(t)
+	if err := src.MarkRaceBranchPending("first-origin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.FinalizeRaceBranch(); err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := store.ForkSessionOnto(src, len(src.State().Messages), "scripted/local/new-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if err := child.MarkRaceBranchPending("second-origin"); err != nil {
+		t.Fatalf("finalized lifecycle marker from the first race rode the fork: %v", err)
+	}
+}
+
+func TestPendingRaceBranchIsNeitherForkableNorResumable(t *testing.T) {
+	store, src := forkFixture(t)
+	if err := src.MarkRaceBranchPending("origin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ForkSession(src, len(src.State().Messages)); !errors.Is(err, ErrRaceBranchPending) {
+		t.Fatalf("fork pending branch err = %v, want ErrRaceBranchPending", err)
+	}
+	workspace, id := src.State().Workspace, src.ID()
+	if err := src.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Open(id); !errors.Is(err, ErrRaceBranchPending) {
+		t.Fatalf("open pending branch err = %v, want ErrRaceBranchPending", err)
+	}
+	infos, err := store.List(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range infos {
+		if info.ID == id {
+			t.Fatal("pending race branch was advertised as resumable")
+		}
+	}
+}
+
+func TestLatestPrefersRaceVerdictOverLaterTouchedAlternative(t *testing.T) {
+	store, workspace := newStore(t)
+	origin, err := store.Create(workspace, "scripted/local/origin", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, err := store.Create(workspace, "scripted/local/winner", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternative, err := store.Create(workspace, "scripted/local/alternative", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	defer winner.Close()
+	defer alternative.Close()
+	for _, branch := range []*Session{winner, alternative} {
+		if err := branch.MarkRaceBranchPending(origin.ID()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := winner.FinalizeRaceBranch(); err != nil {
+		t.Fatal(err)
+	}
+	if err := alternative.FinalizeRaceBranchAlternative(); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce the old failure mode: the loser was annotated last and has the
+	// newest mtime, but it is not the continuation the user selected.
+	if err := alternative.AppendNote("info", "road not taken"); err != nil {
+		t.Fatal(err)
+	}
+	if err := winner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := alternative.Close(); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := store.Latest(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer latest.Close()
+	if got := latest.ID(); got != winner.ID() {
+		t.Fatalf("--continue selected %s, want kept race branch %s", got, winner.ID())
 	}
 }

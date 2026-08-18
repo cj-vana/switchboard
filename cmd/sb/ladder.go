@@ -17,10 +17,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // rungRecord is one rung's summed turns: where they opened, whether they
@@ -28,10 +28,16 @@ import (
 // praise — a clean completion is weak evidence of sufficiency, so the word
 // deliberately claims nothing beyond the turn ending where it began.
 type rungRecord struct {
-	opened    int
-	stayed    int
-	abandoned int
-	movedTo   map[provider.RouteTargetID]int
+	opened      int
+	stayed      int
+	abandoned   int
+	unavailable int
+	movedTo     map[routeDestination]int
+}
+
+type routeDestination struct {
+	tier   string
+	target provider.RouteTargetID
 }
 
 // gatherLadder sums route records across the workspace's sessions, keyed by
@@ -67,15 +73,19 @@ func gatherLadder(store *session.Store, workspace string) (map[string]*rungRecor
 
 			rung := byTier[r.Tier]
 			if rung == nil {
-				rung = &rungRecord{movedTo: map[provider.RouteTargetID]int{}}
+				rung = &rungRecord{movedTo: map[routeDestination]int{}}
 				byTier[r.Tier] = rung
 			}
 			rung.opened++
 			switch {
 			case r.Outcome == string(route.Abandoned):
 				rung.abandoned++
-			case r.EndedOn != "" && r.EndedOn != r.Target:
-				rung.movedTo[r.EndedOn]++
+			case r.Outcome == string(route.Failed):
+				rung.unavailable++
+			case r.EndedTier != "" && (r.Escalations > 0 || r.EndedTier != r.Tier):
+				rung.movedTo[routeDestination{tier: r.EndedTier, target: r.EndedOn}]++
+			case r.EndedOn != "" && (r.Escalations > 0 || r.EndedOn != r.Target):
+				rung.movedTo[routeDestination{target: r.EndedOn}]++
 			default:
 				rung.stayed++
 			}
@@ -100,11 +110,19 @@ func ladderLines(tiers []config.Tier, store *session.Store, workspace string) []
 		return []string{"  no routed turns recorded for this workspace yet"}
 	}
 
-	// A destination is a target id; when a rung of today's ladder serves
-	// that target, the rung's name is the better word for it.
-	tierFor := map[provider.RouteTargetID]string{}
+	// Legacy records name only a target. Map it back to a tier only when the
+	// current ladder has exactly one owner (primary or fallback); shared targets
+	// stay target-only rather than acquiring whichever tier was visited last.
+	targetOwners := map[provider.RouteTargetID][]string{}
 	for _, t := range tiers {
-		tierFor[t.Target.ID()] = t.ID
+		seen := map[provider.RouteTargetID]bool{}
+		for _, target := range append([]provider.RouteTarget{t.Target}, t.Fallbacks...) {
+			id := target.ID()
+			if !seen[id] {
+				targetOwners[id] = append(targetOwners[id], t.ID)
+				seen[id] = true
+			}
+		}
 	}
 
 	turnWord, sessWord := "turns", "sessions"
@@ -122,27 +140,58 @@ func ladderLines(tiers []config.Tier, store *session.Store, workspace string) []
 		if r.abandoned > 0 {
 			head += fmt.Sprintf(" · abandoned %d", r.abandoned)
 		}
+		if r.unavailable > 0 {
+			head += fmt.Sprintf(" · unavailable %d", r.unavailable)
+		}
 		lines = append(lines, head)
 		if len(r.movedTo) == 0 {
 			return
 		}
-		dests := make([]provider.RouteTargetID, 0, len(r.movedTo))
-		for d := range r.movedTo {
-			dests = append(dests, d)
+		type destination struct {
+			name  string
+			count int
+		}
+		normalized := map[routeDestination]int{}
+		configuredByID := make(map[string]config.Tier, len(tiers))
+		for _, configured := range tiers {
+			configuredByID[configured.ID] = configured
+		}
+		for d, count := range r.movedTo {
+			if d.tier == "" && d.target != "" {
+				if owners := targetOwners[d.target]; len(owners) == 1 {
+					d.tier = owners[0]
+				}
+			}
+			normalized[d] += count
+		}
+		dests := make([]destination, 0, len(normalized))
+		for d, count := range normalized {
+			name := d.tier
+			target := d.target
+			if target == "" && d.tier != "" {
+				if configured, ok := configuredByID[d.tier]; ok {
+					target = configured.Target.ID()
+				}
+			}
+			if target != "" {
+				targetName := provider.DisplayRouteTargetID(target)
+				if name == "" {
+					name = targetName
+				} else {
+					name += " (" + targetName + ")"
+				}
+			}
+			dests = append(dests, destination{name: name, count: count})
 		}
 		sort.Slice(dests, func(i, j int) bool {
-			if a, b := r.movedTo[dests[i]], r.movedTo[dests[j]]; a != b {
-				return a > b
+			if dests[i].count != dests[j].count {
+				return dests[i].count > dests[j].count
 			}
-			return dests[i] < dests[j]
+			return dests[i].name < dests[j].name
 		})
 		parts := make([]string, 0, len(dests))
 		for _, d := range dests {
-			name := string(d)
-			if tid, ok := tierFor[d]; ok {
-				name = tid + " (" + name + ")"
-			}
-			parts = append(parts, fmt.Sprintf("%s ×%d", name, r.movedTo[d]))
+			parts = append(parts, fmt.Sprintf("%s ×%d", d.name, d.count))
 		}
 		lines = append(lines, "       moved to "+strings.Join(parts, ", "))
 	}

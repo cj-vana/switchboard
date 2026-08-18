@@ -2,12 +2,22 @@ package eval
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/costmodel"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/costmodel"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/router"
 )
+
+var errRoutedFidelity = errors.New("routed evaluation fidelity is unavailable")
+
+func fidelityErrorf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", errRoutedFidelity, fmt.Sprintf(format, args...))
+}
 
 // RoutedArmFor builds the arm under test: the same targets as the baselines,
 // with the router choosing between them.
@@ -17,61 +27,120 @@ import (
 // verifier; the one variable is who picks the target.
 type RoutedArmFor struct {
 	Catalog *catalog.Catalog
-	Router  router.Heuristic
+	Router  router.Router
 
 	// Ladder is the ordered set of targets the router may choose from, lowest
 	// first. Order is the user's policy ladder, not a capability claim (§3.1).
 	Ladder []Arm
+
+	// Requirements and Budgets are the production hard constraints applied to
+	// every concrete primary and fallback. Tool use is always required because
+	// the evaluation runner is an agent loop, and image need is derived from the
+	// assembled request in addition to any explicit requirement here.
+	Requirements router.Requirements
+	Budgets      router.Budgets
 }
 
-// Pick chooses a target for a task and reports why.
+// Pick is retained to make the old unsafe entry point fail closed. A task by
+// itself does not contain the workspace-bound system prompt or tool schemas,
+// so it cannot support a faithful routing decision. Run assembles the request
+// once and calls PickRequest with the exact value execution will use.
+func (r RoutedArmFor) Pick(Task) (Arm, router.Decision, error) {
+	return Arm{}, router.Decision{}, fidelityErrorf(
+		"opening selection requires the Runner's assembled system, tools, and message request")
+}
+
+// PickRequest chooses a target from an already assembled prospective opening
+// request and reports why. It performs the same live reachability/capability
+// and hard feasibility checks used again for mid-turn moves.
 //
 // The router sees the prompt and nothing that would leak the answer. It gets no
 // task id, no provenance, and no knowledge of which package is broken: a router
 // told which task it was solving would be measured on a job nobody has.
-func (r RoutedArmFor) Pick(task Task) (Arm, router.Decision, error) {
-	candidates := make([]router.Candidate, 0, len(r.Ladder))
-	for rank, arm := range r.Ladder {
-		info, _, ok := r.Catalog.Lookup(arm.Target)
-		if !ok {
-			info = catalog.ModelInfo{}
-		}
-		c := router.Candidate{
-			Tier:   arm.Name,
-			Target: arm.Target,
-			Info:   info,
-			Rank:   rank,
-			// The corpus prompt is short; what the turn actually reads is the
-			// repository, which no arm knows the size of before it starts.
-			PromptTokens: len(task.Prompt) / 4,
-		}
-		c.Estimate = costmodel.Estimator{}.Turn(costmodel.Inputs{
-			Target: arm.Target, Info: info,
-			PrefixTokens: c.PromptTokens, OutputTokens: 2048,
-			Eligible:       info.Cache.UsageAccounting == catalog.AccountingSeparate,
-			HitProbability: 0,
-		})
-		candidates = append(candidates, c)
+func (r RoutedArmFor) PickRequest(ctx context.Context, task Task, request provider.Request) (Arm, router.Decision, error) {
+	arm, decision, _, err := r.pickRequest(ctx, task, request, r.Budgets)
+	return arm, decision, err
+}
+
+func (r RoutedArmFor) pickRequest(
+	ctx context.Context,
+	task Task,
+	request provider.Request,
+	budgets router.Budgets,
+) (Arm, router.Decision, int, error) {
+	if r.Catalog == nil {
+		return Arm{}, router.Decision{}, 0, fidelityErrorf("the routed arm has no catalog")
+	}
+	if len(r.Ladder) == 0 {
+		return Arm{}, router.Decision{}, 0, fidelityErrorf("the routed arm has no ladder")
 	}
 
-	decision, err := r.Router.Route(router.Input{
-		Prompt:       task.Prompt,
+	promptTokens := prefix.RequestTokens(request)
+	contextTokens := prefix.RequestTokenCeiling(request)
+	requirements := r.Requirements
+	requirements.NeedsTools = true
+	requirements.NeedsVision = requirements.NeedsVision || requestNeedsVision(request)
+
+	candidates := make([]router.Candidate, 0, len(r.Ladder))
+	resolved := make(map[string]Arm, len(r.Ladder))
+	ranks := make(map[string]int, len(r.Ladder))
+	var unavailable []string
+	for rank, arm := range r.Ladder {
+		if arm.Name == "" {
+			return Arm{}, router.Decision{}, 0, fidelityErrorf("ladder rank %d has no tier name", rank)
+		}
+		if _, duplicate := resolved[arm.Name]; duplicate {
+			return Arm{}, router.Decision{}, 0, fidelityErrorf("ladder contains duplicate tier %q", arm.Name)
+		}
+		selected, candidate, err := r.resolveTier(
+			ctx, arm, rank, promptTokens, contextTokens, requirements, budgets)
+		if err != nil {
+			unavailable = append(unavailable, fmt.Sprintf("%s: %v", arm.Name, err))
+			continue
+		}
+		resolved[arm.Name] = selected
+		ranks[arm.Name] = rank
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return Arm{}, router.Decision{}, 0, fidelityErrorf(
+			"no tier has a live, feasible target:\n  %s", strings.Join(unavailable, "\n  "))
+	}
+
+	selector := r.Router
+	if selector == nil {
+		selector = router.Heuristic{}
+	}
+	decision, err := selector.Route(router.Input{
+		Prompt: requestPrompt(request, task.Prompt),
+		Session: router.SessionFeatures{
+			PromptTokens:  promptTokens,
+			ContextTokens: contextTokens,
+			TestsInvolved: strings.Contains(strings.ToLower(requestPrompt(request, task.Prompt)), "test"),
+		},
 		Candidates:   candidates,
-		Requirements: router.Requirements{NeedsTools: true},
+		Requirements: requirements,
+		Budgets:      budgets,
 	})
 	if err != nil {
-		return Arm{}, decision, err
+		return Arm{}, decision, 0, fidelityErrorf("router rejected the assembled opening request: %v", err)
 	}
+	decision.Infeasible = append(decision.Infeasible, unavailable...)
 
-	for _, arm := range r.Ladder {
-		if arm.Name == decision.Tier {
-			// Renamed so the report can tell the routed arm apart from the
-			// baseline that happens to use the same target.
-			arm.Name = RoutedArm
-			return arm, decision, nil
-		}
+	arm, ok := resolved[decision.Tier]
+	if !ok {
+		return Arm{}, decision, 0, fidelityErrorf(
+			"router selected tier %q, which has no live feasible binding", decision.Tier)
 	}
-	return Arm{}, decision, context.Canceled
+	if decision.Target == "" || decision.Target != arm.Target.ID() {
+		return Arm{}, decision, 0, fidelityErrorf(
+			"router selected target %s for tier %q, but the live feasible binding is %s",
+			provider.DisplayRouteTargetID(decision.Target), decision.Tier, arm.Target.Display())
+	}
+	// Renamed so the report can tell the routed arm apart from the baseline
+	// that happens to use the same target.
+	arm.Name = RoutedArm
+	return arm, decision, ranks[decision.Tier], nil
 }
 
 // Run attempts a task with the router choosing the target and the escalation
@@ -83,37 +152,134 @@ func (r RoutedArmFor) Pick(task Task) (Arm, router.Decision, error) {
 // a different name. Measuring that against a fixed target would answer a
 // question nobody asked.
 func (r RoutedArmFor) Run(ctx context.Context, runner Runner, task Task, seed int) Run {
-	arm, decision, err := r.Pick(task)
+	return runner.runSelected(ctx, task, RoutedArm, "", seed,
+		func(ctx context.Context, task Task, prepared *preparedAttempt) (armSelection, error) {
+			arm, decision, startRank, err := r.pickRequest(ctx, task, prepared.openingRequest(), r.Budgets)
+			if err != nil {
+				return armSelection{}, err
+			}
+			escalation := &escalator{
+				sticky:  router.NewSticky(router.Policy{}, startRank),
+				detect:  router.NewDetector(),
+				ladder:  r.Ladder,
+				catalog: r.Catalog,
+				routed:  r,
+			}
+			return armSelection{
+				arm:             arm,
+				escalation:      escalation,
+				estimatedCost:   decision.EstimatedCost.Expected,
+				estimatedTarget: arm.Target.ID(),
+			}, nil
+		})
+}
+
+func (r RoutedArmFor) resolveTier(
+	ctx context.Context,
+	tier Arm,
+	rank, promptTokens, contextTokens int,
+	requirements router.Requirements,
+	budgets router.Budgets,
+) (Arm, router.Candidate, error) {
+	targets := []Fallback{{Target: tier.Target, Provider: tier.Provider, CacheAware: tier.CacheAware}}
+	targets = append(targets, tier.Fallbacks...)
+	var attempts []string
+	for _, target := range targets {
+		candidateArm := Arm{
+			Name: tier.Name, Target: target.Target, Provider: target.Provider, CacheAware: target.CacheAware,
+		}
+		info, err := r.probe(ctx, candidateArm)
+		if err != nil {
+			attempts = append(attempts, fmt.Sprintf("%s: %v", target.Target.Display(), err))
+			continue
+		}
+		candidate := candidateForRequest(candidateArm, rank, info, promptTokens, contextTokens)
+		_, _, candidate.CatalogKnown = r.Catalog.Lookup(candidateArm.Target)
+		if _, err := (router.Heuristic{}).Route(router.Input{
+			Candidates: []router.Candidate{candidate}, Requirements: requirements, Budgets: budgets, Pin: tier.Name,
+		}); err != nil {
+			attempts = append(attempts, fmt.Sprintf("%s: %v", target.Target.Display(), err))
+			continue
+		}
+		return candidateArm, candidate, nil
+	}
+	return Arm{}, router.Candidate{}, fmt.Errorf(
+		"tier and fallbacks cannot serve this request:\n  %s", strings.Join(attempts, "\n  "))
+}
+
+func (r RoutedArmFor) probe(ctx context.Context, arm Arm) (catalog.ModelInfo, error) {
+	if arm.Provider == nil {
+		return catalog.ModelInfo{}, fmt.Errorf("target %s has no provider binding", arm.Target.Display())
+	}
+	probe, err := arm.Provider.Probe(ctx, arm.Target)
 	if err != nil {
-		return Run{
-			TaskID: task.ID, Provenance: task.Provenance, Arm: RoutedArm, Seed: seed,
-			Detail: "routing failed: " + err.Error(),
+		return catalog.ModelInfo{}, fmt.Errorf("live probe failed: %w", err)
+	}
+	switch {
+	case !probe.Reachable:
+		return catalog.ModelInfo{}, fmt.Errorf("target is unreachable: %s", probe.Detail)
+	case !probe.ModelPresent:
+		return catalog.ModelInfo{}, fmt.Errorf("model is unavailable: %s", probe.Detail)
+	case probe.Tools == provider.ToolsNone:
+		return catalog.ModelInfo{}, fmt.Errorf("target cannot call tools")
+	}
+
+	info, _, ok := r.Catalog.Lookup(arm.Target)
+	if !ok {
+		info = catalog.ModelInfo{}
+	}
+	if probe.Vision {
+		info.Vision = true
+	}
+	switch probe.Tools {
+	case provider.ToolsSerial, provider.ToolsUnreliable:
+		info.Tools = catalog.ToolsSerial
+	case provider.ToolsParallel:
+		info.Tools = catalog.ToolsParallel
+	}
+	return info, nil
+}
+
+func candidateForRequest(arm Arm, rank int, info catalog.ModelInfo, promptTokens, contextTokens int) router.Candidate {
+	outputReserve := provider.EffectiveOutputTokenReserve(arm.Target, info.MaxOutput)
+	candidate := router.Candidate{
+		Tier: arm.Name, Target: arm.Target, Info: info, Rank: rank,
+		PromptTokens: promptTokens, ContextTokens: contextTokens,
+		ReservedOutputTokens: outputReserve,
+	}
+	candidate.Estimate = costmodel.Estimator{}.Turn(costmodel.Inputs{
+		Target: arm.Target, Info: info, PrefixTokens: promptTokens,
+		OutputTokens: 512, Eligible: info.Cache.UsageAccounting == catalog.AccountingSeparate,
+		HitProbability: 0,
+	})
+	candidate.CeilingCost = costmodel.Estimator{}.Turn(costmodel.Inputs{
+		Target: arm.Target, Info: info, PrefixTokens: contextTokens,
+		OutputTokens:   max(info.MaxOutput, outputReserve),
+		Eligible:       info.Cache.UsageAccounting == catalog.AccountingSeparate,
+		TokensAreExact: true,
+	}).High
+	return candidate
+}
+
+func requestNeedsVision(request provider.Request) bool {
+	for _, message := range request.Messages {
+		for _, block := range message.Content {
+			if _, ok := block.(provider.Image); ok {
+				return true
+			}
 		}
 	}
+	return false
+}
 
-	startRank := 0
-	for i, a := range r.Ladder {
-		if a.Name == decision.Tier {
-			startRank = i
-		}
+func requestPrompt(request provider.Request, fallback string) string {
+	if len(request.Messages) == 0 {
+		return fallback
 	}
-	escalation := &escalator{
-		sticky:  router.NewSticky(router.Policy{}, startRank),
-		detect:  router.NewDetector(),
-		ladder:  r.Ladder,
-		catalog: r.Catalog,
+	if prompt := request.Messages[len(request.Messages)-1].Text(); prompt != "" {
+		return prompt
 	}
-
-	out := runner.run(ctx, task, arm, seed, escalation)
-	out.Arm = RoutedArm
-	out.Target = escalation.finalTarget(arm)
-	out.Escalations = escalation.moves
-
-	// §7.1 requires estimate against actual per target, and the estimate has to
-	// be the one that was actually used to decide rather than one computed
-	// afterwards knowing what happened.
-	out.EstimatedCost = decision.EstimatedCost.Expected
-	return out
+	return fallback
 }
 
 // TargetsUsed reports which targets the router actually chose, which is the

@@ -9,7 +9,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // header goes at the top of every file this package writes. Once the TUI
@@ -207,6 +208,19 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
+	if c.Sandbox != "" && c.Sandbox != execution.SandboxOff {
+		if err := encode(&buf, struct {
+			Execution struct {
+				Sandbox string `toml:"sandbox"`
+			} `toml:"execution"`
+		}{Execution: struct {
+			Sandbox string `toml:"sandbox"`
+		}{Sandbox: string(c.Sandbox)}}); err != nil {
+			return nil, err
+		}
+		buf.WriteString("\n")
+	}
+
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
@@ -219,6 +233,9 @@ func encode(buf *bytes.Buffer, v any) error {
 // writeTierSection renders one rung under the given heading, shared by the
 // main ladder and the profiles so the two can never drift in format.
 func writeTierSection(buf *bytes.Buffer, heading string, t Tier) error {
+	if err := validateTierRoundTrip(t); err != nil {
+		return fmt.Errorf("%s: %w", heading, err)
+	}
 	fmt.Fprintf(buf, "[%s]\n", heading)
 	entry := tierEntry{
 		Label:   t.Label,
@@ -233,6 +250,28 @@ func writeTierSection(buf *bytes.Buffer, heading string, t Tier) error {
 		return err
 	}
 	buf.WriteString("\n")
+	return nil
+}
+
+// validateTierRoundTrip prevents Save from silently changing a target's wire,
+// cache, or pricing identity. The current human-editable TOML schema can
+// represent an explicit primary surface and reasoning effort, but it has no
+// fields for max output, temperature, explicit reasoning-off, or fallback
+// surfaces/parameters. Refusing those typed values before writing is safer
+// than producing a file that loads as a different target on the next run.
+func validateTierRoundTrip(t Tier) error {
+	primary, err := ParseTarget(t.Target.Provider+"/"+t.Target.ModelID,
+		surfaceToWrite(t.Target.Provider, t.Target.Surface), effortOf(t.Target))
+	if err != nil || primary.ID() != t.Target.ID() {
+		return fmt.Errorf("tier %s target %s cannot be represented without changing its identity", t.ID, t.Target.Display())
+	}
+	for index, target := range t.Fallbacks {
+		fallback, fallbackErr := ParseTarget(target.Provider+"/"+target.ModelID, "", "")
+		if fallbackErr != nil || fallback.ID() != target.ID() {
+			return fmt.Errorf("tier %s fallback %d (%s) cannot be represented without changing its identity",
+				t.ID, index+1, target.Display())
+		}
+	}
 	return nil
 }
 
@@ -286,6 +325,10 @@ func (c *Config) BindTier(id, label, ref, surface, effort string) error {
 	tier := Tier{ID: id, Label: label, Target: target}
 	for i, t := range c.Tiers {
 		if t.ID == id {
+			// Binding changes the rung's active model, not its outage policy.
+			// Keep an independent copy so a UI model change cannot silently erase
+			// hand-configured fallbacks or alias a caller-owned slice.
+			tier.Fallbacks = append([]provider.RouteTarget(nil), t.Fallbacks...)
 			c.Tiers[i] = tier
 			return nil
 		}

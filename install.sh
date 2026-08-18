@@ -1,7 +1,7 @@
 #!/bin/sh
 # Switchboard installer. Usage:
 #
-#   curl -fsSL https://raw.githubusercontent.com/cj-vana/switchboard/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/switchboard-code/switchboard/main/install.sh | bash
 #
 # Downloads the latest release (or SB_VERSION=vX.Y.Z for a specific one),
 # verifies it against the release's checksums, and installs sb into
@@ -9,7 +9,7 @@
 # SB_INSTALL_DIR and take responsibility for it.
 set -eu
 
-REPO="cj-vana/switchboard"
+REPO="switchboard-code/switchboard"
 INSTALL_DIR="${SB_INSTALL_DIR:-$HOME/.local/bin}"
 
 die() { echo "install: $*" >&2; exit 1; }

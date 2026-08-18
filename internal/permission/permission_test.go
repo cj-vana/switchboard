@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/execution"
 )
 
 var (
@@ -33,6 +33,8 @@ func TestModeDefaults(t *testing.T) {
 		{ModePlan, Allow, Deny, Deny},
 		{ModeDefault, Allow, Ask, Ask},
 		{ModeAcceptEdits, Allow, Allow, Ask},
+		{ModeAuto, Allow, Allow, Ask},
+		{ModeYOLO, Allow, Allow, Allow},
 		// bypass would allow execution, but there is no sandbox to bypass into.
 		{ModeBypass, Allow, Allow, Ask},
 	}
@@ -78,7 +80,7 @@ func TestBypassDoesNotGrantExecutionWithoutASandbox(t *testing.T) {
 	}
 }
 
-func TestAllowRuleForExecutionIsStillGatedOnTheSandbox(t *testing.T) {
+func TestExplicitAllowRuleCanGrantHostDirectExecution(t *testing.T) {
 	e := NewEngine(ModeDefault, noSandbox, Rule{
 		Decision:   Allow,
 		Tool:       "exec",
@@ -86,8 +88,8 @@ func TestAllowRuleForExecutionIsStillGatedOnTheSandbox(t *testing.T) {
 	})
 
 	out := e.Check(exec())
-	if out.Decision != Ask || !out.SandboxAbsent {
-		t.Errorf("a rule must not be able to grant unsandboxed execution, got %+v", out)
+	if out.Decision != Allow || !out.SandboxAbsent || !out.FullReach {
+		t.Errorf("an explicit rule should grant host-direct execution and say so, got %+v", out)
 	}
 
 	verified := NewEngine(ModeDefault, verifiedSandbox, Rule{
@@ -210,6 +212,31 @@ func TestRememberIsExactMatchOnly(t *testing.T) {
 	}
 }
 
+func TestRememberedExecutionApprovalIsScopedToEffectiveReach(t *testing.T) {
+	controller, err := execution.NewController(verifiedSandbox, execution.SandboxOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngineWithExecution(ModeDefault, controller)
+	confined := exec()
+	confinedPolicy := controller.CommandPolicy(false)
+	confined.Execution = &confinedPolicy
+	engine.Remember(confined, true)
+	if got := engine.Check(confined); got.Decision != Allow {
+		t.Fatalf("same confined request = %+v", got)
+	}
+
+	if err := controller.SetSandbox(execution.SandboxOff); err != nil {
+		t.Fatal(err)
+	}
+	hostDirect := exec()
+	hostPolicy := controller.CommandPolicy(false)
+	hostDirect.Execution = &hostPolicy
+	if got := engine.Check(hostDirect); got.Decision != Ask || !got.FullReach {
+		t.Fatalf("confined approval widened to host reach: %+v", got)
+	}
+}
+
 func TestRememberedDenialSticks(t *testing.T) {
 	e := NewEngine(ModeDefault, noSandbox)
 	e.Remember(write(), false)
@@ -292,12 +319,12 @@ func TestResolveAllowsReadsWithoutPrompting(t *testing.T) {
 }
 
 func TestParseMode(t *testing.T) {
-	for _, s := range []string{"plan", "default", "acceptEdits", "bypass"} {
+	for _, s := range []string{"plan", "default", "acceptEdits", "auto", "yolo", "bypass"} {
 		if _, err := ParseMode(s); err != nil {
 			t.Errorf("ParseMode(%q): %v", s, err)
 		}
 	}
-	if _, err := ParseMode("yolo"); err == nil {
+	if _, err := ParseMode("certainly-not-a-mode"); err == nil {
 		t.Error("an unknown mode must be an error, not a silent default")
 	}
 }
@@ -310,7 +337,7 @@ func external() Request {
 // mode auto-allows it — bypass included, even on a host with a verified
 // sandbox, because the server was never inside it.
 func TestExternalEffectAsksInEveryMode(t *testing.T) {
-	for _, mode := range []Mode{ModeDefault, ModeAcceptEdits, ModeBypass} {
+	for _, mode := range []Mode{ModeDefault, ModeAcceptEdits, ModeAuto, ModeYOLO, ModeBypass} {
 		for _, cap := range []execution.Capability{noSandbox, verifiedSandbox} {
 			e := NewEngine(mode, cap)
 			if got := e.Check(external()).Decision; got != Ask {

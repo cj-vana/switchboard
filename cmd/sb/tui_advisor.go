@@ -8,21 +8,27 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/advisor"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/advisor"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 type adviceMsg struct{ text string }
 
 type advisorReadyMsg struct {
-	adv  *advisor.Advisor
-	tier config.Tier
-	err  error
+	adv       *advisor.Advisor
+	tier      config.Tier
+	action    string
+	err       error
+	operation uint64
+	sourceID  string
 }
 
 const advisorUsage = "usage: /advisor [on|off|status]"
@@ -30,22 +36,54 @@ const advisorUsage = "usage: /advisor [on|off|status]"
 func cmdAdvisor(m *tuiModel, args string) tea.Cmd {
 	switch strings.TrimSpace(args) {
 	case "", "status":
-		if m.app.advisor == nil {
+		if m.operationActive && strings.HasPrefix(m.operationName, "advisor ") {
+			return noticeCmd("", m.operationName+" is in progress")
+		}
+		advisor := m.app.currentAdvisor()
+		if advisor == nil {
 			return noticeCmd("", "advisor is off; /advisor on binds "+describeAdvisorChoice(m.app)+"")
 		}
-		return noticeCmd("", "advisor is on, using "+string(m.app.advisor.Target().ID()))
+		return noticeCmd("", "advisor is on, using "+advisor.Target().Display())
 	case "on":
-		if m.app.advisor != nil {
-			return noticeCmd("", "advisor is already on, using "+string(m.app.advisor.Target().ID()))
+		if m.operationActive && m.operationName == "advisor on" {
+			return noticeCmd("", "advisor is already starting")
 		}
-		return startAdvisor(m.app)
+		if advisor := m.app.currentAdvisor(); advisor != nil {
+			return noticeCmd("", "advisor is already on, using "+advisor.Target().Display())
+		}
+		ctx, generation, sourceID, err := m.startOperation("advisor on")
+		if err != nil {
+			return noticeCmd("warn", err.Error())
+		}
+		return startAdvisor(ctx, m.app, generation, sourceID)
 	case "off":
-		if m.app.advisor == nil {
+		if m.operationActive && m.operationName == "advisor on" {
+			if !m.operationCancelling && m.turnCancel != nil {
+				m.operationCancelling = true
+				m.turnCancel()
+				m.addNotice("", "cancelling advisor on")
+			}
+			return nil
+		}
+		adv := m.app.currentAdvisor()
+		if adv == nil {
 			return noticeCmd("", "advisor is already off")
 		}
-		m.app.advisor = nil
-		m.app.loop.Observer = m.app.watcher
-		return noticeCmd("", "advisor is off")
+		ctx, generation, sourceID, err := m.startOperation("advisor off")
+		if err != nil {
+			return noticeCmd("warn", err.Error())
+		}
+		return func() tea.Msg {
+			// Detaching without draining would make a later fork unable to see
+			// this advisor even though its old-session provider call was still
+			// running. Keep it discoverable until its WAL is settled.
+			result := advisorReadyMsg{adv: adv, action: "off", operation: generation, sourceID: sourceID}
+			if err := adv.PauseAndWait(ctx); err != nil {
+				adv.Resume()
+				result.err = err
+			}
+			return result
+		}
 	default:
 		return noticeCmd("error", advisorUsage)
 	}
@@ -83,45 +121,110 @@ func describeAdvisorChoice(app *tuiApp) string {
 	if err != nil {
 		return "the [slots] advisor entry, which does not parse: " + err.Error()
 	}
-	return string(t.Target.ID())
+	return t.Target.Display()
 }
 
-func startAdvisor(app *tuiApp) tea.Cmd {
+func startAdvisor(ctx context.Context, app *tuiApp, operation uint64, sourceID string) tea.Cmd {
 	tier, err := advisorTier(app)
 	if err != nil {
-		return noticeCmd("error", err.Error())
+		return func() tea.Msg {
+			return advisorReadyMsg{action: "on", err: err, operation: operation, sourceID: sourceID}
+		}
 	}
+	sess := app.loop.Session
 	return func() tea.Msg {
-		probed, client, err := app.providers.probeTier(context.Background(), tier)
+		probed, client, err := app.providers.probeTier(ctx, tier)
 		if err != nil {
-			return advisorReadyMsg{err: err}
+			return advisorReadyMsg{action: "on", err: err, operation: operation, sourceID: sourceID}
 		}
 		adv := advisor.New(app.watcher, client, probed.Target, func(text string) {
 			app.p.Send(adviceMsg{text: text})
-		})
-		return advisorReadyMsg{adv: adv, tier: probed}
+		}, advisor.WithMeter(advisorMeterFor(app, sess, probed.Target)))
+		return advisorReadyMsg{adv: adv, tier: probed, action: "on", operation: operation, sourceID: sourceID}
 	}
 }
 
-func (m *tuiModel) onAdvisorReady(msg advisorReadyMsg) {
-	if msg.err != nil {
-		m.addNotice("error", "advisor could not start: "+msg.err.Error())
-		return
+func advisorMeterFor(app *tuiApp, sess *session.Session, target provider.RouteTarget) advisor.Meter {
+	return func(req provider.Request) (advisor.AttemptFinish, error) {
+		finish, err := beginMeteredCall(app.budget, app.catalog, sess, target, req, session.UsagePurposeAdvisor)
+		if err != nil {
+			return nil, err
+		}
+		return advisor.AttemptFinish(finish), nil
 	}
-	m.app.advisor = msg.adv
-	m.app.loop.Observer = msg.adv
-	m.addNotice("advisor", "watching this session with "+string(msg.adv.Target().ID())+
+}
+
+// pauseAdvisorLedger is the session-transition barrier for the advisor's
+// asynchronous provider call. It both prevents a new call and waits until an
+// admitted call has durably settled before a fork takes its ledger snapshot.
+// The returned release is idempotent so every error path can safely defer it.
+func pauseAdvisorLedger(ctx context.Context, app *tuiApp) (func(), error) {
+	adv := app.currentAdvisor()
+	if adv == nil {
+		return func() {}, nil
+	}
+	if err := adv.PauseAndWait(ctx); err != nil {
+		adv.Resume()
+		return nil, err
+	}
+	var once sync.Once
+	return func() { once.Do(adv.Resume) }, nil
+}
+
+func (m *tuiModel) onAdvisorReady(msg advisorReadyMsg) tea.Cmd {
+	if !m.operationMatches(msg.operation, msg.sourceID) {
+		if msg.action == "off" && msg.adv != nil {
+			msg.adv.Resume()
+		}
+		return nil
+	}
+	cancelled := m.operationCancelling || errors.Is(msg.err, context.Canceled)
+	if cancelled {
+		if msg.action == "off" && msg.adv != nil {
+			msg.adv.Resume()
+		}
+		m.finishOperation(msg.operation, false)
+		m.addNotice("", "advisor "+msg.action+" cancelled")
+		return m.nextQueuedTurn()
+	}
+	if msg.err != nil {
+		m.finishOperation(msg.operation, false)
+		m.addNotice("error", "advisor could not "+map[string]string{"on": "start", "off": "stop cleanly"}[msg.action]+": "+msg.err.Error())
+		return m.nextQueuedTurn()
+	}
+	if msg.action == "off" {
+		if m.app.currentAdvisor() == msg.adv {
+			m.app.setAdvisor(nil)
+			m.app.loop.SetObserver(m.app.watcher)
+		} else if msg.adv != nil {
+			msg.adv.Resume()
+		}
+		m.finishOperation(msg.operation, false)
+		m.addNotice("", "advisor is off")
+		return m.nextQueuedTurn()
+	}
+	// The probe may have completed after a session/tier bind rebuilt the
+	// watcher. Always wrap the graph current at installation time, not the one
+	// that happened to exist when the async probe started.
+	msg.adv.SetInner(m.app.watcher)
+	msg.adv.SetMeter(advisorMeterFor(m.app, m.app.loop.Session, msg.adv.Target()))
+	m.app.setAdvisor(msg.adv)
+	m.app.loop.SetObserver(msg.adv)
+	m.addNotice("advisor", "watching this session with "+msg.adv.Target().Display()+
 		"; advice appears here and is passed to the model")
+	m.finishOperation(msg.operation, false)
+	return m.nextQueuedTurn()
 }
 
 // adviceContext folds advice that arrived after a turn ended into the next
 // prompt, the same seam the ! output uses and for the same reason: one user
 // message per turn.
 func (m *tuiModel) adviceContext(prompt string) string {
-	if m.app.advisor == nil {
+	advisor := m.app.currentAdvisor()
+	if advisor == nil {
 		return prompt
 	}
-	msgs := m.app.advisor.Drain()
+	msgs := advisor.Drain()
 	if len(msgs) == 0 {
 		return prompt
 	}

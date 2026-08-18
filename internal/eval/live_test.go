@@ -2,21 +2,23 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/provider/anthropic"
-	"github.com/cj-vana/switchboard/internal/provider/kimi"
-	"github.com/cj-vana/switchboard/internal/provider/ollama"
-	"github.com/cj-vana/switchboard/internal/provider/openai"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/anthropic"
+	"github.com/switchboard-code/switchboard/internal/provider/kimi"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
+	"github.com/switchboard-code/switchboard/internal/provider/openai"
 )
 
 // armsFor builds the ladder, lowest rung first. The baselines are its ends.
@@ -152,25 +154,37 @@ func TestLiveBaselineRuns(t *testing.T) {
 	// A subset by default. The gate refuses below the floor, which is the
 	// correct outcome for a partial run and the reason a partial run cannot be
 	// mistaken for a measurement.
-	limit := 3
-	if n := os.Getenv("SB_EVAL_TASKS"); n != "" {
-		fmt.Sscanf(n, "%d", &limit)
-	}
-	if limit > len(tasks) {
-		limit = len(tasks)
-	}
-	tasks = tasks[:limit]
+	tasks = selectTasks(t, tasks, 3)
 
-	seeds := 1
-	if n := os.Getenv("SB_EVAL_SEEDS"); n != "" {
-		fmt.Sscanf(n, "%d", &seeds)
-	}
+	seeds := positiveIntEnv(t, "SB_EVAL_SEEDS", 1)
 
 	runner := Runner{Catalog: cat, Timeout: 8 * time.Minute}
 	ctx := context.Background()
+	workers := positiveIntEnv(t, "SB_EVAL_WORKERS", 4)
 
 	arms := armsFor(t)
 	routed := RoutedArmFor{Catalog: cat, Ladder: arms}
+	pinOnly := os.Getenv("SB_EVAL_LADDER") == "pin"
+	expectedArms := expectedArmNames(arms, pinOnly)
+	expectedTargets := expectedTargetIDs(arms)
+	pins := Pins{
+		HarnessCommit:   os.Getenv("SB_EVAL_COMMIT"),
+		CatalogRevision: cat.Revision,
+		PromptVersion:   "v1",
+		Snapshots:       snapshotsFromEnv(t),
+	}
+	if missing := pins.complete(expectedTargets); len(missing) > 0 {
+		t.Fatalf("refusing to spend on an unpinned evaluation: no %s recorded", joinWords(missing))
+	}
+	replicates := make([]int, seeds)
+	for replicate := range seeds {
+		replicates[replicate] = replicate
+	}
+	armTargets := map[string][]provider.RouteTargetID{}
+	for _, arm := range arms {
+		armTargets[arm.Name] = []provider.RouteTargetID{arm.Target.ID()}
+	}
+	evalID := evaluationID(tasks, expectedArms, armTargets, expectedTargets, replicates, workers, pins)
 	if note := meteringNote(cat, arms); note != "" {
 		t.Logf("note: %s", note)
 	}
@@ -196,35 +210,29 @@ func TestLiveBaselineRuns(t *testing.T) {
 	// repository, its own session, and its own sandbox check. Running them
 	// concurrently is what makes a corpus this size finishable, since the full
 	// gate is a few hundred attempts of several minutes each.
-	workers := 4
-	if n := os.Getenv("SB_EVAL_WORKERS"); n != "" {
-		fmt.Sscanf(n, "%d", &workers)
-	}
-
-	// Interleaved by task rather than grouped by arm. A run this long is
-	// frequently cut short, and grouping means the first arm completes while the
-	// others have nothing at all: a partial result covering one arm answers no
-	// comparison. Interleaved, whatever finishes covers every arm evenly.
-	pinOnly := os.Getenv("SB_EVAL_LADDER") == "pin"
-	type job func() Run
-	var jobs []job
-	for _, task := range tasks {
-		for seed := range seeds {
-			for _, arm := range arms {
-				jobs = append(jobs, func() Run { return runner.Run(ctx, task, arm, seed) })
-			}
-			if !pinOnly {
-				jobs = append(jobs, func() Run { return routed.Run(ctx, runner, task, seed) })
-			}
-		}
-	}
-
 	// Results are durable as they happen. A run this long dies to a deadline
-	// often enough that holding them in memory loses the whole measurement.
+	// often enough that holding them in memory loses the whole measurement. A
+	// clean partial journal is also the resume index: completed cells are not
+	// paid for twice. Duplicate cells already present remain in the evidence so
+	// the gate can refuse them rather than silently choosing a winner.
 	journalPath := os.Getenv("SB_EVAL_JOURNAL")
 	if journalPath == "" {
 		journalPath = "eval-runs.jsonl"
 	}
+	var runs []Run
+	if recorded, err := ReadJournal(journalPath); err == nil {
+		runs = recorded
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for i, run := range runs {
+		if run.EvaluationID != evalID {
+			t.Fatalf("journal row %d belongs to evaluation %q, not %q; use a clean journal path",
+				i+1, run.EvaluationID, evalID)
+		}
+	}
+	done := Done(runs)
+
 	journal, err := NewJournal(journalPath)
 	if err != nil {
 		t.Fatal(err)
@@ -232,9 +240,34 @@ func TestLiveBaselineRuns(t *testing.T) {
 	defer journal.Close()
 	t.Logf("recording each attempt to %s as it finishes", journalPath)
 
+	// Interleaved by task rather than grouped by arm. A run this long is
+	// frequently cut short, and grouping means the first arm completes while the
+	// others have nothing at all: a partial result covering one arm answers no
+	// comparison. Interleaved, whatever finishes covers every arm evenly.
+	type job struct {
+		run func() Run
+	}
+	var jobs []job
+	for _, task := range tasks {
+		for seed := range seeds {
+			for _, arm := range arms {
+				key := attemptKey(arm.Name, task.ID, seed)
+				if !done[key] {
+					jobs = append(jobs, job{run: func() Run { return runner.Run(ctx, task, arm, seed) }})
+				}
+			}
+			if !pinOnly {
+				key := attemptKey(RoutedArm, task.ID, seed)
+				if !done[key] {
+					jobs = append(jobs, job{run: func() Run { return routed.Run(ctx, runner, task, seed) }})
+				}
+			}
+		}
+	}
+	t.Logf("resuming %d recorded attempt(s); %d remain", len(runs), len(jobs))
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	var runs []Run
 	queue := make(chan job)
 
 	for range workers {
@@ -242,7 +275,8 @@ func TestLiveBaselineRuns(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := range queue {
-				got := j()
+				got := j.run()
+				got.EvaluationID = evalID
 				if err := journal.Append(got); err != nil {
 					t.Errorf("recording an attempt failed: %v", err)
 				}
@@ -280,18 +314,75 @@ func TestLiveBaselineRuns(t *testing.T) {
 	report(t, runs)
 
 	// The gate must refuse a partial corpus rather than report a number.
-	v := Gate{}.Evaluate(tasks, runs, Pins{
-		HarnessCommit:   "live",
-		CatalogRevision: cat.Revision,
-		PromptVersion:   "v1",
-		Snapshots:       map[provider.RouteTargetID]string{"anthropic/first-party/claude-haiku-4-5": "claude-haiku-4-5-20251001"},
-	})
+	v := Gate{
+		ExpectedArms:        expectedArms,
+		ExpectedTargets:     expectedTargets,
+		RequireEvaluationID: true,
+		EvaluationWorkers:   workers,
+	}.Evaluate(tasks, runs, pins)
 	if len(tasks) < MinimumTier1Tasks && !v.Refused {
 		t.Errorf("a %d task run produced a verdict rather than refusing", len(tasks))
 	}
 	for _, reason := range v.Reasons {
 		t.Logf("gate: %s", reason)
 	}
+}
+
+func selectTasks(t *testing.T, tasks []Task, defaultLimit int) []Task {
+	t.Helper()
+	limit := positiveIntEnv(t, "SB_EVAL_TASKS", defaultLimit)
+	if limit > len(tasks) {
+		limit = len(tasks)
+	}
+	return tasks[:limit]
+}
+
+func positiveIntEnv(t *testing.T, name string, fallback int) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		t.Fatalf("%s must be a positive integer, got %q", name, raw)
+	}
+	return value
+}
+
+func expectedArmNames(arms []Arm, pinOnly bool) []string {
+	out := make([]string, 0, len(arms)+1)
+	for _, arm := range arms {
+		out = append(out, arm.Name)
+	}
+	if !pinOnly {
+		out = append(out, RoutedArm)
+	}
+	return out
+}
+
+func expectedTargetIDs(arms []Arm) []provider.RouteTargetID {
+	var out []provider.RouteTargetID
+	for _, arm := range arms {
+		out = append(out, arm.Target.ID())
+		for _, fallback := range arm.Fallbacks {
+			out = append(out, fallback.Target.ID())
+		}
+	}
+	return out
+}
+
+func snapshotsFromEnv(t *testing.T) map[provider.RouteTargetID]string {
+	t.Helper()
+	raw := os.Getenv("SB_EVAL_SNAPSHOTS")
+	if raw == "" {
+		return nil
+	}
+	var snapshots map[provider.RouteTargetID]string
+	if err := json.Unmarshal([]byte(raw), &snapshots); err != nil {
+		t.Fatalf("SB_EVAL_SNAPSHOTS is not a JSON target-to-snapshot object: %v", err)
+	}
+	return snapshots
 }
 
 func report(t *testing.T, runs []Run) {

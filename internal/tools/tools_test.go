@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 func newRegistry(t *testing.T) (*Registry, string) {
@@ -318,6 +318,85 @@ func TestExecPlanDescribesThePermissionRequest(t *testing.T) {
 	}
 	if strings.Join(req.Argv, " ") != "go test ./..." {
 		t.Errorf("argv = %v", req.Argv)
+	}
+	if req.Path != "." {
+		t.Errorf("command cwd = %q, want workspace-relative dot", req.Path)
+	}
+	if req.Execution == nil || !req.Execution.FullAccess && req.Execution.Network != execution.NetworkFull {
+		t.Errorf("permission request omitted effective execution policy: %+v", req.Execution)
+	}
+}
+
+func TestExecPermissionArgvCannotRewriteRun(t *testing.T) {
+	r, _ := newRegistry(t)
+	tool, _ := r.Get("exec")
+	plan, err := tool.Plan(json.RawMessage(`{"command":["printf","safe"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Request.Argv[0] = "false"
+	result, err := plan.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError || result.Content != "safe" {
+		t.Fatalf("request argv mutation rewrote executable closure: %+v", result)
+	}
+}
+
+func TestExecDescriptionEscapesTerminalControlSequences(t *testing.T) {
+	got := Describe([]string{"printf", "\x1b[2J\x1b]0;APPROVED\x07"}, false)
+	if strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, `\x1b[2J`) || !strings.Contains(got, `\x07`) {
+		t.Fatalf("unsafe command description %q", got)
+	}
+}
+
+func TestExecDescriptionPreservesArgvBoundariesAfterEscaping(t *testing.T) {
+	got := Describe([]string{"printf", "safe\x1b[0m --danger", ""}, false)
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("description retained raw escape: %q", got)
+	}
+	if !strings.Contains(got, `"safe\\x1b[0m --danger"`) {
+		t.Fatalf("escaped spaced argument lost its quotes: %q", got)
+	}
+	if !strings.HasSuffix(got, ` ""`) {
+		t.Fatalf("empty argument disappeared: %q", got)
+	}
+}
+
+func TestExecRefusesWhenReachChangesAfterPermissionSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after execution.SandboxMode
+	}{
+		{"off-to-on", execution.SandboxOff, execution.SandboxOn},
+		{"on-to-off", execution.SandboxOn, execution.SandboxOff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			controller, err := execution.NewController(execution.TestingVerifiedCapability(), tc.before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry, err := NewRegistryWithExecution(t.TempDir(), controller)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool, _ := registry.Get("exec")
+			plan, err := tool.Plan(json.RawMessage(`{"command":["sh","-c","exit 99"]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := controller.SetSandbox(tc.after); err != nil {
+				t.Fatal(err)
+			}
+			result, err := plan.Run(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError || !strings.Contains(result.Content, "changed after permission") {
+				t.Fatalf("result = %+v", result)
+			}
+		})
 	}
 }
 

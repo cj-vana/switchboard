@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/provider/openaicompat"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
 // OpenAI is its own provider, not a profile of the compatible adapter. Sharing

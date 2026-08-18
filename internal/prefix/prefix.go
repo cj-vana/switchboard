@@ -17,14 +17,19 @@
 package prefix
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"sort"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Zone names a region of the request. The order is the order they are sent in,
@@ -424,6 +429,91 @@ func RequestTokens(req provider.Request) int {
 		}
 	}
 	return total
+}
+
+// RequestTokenCeiling is the fail-safe count used for hard context and dollar
+// limits. RequestTokens deliberately remains the comparable chars/4 estimate
+// used for the displayed expected cost. A measured average error cannot be a
+// hard bound: dense Unicode, code, and many tiny blocks can all tokenize much
+// more densely than that sample. This count therefore allows one token for
+// every payload byte and adds explicit request framing. Byte-fallback
+// tokenizers cannot exceed that text allowance; media has a separate bound.
+func RequestTokenCeiling(req provider.Request) int {
+	total := 16 // request envelope
+	for _, block := range req.System {
+		total = saturatingIntAdd(total, 8)
+		total = saturatingIntAdd(total, blockTokenCeiling(block))
+	}
+	for _, message := range req.Messages {
+		total = saturatingIntAdd(total, 16+len(message.Role))
+		for _, block := range message.Content {
+			total = saturatingIntAdd(total, 8)
+			total = saturatingIntAdd(total, blockTokenCeiling(block))
+		}
+	}
+	for _, tool := range req.Tools {
+		total = saturatingIntAdd(total, 32)
+		total = saturatingIntAdd(total, len(tool.Name))
+		total = saturatingIntAdd(total, len(tool.Description))
+		total = saturatingIntAdd(total, len(tool.Schema))
+	}
+	return total
+}
+
+func blockTokenCeiling(block provider.Block) int {
+	switch value := block.(type) {
+	case provider.Text:
+		return len(value.Text)
+	case provider.Thinking:
+		return saturatingIntAdd(len(value.Text), len(value.Signature))
+	case provider.ToolUse:
+		total := saturatingIntAdd(len(value.ID), len(value.Name))
+		return saturatingIntAdd(total, len(value.Input))
+	case provider.ToolResult:
+		total := saturatingIntAdd(len(value.ToolUseID), len(value.Name))
+		return saturatingIntAdd(total, len(value.Content))
+	case provider.Image:
+		return saturatingIntAdd(len(value.MediaType), imageTokenCeiling(value.Data))
+	case provider.Document:
+		metadata := saturatingIntAdd(len(value.MediaType), len(value.Name))
+		if strings.HasPrefix(strings.ToLower(value.MediaType), "text/") {
+			return saturatingIntAdd(metadata, len(value.Data))
+		}
+		// Compressed PDFs and office documents can expand without a safe
+		// byte ratio. Mark them unknown so a finite context window refuses
+		// them instead of accepting a fabricated bound.
+		return int(^uint(0) >> 1)
+	default:
+		// A new block type has no established hard bound. Fail closed until
+		// its provider rendering and tokenization are accounted for here.
+		return int(^uint(0) >> 1)
+	}
+}
+
+func imageTokenCeiling(data []byte) int {
+	// One token per encoded byte is already deliberately pessimistic. Geometry
+	// is a separate lower bound because a highly compressible image may contain
+	// very few bytes while providers tile a large decoded canvas.
+	ceiling := saturatingIntAdd(len(data), 2_048)
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return max(ceiling, 8_192)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if config.Width > maxInt/config.Height {
+		return maxInt
+	}
+	pixels := config.Width * config.Height
+	geometry := saturatingIntAdd((pixels+255)/256, 2_048)
+	return max(ceiling, geometry)
+}
+
+func saturatingIntAdd(a, b int) int {
+	maxInt := int(^uint(0) >> 1)
+	if a < 0 || b < 0 || a > maxInt-b {
+		return maxInt
+	}
+	return a + b
 }
 
 func blockTokens(b provider.Block) int {

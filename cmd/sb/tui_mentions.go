@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 const (
@@ -166,6 +166,12 @@ func (m *tuiModel) acceptMention() {
 // image comes back as an image block instead of text, with a labelled line
 // in the prompt tying the attachment to the mention.
 func (m *tuiModel) expandMentions(prompt string) (string, []provider.Image) {
+	return expandPromptMentions(m.app.workspace, prompt)
+}
+
+// expandPromptMentions is shared by the interactive surfaces so `/tN prompt`
+// and an ordinary prompt assemble identical text and image blocks.
+func expandPromptMentions(workspace, prompt string) (string, []provider.Image) {
 	var attached []string
 	var images []provider.Image
 	seen := map[string]bool{}
@@ -174,7 +180,7 @@ func (m *tuiModel) expandMentions(prompt string) (string, []provider.Image) {
 		if token == field || token == "" || seen[token] || len(attached) >= mentionMaxFiles {
 			continue
 		}
-		path := filepath.Join(m.app.workspace, token)
+		path := filepath.Join(workspace, token)
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
 			continue

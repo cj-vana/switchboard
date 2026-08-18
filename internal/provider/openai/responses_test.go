@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func serveResponses(t *testing.T, handler http.HandlerFunc) *ResponsesClient {
@@ -272,6 +272,23 @@ func TestResponsesRefusesABreakpointPlan(t *testing.T) {
 	var capErr *provider.CapabilityError
 	if !errors.As(err, &capErr) {
 		t.Fatalf("err = %v, want a CapabilityError", err)
+	}
+}
+
+func TestResponsesRendersThePromptCacheRoutingKey(t *testing.T) {
+	body, err := NewResponses().buildRequest(SubscriptionTarget("gpt-5.4-mini"), provider.Request{
+		Messages:  []provider.Message{provider.UserText("hi")},
+		CachePlan: &provider.CachePlan{RoutingKey: "stable-prefix-abc"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request responsesRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.PromptCacheKey != "stable-prefix-abc" {
+		t.Fatalf("prompt_cache_key = %q, want the manager's routing key", request.PromptCacheKey)
 	}
 }
 

@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/terminaltext"
 )
 
 const maxExecTimeout = 10 * time.Minute
@@ -19,7 +20,10 @@ type execTool struct{ r *Registry }
 func (t *execTool) Name() string { return "exec" }
 
 func (t *execTool) Description() string {
-	return "Run a command in the workspace. By default the command array is executed directly, " +
+	return "Run a command with the session's current execution reach. Sandbox is off by default, " +
+		"so an approved command can access the host filesystem outside the workspace and the network. " +
+		"When a verified sandbox is active, writes are limited to the workspace, temp, and build caches; broad system and outside-home paths remain readable, and network requests are gated. " +
+		"By default the command array is executed directly, " +
 		"with no shell, so quoting, globs, pipes, and variables are not interpreted. " +
 		"Set shell to true to run through /bin/sh, and then pass the whole script as a " +
 		"single element. Combined stdout and stderr are returned; long output has its " +
@@ -38,7 +42,7 @@ func (t *execTool) Schema() json.RawMessage {
       "description": "Program and arguments, for example [\"go\",\"test\",\"./...\"]. When shell is true, pass exactly one element holding the whole script."
     },
     "shell": {"type": "boolean", "description": "Run the single command element through /bin/sh. Only needed for pipes, redirection, or expansion."},
-    "network": {"type": "boolean", "description": "Request access to the internet. Off by default: commands can reach localhost but nothing beyond this machine, so package installs and git fetch need this set. It always requires the user's approval."},
+	"network": {"type": "boolean", "description": "Request internet access when a sandbox is active. With the default sandbox-off posture, approved commands already have the host's full network reach regardless of this hint."},
     "timeout_seconds": {"type": "integer", "description": "Wall-clock limit. Defaults to 120."}
   },
   "required": ["command"]
@@ -73,32 +77,42 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 			in.TimeoutSeconds, maxExecTimeout)
 	}
 
-	network := execution.NetworkLoopback
-	if in.Network {
-		network = execution.NetworkFull
-	}
-
+	policy := t.r.execution.CommandPolicy(in.Network)
+	requestPolicy := policy
+	runPolicy := policy
+	// Keep the auditable request and the executable closure on distinct
+	// backing arrays. Permission/reviewer code may inspect Request.Argv, but
+	// cannot rewrite what Run will execute after approval.
+	runArgv := append([]string(nil), in.Command...)
+	requestArgv := append([]string(nil), runArgv...)
 	return Plan{
 		Request: permission.Request{
-			Tool:    t.Name(),
-			Effect:  permission.EffectExecute,
-			Argv:    in.Command,
-			Shell:   in.Shell,
-			Network: in.Network,
+			Tool:      t.Name(),
+			Effect:    permission.EffectExecute,
+			Path:      ".", // command working directory, relative to the workspace
+			Argv:      requestArgv,
+			Shell:     in.Shell,
+			Network:   in.Network,
+			Execution: &requestPolicy,
 		},
 		Run: func(ctx context.Context) (Result, error) {
+			release, err := t.r.execution.Hold(runPolicy, in.Network)
+			if err != nil {
+				return errorf("exec: %v", err)
+			}
+			defer release()
 			res, err := execution.Run(ctx, execution.Command{
-				Argv:    in.Command,
+				Argv:    runArgv,
 				Shell:   in.Shell,
 				Dir:     t.r.root,
 				Timeout: timeout,
 				// The confinement and the permission decision come from one
 				// capability, so a command approved as contained cannot then run
 				// unconfined.
-				Confine: t.r.capability.Confinement(),
+				Confine: runPolicy.Confinement,
 				Policy: execution.Policy{
 					Workspace: t.r.root,
-					Network:   network,
+					Network:   runPolicy.Network,
 				},
 			})
 			if err != nil {
@@ -149,10 +163,11 @@ func Describe(argv []string, shell bool) string {
 	}
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
-		if strings.ContainsAny(a, " \t\n\"'\\$`") {
-			quoted[i] = strconv.Quote(a)
+		escaped := terminaltext.Escape(a)
+		if a == "" || strings.ContainsAny(a, " \t\n\"'\\$`;|&()<>*?[]{}!~") {
+			quoted[i] = strconv.Quote(escaped)
 		} else {
-			quoted[i] = a
+			quoted[i] = escaped
 		}
 	}
 	return strings.Join(quoted, " ")

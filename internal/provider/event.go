@@ -1,5 +1,10 @@
 package provider
 
+import (
+	"fmt"
+	"math"
+)
+
 type EventType string
 
 const (
@@ -58,6 +63,70 @@ type Usage struct {
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
+// Validate rejects provider telemetry that cannot describe real consumption.
+// Adapters parse untrusted wire values, so this check also belongs at durable
+// accounting boundaries rather than relying on every decoder to remember it.
+func (u Usage) Validate() error {
+	switch {
+	case u.InputTokens < 0:
+		return fmt.Errorf("input token count cannot be negative")
+	case u.OutputTokens < 0:
+		return fmt.Errorf("output token count cannot be negative")
+	case u.CacheReadTokens < 0:
+		return fmt.Errorf("cache-read token count cannot be negative")
+	case u.CacheWriteTokens < 0:
+		return fmt.Errorf("cache-write token count cannot be negative")
+	default:
+		return nil
+	}
+}
+
+// CheckedAdd adds two non-negative usage reports without allowing an int
+// wraparound to turn a large bill into a small or negative one.
+func (u Usage) CheckedAdd(o Usage) (Usage, error) {
+	if err := u.Validate(); err != nil {
+		return Usage{}, err
+	}
+	if err := o.Validate(); err != nil {
+		return Usage{}, err
+	}
+	add := func(a, b int) (int, error) {
+		if b > math.MaxInt-a {
+			return 0, fmt.Errorf("token accounting overflow")
+		}
+		return a + b, nil
+	}
+	var out Usage
+	var err error
+	if out.InputTokens, err = add(u.InputTokens, o.InputTokens); err != nil {
+		return Usage{}, err
+	}
+	if out.OutputTokens, err = add(u.OutputTokens, o.OutputTokens); err != nil {
+		return Usage{}, err
+	}
+	if out.CacheReadTokens, err = add(u.CacheReadTokens, o.CacheReadTokens); err != nil {
+		return Usage{}, err
+	}
+	if out.CacheWriteTokens, err = add(u.CacheWriteTokens, o.CacheWriteTokens); err != nil {
+		return Usage{}, err
+	}
+	return out, nil
+}
+
+// TotalInputTokens is the provider's uncached, cache-read, and cache-write
+// input combined. It saturates for display and feasibility calculations; a
+// durable session uses CheckedAdd and rejects the same overflow instead.
+func (u Usage) TotalInputTokens() int {
+	total := 0
+	for _, count := range []int{u.InputTokens, u.CacheReadTokens, u.CacheWriteTokens} {
+		if count < 0 || count > math.MaxInt-total {
+			return math.MaxInt
+		}
+		total += count
+	}
+	return total
+}
+
 // Sub reports what one turn added, given a running total before and after. It
 // clamps at zero rather than reporting a negative count, because a resumed
 // session replays a total the current turn did not produce.
@@ -77,11 +146,24 @@ func (u Usage) Sub(o Usage) Usage {
 }
 
 func (u Usage) Add(o Usage) Usage {
+	if out, err := u.CheckedAdd(o); err == nil {
+		return out
+	}
+	// Aggregates outside the durable ledger (evaluation and display) have no
+	// error channel. Saturation is conservative and never wraps. Invalid
+	// negative input saturates too: treating hostile telemetry as a discount is
+	// the dangerous failure mode.
+	add := func(a, b int) int {
+		if a < 0 || b < 0 || b > math.MaxInt-a {
+			return math.MaxInt
+		}
+		return a + b
+	}
 	return Usage{
-		InputTokens:      u.InputTokens + o.InputTokens,
-		OutputTokens:     u.OutputTokens + o.OutputTokens,
-		CacheReadTokens:  u.CacheReadTokens + o.CacheReadTokens,
-		CacheWriteTokens: u.CacheWriteTokens + o.CacheWriteTokens,
+		InputTokens:      add(u.InputTokens, o.InputTokens),
+		OutputTokens:     add(u.OutputTokens, o.OutputTokens),
+		CacheReadTokens:  add(u.CacheReadTokens, o.CacheReadTokens),
+		CacheWriteTokens: add(u.CacheWriteTokens, o.CacheWriteTokens),
 	}
 }
 

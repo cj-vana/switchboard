@@ -186,7 +186,7 @@ var specs = []spec{
 		id:     "cost-sunk-write",
 		prompt: "Switching targets is charging the whole prior cache write, which double-counts a sunk cost. Fix it so the tests pass.",
 		pkg:    "./internal/costmodel/",
-		breaks: []breakage{{"internal/costmodel/costmodel.go", "s.LostWarmValue = catalog.Money(float64(fromEstimate.Spread()) * clamp(returnProbability) * expiry)", "s.LostWarmValue = catalog.Money(float64(fromEstimate.MissCost))"}},
+		breaks: []breakage{{"internal/costmodel/costmodel.go", "s.LostWarmValue = scaleMoney(fromEstimate.Spread(), clamp(returnProbability)*expiry)", "s.LostWarmValue = fromEstimate.MissCost"}},
 	},
 	{
 		id:     "estimator-widening",
@@ -204,7 +204,7 @@ var specs = []spec{
 		id:     "router-budget-bound",
 		prompt: "The budget ceiling is being checked against the expected cost rather than the upper bound. Fix it so the tests pass.",
 		pkg:    "./internal/router/",
-		breaks: []breakage{{"internal/router/router.go", "case in.Budgets.MaxCost > 0 && c.Estimate.High > in.Budgets.MaxCost:", "case in.Budgets.MaxCost > 0 && c.Estimate.Expected > in.Budgets.MaxCost:"}},
+		breaks: []breakage{{"internal/router/router.go", "case (in.Budgets.MaxCostSet || in.Budgets.MaxCost > 0) && candidateCeiling(c) > in.Budgets.MaxCost:", "case (in.Budgets.MaxCostSet || in.Budgets.MaxCost > 0) && c.Estimate.Expected > in.Budgets.MaxCost:"}},
 	},
 	{
 		id:     "router-pin-error",

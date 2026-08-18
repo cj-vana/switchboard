@@ -37,6 +37,17 @@ func TestRepeatedToolCallIsReportedOnce(t *testing.T) {
 	}
 }
 
+func TestRepeatDetectionCanonicalizesJSONButKeepsDistinctArguments(t *testing.T) {
+	d := NewDetector()
+	d.ToolCall("grep", []byte(`{"path":".","pattern":"one"}`))
+	if got := d.ToolCall("grep", []byte(`{"pattern":"two","path":"."}`)); len(got) != 0 {
+		t.Fatalf("different grep patterns were collapsed: %v", got)
+	}
+	if got := d.ToolCall("grep", []byte("{ \"pattern\": \"one\", \"path\": \".\" }")); !has(got, RepeatedToolCall) {
+		t.Fatalf("equivalent JSON with reordered keys was not a repeat: %v", got)
+	}
+}
+
 // Tools fail routinely, so one failure is not news.
 func TestErrorSpikeNeedsSeveralFailures(t *testing.T) {
 	d := NewDetector()
@@ -137,6 +148,16 @@ func TestHedgingIsReportedOnce(t *testing.T) {
 	}
 	if got := NewDetector().AssistantText("Done. It prints hi."); len(got) != 0 {
 		t.Errorf("ordinary output was read as hedging: %v", got)
+	}
+}
+
+func TestHedgingAcrossStreamingDeltasIsDetected(t *testing.T) {
+	d := NewDetector()
+	if got := d.AssistantText("I'm not "); len(got) != 0 {
+		t.Fatalf("partial phrase reported early: %v", got)
+	}
+	if got := d.AssistantText("sure this works"); !has(got, UncertaintyLanguage) {
+		t.Fatalf("split hedging phrase was missed: %v", got)
 	}
 }
 

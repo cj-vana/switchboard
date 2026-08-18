@@ -15,9 +15,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/cachestate"
-	"github.com/cj-vana/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/cachestate"
+	"github.com/switchboard-code/switchboard/internal/catalog"
 )
 
 func cacheLines(cache *agent.Cache, policy catalog.CachePolicy, now time.Time) []string {
@@ -90,11 +90,12 @@ func lastActivity(e cachestate.Entry) time.Time {
 // turn.
 func cmdCache(m *tuiModel, _ string) tea.Cmd {
 	var policy catalog.CachePolicy
-	if info, _, ok := m.app.catalog.Lookup(m.app.loop.Target); ok {
+	binding := m.app.loop.Binding()
+	if info, _, ok := m.app.catalog.Lookup(binding.Target); ok {
 		policy = info.Cache
 	}
-	header := "cache on " + string(m.app.loop.Target.ID())
-	body := cacheLines(m.app.loop.Cache, policy, time.Now())
+	header := "cache on " + binding.Target.Display()
+	body := cacheLines(binding.Cache, policy, time.Now())
 	m.addInfo(header + "\n" + strings.Join(body, "\n"))
 	return nil
 }

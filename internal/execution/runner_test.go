@@ -210,20 +210,51 @@ func TestOutputCapKeepsBothEnds(t *testing.T) {
 
 func TestProviderCredentialsAreNotInherited(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+	t.Setenv("KIMI_API_KEY", "kimi-should-not-leak")
+	t.Setenv("SB_ANTHROPIC_FIRST_PARTY_API_KEY", "namespaced-should-not-leak")
+	t.Setenv("openai_api_key", "mixed-case-should-not-leak")
 	t.Setenv("SB_HARMLESS", "visible")
 
 	res, err := Run(context.Background(), Command{
-		Argv:  []string{"echo \"key=[${ANTHROPIC_API_KEY}] other=[${SB_HARMLESS}]\""},
+		Argv:  []string{"echo \"key=[${ANTHROPIC_API_KEY}] kimi=[${KIMI_API_KEY}] namespaced=[${SB_ANTHROPIC_FIRST_PARTY_API_KEY}] mixed=[${openai_api_key}] other=[${SB_HARMLESS}]\""},
 		Shell: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(res.Output, "sk-should-not-leak") {
+	if strings.Contains(res.Output, "should-not-leak") {
 		t.Error("a model-requested command read the harness's provider credential")
 	}
 	if !strings.Contains(res.Output, "other=[visible]") {
 		t.Errorf("the rest of the environment must pass through: %q", res.Output)
+	}
+}
+
+func TestConfinedLoopbackEnvironmentCannotInheritOrReintroduceProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+	t.Setenv("npm_config_proxy", "http://127.0.0.1:8889")
+	t.Setenv("SB_HARMLESS", "visible")
+
+	env := commandEnv(NetworkLoopback, []string{
+		"ALL_PROXY=http://127.0.0.1:8890",
+		"GOPROXY=http://127.0.0.1:8891",
+		"SB_EXTRA=kept",
+	})
+	joined := strings.Join(env, "\n")
+	for _, forbidden := range []string{"HTTPS_PROXY=", "npm_config_proxy=", "ALL_PROXY=", "GOPROXY="} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("loopback child environment retained %s", forbidden)
+		}
+	}
+	for _, want := range []string{"SB_HARMLESS=visible", "SB_EXTRA=kept"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("loopback child environment dropped harmless %s", want)
+		}
+	}
+
+	full := strings.Join(commandEnv(NetworkFull, nil), "\n")
+	if !strings.Contains(full, "HTTPS_PROXY=http://127.0.0.1:8888") {
+		t.Error("full-network command unexpectedly lost the host proxy")
 	}
 }
 
@@ -242,6 +273,24 @@ func TestRunInWorkspaceDirectory(t *testing.T) {
 	}
 	if got := strings.TrimSpace(res.Output); got != want {
 		t.Errorf("cwd = %q, want %q", got, want)
+	}
+}
+
+func TestAlreadyCancelledContextDoesNotLaunchCommand(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "must-not-exist")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Run(ctx, Command{
+		Argv:  []string{"printf launched > " + marker},
+		Shell: true,
+		Dir:   dir,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("pre-cancelled command launched: stat err=%v", statErr)
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // A session with no skills must render tool schemas byte-identical to a
@@ -65,5 +65,42 @@ func TestSkillsJoinTheSuiteWhenDefined(t *testing.T) {
 	}
 	if _, ok := registry.Get("skill"); !ok {
 		t.Fatal("the skill tool did not register")
+	}
+}
+
+func TestManualOnlySkillsStayInInventoryWithoutChangingSchemas(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".agents", "skills", "deploy")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(
+		"---\nname: deploy\ndescription: deploy deliberately\ndisable-model-invocation: true\n---\nDeploy only when asked.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bare, err := tools.NewRegistry(ws, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembled, err := tools.NewRegistry(ws, execution.Capability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, notes := addSkills(assembled, ws)
+	if len(inventory) != 1 || !inventory[0].ImplicitDisabled {
+		t.Fatalf("manual-only skill disappeared from inventory: %+v", inventory)
+	}
+	if len(notes) != 1 || notes[0].text != "skills: 1 discovered, none model-visible" {
+		t.Fatalf("manual-only assembly notes = %+v", notes)
+	}
+	if _, ok := assembled.Get("skill"); ok {
+		t.Fatal("manual-only inventory registered a model tool")
+	}
+	before, _ := json.Marshal(bare.Definitions())
+	after, _ := json.Marshal(assembled.Definitions())
+	if string(before) != string(after) {
+		t.Fatalf("manual-only inventory changed model schemas:\n%s\nwant\n%s", after, before)
 	}
 }

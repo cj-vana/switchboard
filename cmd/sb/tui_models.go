@@ -15,8 +15,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
 )
 
 // modelChoice is one bindable target. The ref/surface split mirrors what
@@ -126,7 +126,7 @@ func chooseTierCmd(m *tuiModel, choice modelChoice) tea.Cmd {
 			items = append(items, pickerItem{
 				id:    t.ID,
 				label: t.ID,
-				desc:  "rebind; now " + string(t.Target.ID()),
+				desc:  "rebind; now " + t.Target.Display(),
 			})
 		}
 		// One past the highest rung, not the count plus one: the ladder can
@@ -183,7 +183,7 @@ func removeRungCmd(m *tuiModel) tea.Cmd {
 	return func() tea.Msg {
 		var items []pickerItem
 		for _, t := range cfg.Tiers {
-			desc := string(t.Target.ID())
+			desc := t.Target.Display()
 			if t.ID == m.app.tier.ID {
 				desc += " · active now"
 			}

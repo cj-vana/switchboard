@@ -105,6 +105,8 @@ func darkTheme() *theme {
 		"plan":        lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Background(lipgloss.Color("75")),
 		"default":     lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")),
 		"acceptEdits": lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Background(lipgloss.Color("42")),
+		"auto":        lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Background(lipgloss.Color("39")),
+		"yolo":        lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("196")).Bold(true),
 		"bypass":      lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Background(lipgloss.Color("214")),
 	}
 	t.barFill = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
@@ -142,6 +144,8 @@ func lightTheme() *theme {
 		"plan":        lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("61")),
 		"default":     lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Background(lipgloss.Color("252")),
 		"acceptEdits": lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("28")),
+		"auto":        lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("27")),
+		"yolo":        lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("160")).Bold(true),
 		"bypass":      lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("166")),
 	}
 	t.barFill = lipgloss.NewStyle().Foreground(lipgloss.Color("27"))

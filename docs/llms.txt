@@ -1,0 +1,31 @@
+# Switchboard
+
+A terminal coding agent where the model is a slot, not a fixed property of the
+tool. You configure a ladder of models, cheapest at the bottom. Before each user
+turn, the deterministic router chooses the lowest suitable feasible rung; it
+can move upward on evidence such as repeated tool calls, error spikes, new test
+failures, or hedging. Every session is an append-only record that can be priced,
+replayed, and searched. Free and open source (MIT), for macOS and Linux.
+
+Version 1.1 adds deterministic per-turn routing, native Claude and Codex skill,
+plugin, and MCP discovery, and explicit execution modes. Commands run without a
+sandbox by default. Auto mode can send eligible ordinary commands to a
+configured low-cost reviewer; shell, interpreter, sensitive, external, and
+Windows commands remain human-approved. Yolo mode runs ordinary edits and
+commands without prompts while keeping sensitive and external actions gated.
+Verified Seatbelt or bubblewrap confinement is available when requested.
+
+## Links
+
+- Site: https://switchboard-code.dev
+- Source: https://github.com/switchboard-code/switchboard
+- Install: curl -fsSL https://raw.githubusercontent.com/switchboard-code/switchboard/main/install.sh | bash
+- Configuration: https://github.com/switchboard-code/switchboard/blob/main/docs/configuration.md
+- Routing and accounting: https://github.com/switchboard-code/switchboard/blob/main/docs/routing.md
+- Sessions and TUI: https://github.com/switchboard-code/switchboard/blob/main/docs/session.md
+- Security and execution modes: https://github.com/switchboard-code/switchboard/blob/main/docs/security.md
+- Skills, plugins, commands, and MCP: https://github.com/switchboard-code/switchboard/blob/main/docs/extensions.md
+- Eval evidence: https://github.com/switchboard-code/switchboard/blob/main/docs/eval.md
+- Head-to-head measurement: https://github.com/switchboard-code/switchboard/blob/main/docs/head-to-head-2026-08-16.md
+- Estimator bounds: https://github.com/switchboard-code/switchboard/blob/main/docs/estimator.md
+- Sandbox model: https://github.com/switchboard-code/switchboard/blob/main/docs/sandbox.md

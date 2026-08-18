@@ -27,16 +27,19 @@ func confined(t *testing.T) *Confinement {
 	if err != nil {
 		t.Skip("bubblewrap is not installed")
 	}
-	bwrapPath = path
+	bwrap, err := resolveBubblewrapExecutable(path, string(filepath.Separator), 0, true)
+	if err != nil {
+		t.Skipf("bubblewrap is not a trusted system executable: %v", err)
+	}
 
 	// Unprivileged user namespaces are a kernel setting some distributions turn
 	// off. Without them bubblewrap cannot build a namespace at all, which is a
 	// property of the host rather than a defect in the construction.
-	probe := exec.Command(path, "--ro-bind", "/", "/", "--unshare-user", "/bin/true")
+	probe := exec.Command(bwrap.path, "--ro-bind", "/", "/", "--unshare-user", "--", "/bin/true")
 	if err := probe.Run(); err != nil {
 		t.Skipf("bubblewrap cannot create a namespace here: %v", err)
 	}
-	return &Confinement{mechanism: MechanismBubblewrap, wrap: wrapBubblewrap}
+	return &Confinement{mechanism: MechanismBubblewrap, wrap: bwrap.wrap}
 }
 
 func runConfined(t *testing.T, ws string, network NetworkAccess, argv []string, shell bool) Result {
@@ -56,8 +59,8 @@ func runConfined(t *testing.T, ws string, network NetworkAccess, argv []string, 
 }
 
 func TestSelfTestPassesOnThisHost(t *testing.T) {
-	confined(t)
-	ok, detail := linuxSelfTest()
+	confinement := confined(t)
+	ok, detail := linuxSelfTest(confinement.wrap)
 	if !ok {
 		t.Fatalf("self-test failed on this host: %s", detail)
 	}
@@ -141,8 +144,9 @@ func TestConfinedCommandCannotReadCredentials(t *testing.T) {
 // to detect a missing flag is an assertion that quietly stops running.
 func TestNetworkNamespaceFlags(t *testing.T) {
 	ws := workspaceFor(t)
+	bwrap := testBubblewrapExecutable(t)
 
-	loopback, err := wrapBubblewrap(Policy{Workspace: ws, Network: NetworkLoopback}, []string{"/bin/true"})
+	loopback, err := bwrap.wrap(Policy{Workspace: ws, Network: NetworkLoopback}, []string{"/bin/true"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,12 +154,25 @@ func TestNetworkNamespaceFlags(t *testing.T) {
 		t.Error("the default policy must take a private network namespace")
 	}
 
-	full, err := wrapBubblewrap(Policy{Workspace: ws, Network: NetworkFull}, []string{"/bin/true"})
+	full, err := bwrap.wrap(Policy{Workspace: ws, Network: NetworkFull}, []string{"/bin/true"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if slices.Contains(full, "--unshare-net") {
 		t.Error("a granted-network command must keep the host's network namespace")
+	}
+}
+
+// Model argv starts only after bubblewrap's end-of-options marker. Without the
+// marker this request is parsed as an extra --bind rule followed by /bin/true,
+// so it exits successfully instead of trying (and failing) to execute a binary
+// literally named --bind.
+func TestOptionLookingExecutableCannotInjectBubblewrapRules(t *testing.T) {
+	ws := workspaceFor(t)
+	res := runConfined(t, ws, NetworkLoopback,
+		[]string{"--bind", "/", "/", "/bin/true"}, false)
+	if res.ExitCode == 0 {
+		t.Fatal("option-looking model argv was parsed as bubblewrap policy")
 	}
 }
 

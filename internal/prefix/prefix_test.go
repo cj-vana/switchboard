@@ -1,12 +1,15 @@
 package prefix
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func sys(text string) []provider.Block { return []provider.Block{provider.Text{Text: text}} }
@@ -311,5 +314,77 @@ func TestRequestTokensCountsEveryZone(t *testing.T) {
 	// (4 + 36 + 2 over four), 20 for the message.
 	if got := RequestTokens(req); got != 40 {
 		t.Errorf("RequestTokens = %d, want 40", got)
+	}
+}
+
+func TestRequestTokenCeilingCountsShortBlockFraming(t *testing.T) {
+	req := provider.Request{}
+	for range 1_000 {
+		req.Messages = append(req.Messages, provider.Message{
+			Role: provider.RoleUser, Content: []provider.Block{provider.Text{Text: "x"}},
+		})
+	}
+	if floor := RequestTokens(req); floor != 0 {
+		t.Fatalf("fixture floor = %d, want zero to reproduce per-block truncation", floor)
+	}
+	if ceiling := RequestTokenCeiling(req); ceiling < 10_000 {
+		t.Fatalf("hard context bound = %d, did not account for short-message framing", ceiling)
+	}
+}
+
+func TestRequestTokenCeilingBoundsDenseTextByBytes(t *testing.T) {
+	for name, content := range map[string]string{
+		"dense unicode": strings.Repeat("🧪", 1_000),
+		"base64":        strings.Repeat("/+/+", 1_000),
+		"code":          strings.Repeat("};){=>", 1_000),
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := provider.Request{Messages: []provider.Message{provider.UserText(content)}}
+			floor := RequestTokens(req)
+			ceiling := RequestTokenCeiling(req)
+			if ceiling < len(content) {
+				t.Fatalf("hard bound = %d, want at least one token per payload byte (%d)", ceiling, len(content))
+			}
+			if ceiling <= floor {
+				t.Fatalf("hard bound = %d, floor = %d; adversarial text was not widened", ceiling, floor)
+			}
+		})
+	}
+}
+
+func TestRequestTokenCeilingAccountsForImageGeometry(t *testing.T) {
+	encode := func(width, height int) []byte {
+		var out bytes.Buffer
+		if err := png.Encode(&out, image.NewGray(image.Rect(0, 0, width, height))); err != nil {
+			t.Fatal(err)
+		}
+		return out.Bytes()
+	}
+	small := encode(16, 16)
+	large := encode(2_048, 2_048)
+	if len(small) < len(large) {
+		small = append(small, make([]byte, len(large)-len(small))...)
+	} else {
+		large = append(large, make([]byte, len(small)-len(large))...)
+	}
+	request := func(data []byte) provider.Request {
+		return provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{
+			provider.Image{MediaType: "image/png", Data: data},
+		}}}}
+	}
+	smallBound := RequestTokenCeiling(request(small))
+	largeBound := RequestTokenCeiling(request(large))
+	if largeBound <= smallBound {
+		t.Fatalf("equal-byte images ignored decoded geometry: small=%d large=%d bytes=%d", smallBound, largeBound, len(large))
+	}
+}
+
+func TestRequestTokenCeilingRefusesCompressedDocumentGuess(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	req := provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{
+		provider.Document{MediaType: "application/pdf", Data: []byte("%PDF-compressed")},
+	}}}}
+	if got := RequestTokenCeiling(req); got != maxInt {
+		t.Fatalf("opaque compressed document bound = %d, want unknown/max", got)
 	}
 }

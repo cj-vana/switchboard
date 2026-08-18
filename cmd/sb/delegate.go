@@ -9,17 +9,17 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/checkpoint"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/delegate"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/hooks"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/skills"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/delegate"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/hooks"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/skills"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // delegateForward late-binds where subagent activity renders. The delegate
@@ -45,6 +45,40 @@ func (d *delegateForward) get() agent.Observer {
 }
 
 var subagentForward = &delegateForward{}
+
+// delegateLedgerTracker remembers how much external cost the primary held
+// when each sub-session started. Normal settlements charge each successful
+// call immediately; reconcile adds only the gap left when a settlement append
+// failed after Usage became durable in the sub-session.
+type delegateLedgerTracker struct {
+	mu       sync.Mutex
+	baseline map[string]int64
+}
+
+func (d *delegateLedgerTracker) mark(primary, sub *session.Session) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.baseline == nil {
+		d.baseline = make(map[string]int64)
+	}
+	d.baseline[sub.ID()] = primary.State().ExternalCostMicroUSD
+}
+
+func (d *delegateLedgerTracker) reconcile(primary, sub *session.Session) error {
+	d.mu.Lock()
+	baseline, ok := d.baseline[sub.ID()]
+	delete(d.baseline, sub.ID())
+	d.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("delegate %s has no budget baseline", sub.ID())
+	}
+	recorded := primary.State().ExternalCostMicroUSD - baseline
+	missing := sub.State().CostMicroUSD - recorded
+	if missing <= 0 {
+		return nil
+	}
+	return primary.AppendBudgetTransfer("delegate-reconcile:"+sub.ID(), missing, 0)
+}
 
 // registerDelegate adds the delegate tool to the primary registry. The
 // subagent gets a fresh registry — core tools, no delegate (depth one), no
@@ -73,6 +107,7 @@ func registerDelegate(
 	if err != nil {
 		return nil, nil, fmt.Errorf("delegate needs its session store: %w", err)
 	}
+	var ledger delegateLedgerTracker
 
 	// A definition naming a rung this ladder does not have still loads — it
 	// was probably written for a taller ladder — but runs on the default
@@ -101,10 +136,15 @@ func registerDelegate(
 			return reg.probeTierFallback(ctx, tier)
 		},
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {
-			return subStore.Create(workspace, target, cat.Revision)
+			sess, err := subStore.Create(workspace, target, cat.Revision)
+			if err != nil {
+				return nil, err
+			}
+			ledger.mark(primary.Session, sess)
+			return sess, nil
 		},
 		NewLoop: func(tier config.Tier, client provider.Provider, sess *session.Session, obs agent.Observer, named *delegate.Agent) (*agent.Loop, error) {
-			subRegistry, err := tools.NewRegistry(workspace, capability)
+			subRegistry, err := tools.NewRegistryWithExecution(workspace, primary.Tools.Execution())
 			if err != nil {
 				return nil, err
 			}
@@ -124,8 +164,8 @@ func registerDelegate(
 			// Skills too, and for the same reason as astgrep's placement: a
 			// named agent's grant validates against the core suite, so a
 			// restricted agent loses skill with everything else unnamed.
-			if len(skillList) > 0 {
-				if err := subRegistry.AddExternal(skills.NewTool(skillList)); err != nil {
+			if modelSkills := skills.ModelVisible(skillList); len(modelSkills) > 0 {
+				if err := subRegistry.AddExternal(skills.NewTool(modelSkills)); err != nil {
 					return nil, err
 				}
 			}
@@ -165,12 +205,21 @@ func registerDelegate(
 			// The errand runs under the same ceiling as the session that
 			// spawned it, counting what both logs have priced so far. A
 			// delegated task is not a way around /budget.
-			sub.Budget = budgetGate(budget, cat,
-				func() provider.RouteTarget { return sub.Target },
+			wireBudget(sub, budgetGate(budget, cat,
+				func() provider.RouteTarget { return sub.Binding().Target },
 				func() catalog.Money {
-					return catalog.Money(primary.Session.State().CostMicroUSD + sess.State().CostMicroUSD)
-				})
+					return catalog.Money(primary.Session.State().AccountedCostMicroUSD())
+				},
+				func() string { return primary.Session.ID() }).withLedger(
+				func() catalog.Money { return catalog.Money(primary.Session.State().RetryReserveMicroUSD) },
+				func(amount catalog.Money) (string, error) { return primary.Session.BeginBudgetAttempt(int64(amount)) },
+				func(id, outcome string, charge catalog.Money) error {
+					return primary.Session.SettleBudgetAttempt(id, outcome, int64(charge))
+				}, true))
 			return sub, nil
+		},
+		Finish: func(sess *session.Session) error {
+			return ledger.reconcile(primary.Session, sess)
 		},
 		Forward: subagentForward.get,
 	})

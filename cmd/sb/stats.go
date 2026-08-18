@@ -22,9 +22,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // statsLines reads every session log for the workspace and renders the
@@ -51,17 +52,14 @@ func statsLines(tiers []config.Tier, cat *catalog.Catalog, activeTier string, st
 	}
 	all = dedupeCopiedUsages(all)
 
-	var in, out, cacheRead, cacheWrite int
+	var totalUsage provider.Usage
 	for _, u := range all {
-		in += u.Usage.InputTokens
-		out += u.Usage.OutputTokens
-		cacheRead += u.Usage.CacheReadTokens
-		cacheWrite += u.Usage.CacheWriteTokens
+		totalUsage = totalUsage.Add(u.Usage)
 	}
 
-	head := fmt.Sprintf("  %d sessions, %d model calls: ↓%s ↑%s tokens", read, len(all), compact(in+cacheRead+cacheWrite), compact(out))
-	if cacheRead > 0 {
-		head += fmt.Sprintf(", %s of that served from cache", compact(cacheRead))
+	head := fmt.Sprintf("  %d sessions, %d model calls: ↓%s ↑%s tokens", read, len(all), compact(totalUsage.TotalInputTokens()), compact(totalUsage.OutputTokens))
+	if totalUsage.CacheReadTokens > 0 {
+		head += fmt.Sprintf(", %s of that served from cache", compact(totalUsage.CacheReadTokens))
 	}
 	lines := []string{head}
 	if unreadable > 0 {
@@ -123,8 +121,11 @@ func dedupeCopiedUsages(all []session.Usage) []session.Usage {
 			out = append(out, u)
 			continue
 		}
-		key := fmt.Sprintf("%s@%d:%d/%d/%d/%d/%d", u.Target, u.At.UnixNano(),
-			u.Usage.InputTokens, u.Usage.OutputTokens, u.Usage.CacheReadTokens, u.Usage.CacheWriteTokens, u.CostMicroUSD)
+		key := u.CallID
+		if key == "" {
+			key = fmt.Sprintf("%s@%d:%d/%d/%d/%d/%d", u.Target, u.At.UnixNano(),
+				u.Usage.InputTokens, u.Usage.OutputTokens, u.Usage.CacheReadTokens, u.Usage.CacheWriteTokens, u.CostMicroUSD)
+		}
 		if seen[key] {
 			continue
 		}
@@ -172,14 +173,13 @@ func statsAllLines(cat *catalog.Catalog, store *session.Store) []string {
 		lines = append(lines, fmt.Sprintf("  %-*s  %d sessions; %s", width, ws, len(byWorkspace[ws]), asRoutedLine(cat, usages)))
 	}
 
-	var in, out int
+	var totalUsage provider.Usage
 	for _, u := range all {
-		in += u.Usage.InputTokens + u.Usage.CacheReadTokens + u.Usage.CacheWriteTokens
-		out += u.Usage.OutputTokens
+		totalUsage = totalUsage.Add(u.Usage)
 	}
 	lines = append(lines,
 		fmt.Sprintf("  across them: %d sessions, %d calls, ↓%s ↑%s tokens; %s",
-			sessions, len(all), compact(in), compact(out), asRoutedLine(cat, all)),
+			sessions, len(all), compact(totalUsage.TotalInputTokens()), compact(totalUsage.OutputTokens), asRoutedLine(cat, all)),
 		"  rung repricing stays per workspace: sb stats inside one prices its history on your ladder")
 	return lines
 }

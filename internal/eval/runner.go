@@ -2,19 +2,20 @@ package eval
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
-	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/breakpoint"
-	"github.com/cj-vana/switchboard/internal/cachestate"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/breakpoint"
+	"github.com/switchboard-code/switchboard/internal/cachestate"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // Arm is one thing being measured: a fixed target used as a baseline, or the
@@ -25,10 +26,22 @@ type Arm struct {
 	Target   provider.RouteTarget
 	Provider provider.Provider
 
+	// Fallbacks are availability substitutes for the routed arm only, in user
+	// policy order. Fixed baselines deliberately ignore them: a baseline must
+	// remain the one pinned target it claims to measure.
+	Fallbacks []Fallback
+
 	// CacheAware places cache markers. Off is the control arm §7.1 compares
 	// against when it asks whether the interval against an otherwise identical
 	// cache-unaware router excludes zero: same model, same corpus, same tools,
 	// and the one difference is whether §6 runs at all.
+	CacheAware bool
+}
+
+// Fallback is one concrete target/provider binding inside a routed tier.
+type Fallback struct {
+	Target     provider.RouteTarget
+	Provider   provider.Provider
 	CacheAware bool
 }
 
@@ -81,33 +94,134 @@ func (r Runner) Run(ctx context.Context, task Task, arm Arm, seed int) Run {
 // a baseline.
 type escalation interface {
 	attach(*agent.Loop)
+	fidelityError() error
 }
 
+// preparedAttempt is the workspace-bound request assembly shared by opening
+// routing and execution. Keeping one registry and one system prompt here is
+// what proves the router scored the request the selected provider receives;
+// rebuilding either side separately would let project instructions, tool
+// schemas, or even the temporary workspace path drift.
+type preparedAttempt struct {
+	dir        string
+	capability execution.Capability
+	mode       permission.Mode
+	registry   *tools.Registry
+	system     []provider.Block
+	opening    provider.Message
+}
+
+func prepareAttempt(task Task, dir string) (*preparedAttempt, error) {
+	capability := execution.Detect()
+	registry, err := tools.NewRegistry(dir, capability)
+	if err != nil {
+		return nil, err
+	}
+	mode := permission.ModeBypass
+	return &preparedAttempt{
+		dir:        dir,
+		capability: capability,
+		mode:       mode,
+		registry:   registry,
+		system:     agent.SystemPrompt(dir, mode, capability),
+		opening:    provider.UserText(task.Prompt),
+	}, nil
+}
+
+func (p *preparedAttempt) openingRequest() provider.Request {
+	return provider.Request{
+		System:   p.system,
+		Tools:    p.registry.Definitions(),
+		Messages: []provider.Message{p.opening},
+	}
+}
+
+type armSelection struct {
+	arm             Arm
+	escalation      escalation
+	estimatedCost   catalog.Money
+	estimatedTarget provider.RouteTargetID
+}
+
+type selectArm func(context.Context, Task, *preparedAttempt) (armSelection, error)
+
 func (r Runner) run(ctx context.Context, task Task, arm Arm, seed int, esc escalation) Run {
+	return r.runSelected(ctx, task, arm.Name, arm.Target.ID(), seed,
+		func(context.Context, Task, *preparedAttempt) (armSelection, error) {
+			return armSelection{arm: arm, escalation: esc}, nil
+		})
+}
+
+func (r Runner) runSelected(
+	ctx context.Context,
+	task Task,
+	reportArm string,
+	initialTarget provider.RouteTargetID,
+	seed int,
+	selectTarget selectArm,
+) Run {
 	out := Run{
 		TaskID:     task.ID,
 		Provenance: task.Provenance,
-		Target:     arm.Target.ID(),
-		Arm:        arm.Name,
+		Target:     initialTarget,
+		Arm:        reportArm,
 		Seed:       seed,
 	}
 
 	dir, err := os.MkdirTemp("", "sb-eval-")
 	if err != nil {
 		out.Detail = "could not create a workspace: " + err.Error()
+		out.Failure = FailureWorkspace
 		return out
 	}
 	defer os.RemoveAll(dir)
 
 	if err := task.Setup(dir); err != nil {
 		out.Detail = "setup failed: " + err.Error()
+		out.Failure = FailureSetup
 		return out
 	}
 
 	started := time.Now()
-	perTarget, denials, runErr := r.attempt(ctx, task, arm, dir, esc)
+	attemptCtx, cancel := context.WithTimeout(ctx, r.timeout())
+	defer cancel()
+
+	prepared, err := prepareAttempt(task, dir)
+	if err != nil {
+		out.Duration = time.Since(started)
+		out.Detail = "the turn failed: assembling the evaluation request: " + err.Error()
+		out.Failure = FailureTurn
+		return out
+	}
+	selection, err := selectTarget(attemptCtx, task, prepared)
+	if err != nil {
+		out.Duration = time.Since(started)
+		out.Detail = "routed evaluation fidelity failed: " + err.Error()
+		out.Failure = FailureFidelity
+		return out
+	}
+	if selection.arm.Provider == nil {
+		out.Duration = time.Since(started)
+		if reportArm == RoutedArm {
+			out.Detail = "routed evaluation fidelity failed: selected target has no provider"
+			out.Failure = FailureFidelity
+		} else {
+			out.Detail = "the turn failed: fixed target has no provider"
+			out.Failure = FailureTurn
+		}
+		return out
+	}
+	out.Target = selection.arm.Target.ID()
+	out.EstimatedCost = selection.estimatedCost
+	out.EstimatedTarget = selection.estimatedTarget
+
+	perTarget, denials, runErr := r.attempt(attemptCtx, selection.arm, prepared, selection.escalation)
 	out.Duration = time.Since(started)
 	out.Denials = denials
+	if routed, ok := selection.escalation.(*escalator); ok {
+		out.Target = routed.finalTarget(selection.arm)
+		out.Escalations = routed.moves
+	}
 
 	// Cost follows the tokens, not the arm. A routed run that escalates spends
 	// on the target it moved to, and pricing the whole run against the rung it
@@ -115,6 +229,9 @@ func (r Runner) run(ctx context.Context, task Task, arm Arm, seed int, esc escal
 	// any cost gate pass trivially and wrongly.
 	for target, usage := range perTarget {
 		out.Usage = out.Usage.Add(usage)
+		if r.Catalog == nil {
+			continue
+		}
 		info, _, ok := r.Catalog.Lookup(targetOf(r.Catalog, target))
 		if !ok {
 			continue
@@ -123,55 +240,76 @@ func (r Runner) run(ctx context.Context, task Task, arm Arm, seed int, esc escal
 			out.Cost += cost
 		}
 	}
+	if selection.escalation != nil {
+		if fidelityErr := selection.escalation.fidelityError(); fidelityErr != nil {
+			out.Detail = "routed evaluation fidelity failed: " + fidelityErr.Error()
+			out.Failure = FailureFidelity
+			out.Solved = false
+			return out
+		}
+	}
 
 	if runErr != nil {
 		// A failed turn is still a data point. §8.4 treats provider failure as
 		// something other than a bad routing decision, and the distinction is
 		// only possible if the failure is recorded rather than discarded.
 		out.Detail = "the turn failed: " + runErr.Error()
+		switch {
+		case errors.Is(runErr, context.DeadlineExceeded):
+			out.Failure = FailureTimeout
+		case errors.Is(runErr, context.Canceled):
+			out.Failure = FailureCancelled
+		case errors.Is(runErr, agent.ErrRoundLimit):
+			out.Failure = FailureRoundLimit
+		case errors.Is(runErr, errRoutedFidelity):
+			out.Failure = FailureFidelity
+		default:
+			out.Failure = FailureTurn
+		}
 		return out
 	}
 
 	solved, detail, verifyErr := task.Verify(dir)
 	if verifyErr != nil {
 		out.Detail = "the verifier failed to run: " + verifyErr.Error()
+		out.Failure = FailureVerifier
 		return out
 	}
 	out.Solved = solved
 	out.Detail = detail
+	if !solved {
+		out.Failure = FailureVerification
+	}
 	return out
 }
 
 // targetOf reconstructs a route target from its id, so usage recorded against
 // a target the run moved to can still be priced.
 func targetOf(cat *catalog.Catalog, id provider.RouteTargetID) provider.RouteTarget {
-	parts := strings.SplitN(string(id), "/", 3)
-	if len(parts) < 3 {
+	target, err := provider.ParseRouteTargetID(id)
+	if err != nil {
 		return provider.RouteTarget{}
 	}
-	model, _, _ := strings.Cut(parts[2], "+")
-	return provider.RouteTarget{Provider: parts[0], Surface: parts[1], ModelID: model}
+	return target
 }
 
-func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc escalation) (map[provider.RouteTargetID]provider.Usage, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, r.timeout())
-	defer cancel()
-
-	store, err := session.NewStore(dir + "/.sessions")
+func (r Runner) attempt(ctx context.Context, arm Arm, prepared *preparedAttempt, esc escalation) (map[provider.RouteTargetID]provider.Usage, int, error) {
+	if prepared == nil || prepared.registry == nil {
+		return nil, 0, fmt.Errorf("evaluation request was not assembled")
+	}
+	store, err := session.NewStore(prepared.dir + "/.sessions")
 	if err != nil {
 		return nil, 0, err
 	}
-	sess, err := store.Create(dir, arm.Target.ID(), r.Catalog.Revision)
+	revision := ""
+	if r.Catalog != nil {
+		revision = r.Catalog.Revision
+	}
+	sess, err := store.Create(prepared.dir, arm.Target.ID(), revision)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer sess.Close()
-
-	capability := execution.Detect()
-	registry, err := tools.NewRegistry(dir, capability)
-	if err != nil {
-		return nil, 0, err
-	}
 
 	// Bypass, because every task has to run the test suite and acceptEdits
 	// deliberately does not cover running commands. This is the one place that
@@ -182,20 +320,19 @@ func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc
 	// It is also a real dependency on §11. Where confinement is unverified the
 	// engine downgrades bypass back to asking, and this will fail loudly rather
 	// than run unprotected, which is the behaviour design principle 4 wants.
-	mode := permission.ModeBypass
 	asker := &denyingAsker{}
 	collector := &usageCollector{byTarget: map[provider.RouteTargetID]provider.Usage{}}
 
 	loop := &agent.Loop{
 		Provider:      arm.Provider,
 		Target:        arm.Target,
-		Tools:         registry,
-		Perms:         permission.NewEngine(mode, capability),
+		Tools:         prepared.registry,
+		Perms:         permission.NewEngine(prepared.mode, prepared.capability),
 		Asker:         asker,
 		Session:       sess,
 		Observer:      collector,
 		Catalog:       r.Catalog,
-		System:        agent.SystemPrompt(dir, mode, capability),
+		System:        prepared.system,
 		MaxToolRounds: r.rounds(),
 	}
 
@@ -214,7 +351,7 @@ func (r Runner) attempt(ctx context.Context, task Task, arm Arm, dir string, esc
 		esc.attach(loop)
 	}
 
-	err = loop.Turn(ctx, task.Prompt)
+	err = loop.TurnMessage(ctx, prepared.opening)
 	return collector.byTarget, asker.denied, err
 }
 

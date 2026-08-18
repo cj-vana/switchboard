@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/breakpoint"
-	"github.com/cj-vana/switchboard/internal/cachestate"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/breakpoint"
+	"github.com/switchboard-code/switchboard/internal/cachestate"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // The note prices only what was actually observed: a written prefix on a
@@ -52,6 +52,24 @@ func TestAbandonedCacheNotePricesOnlyWhatWasHeld(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Fatalf("note missing %q: %q", want, note)
 		}
+	}
+
+	parameterized := priced
+	parameterized.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	parameterizedCache := &agent.Cache{
+		Manager: &breakpoint.Manager{Policy: info.Cache, Target: parameterized.ID()},
+		Tracker: cachestate.New(),
+		Policy:  info.Cache,
+		Target:  parameterized.ID(),
+	}
+	parameterizedCache.Tracker.Observe(cachestate.Observation{
+		Target: parameterized.ID(), PrefixHash: "parameterized", At: time.Now(),
+		Usage: provider.Usage{CacheWriteTokens: 50_000}, Accounting: info.Cache.UsageAccounting,
+		Eligible: true, MinimumTTL: 5 * time.Minute,
+	})
+	parameterizedNote := abandonedCacheNote(parameterizedCache, cat, time.Now())
+	if !strings.Contains(parameterizedNote, parameterized.ModelID) || !strings.Contains(parameterizedNote, "think:high") || strings.Contains(parameterizedNote, "rt2:") {
+		t.Fatalf("parameterized cache note is not readable: %q", parameterizedNote)
 	}
 	if note := abandonedCacheNote(nil, cat, time.Now()); note != "" {
 		t.Fatal("a nil cache produced a note")

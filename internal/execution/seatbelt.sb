@@ -62,8 +62,11 @@
 
 ; Loopback only. A test suite that stands up a fixture server on an ephemeral
 ; port has to work, or the sandbox is unusable for the thing agents do most.
-; Egress off the machine is denied by rule rather than by DNS failing, which
-; was verified by connecting to a raw address with no name lookup involved.
+; Direct egress off the machine is denied by rule rather than by DNS failing,
+; which was verified by connecting to a raw address with no name lookup
+; involved. Host-local services remain trusted and can relay traffic; the
+; runner strips inherited proxy variables to close the common confused-deputy
+; path, and the UI documents the remaining localhost boundary.
 (allow network-bind)
 (allow network-inbound)
 (allow network-outbound (remote ip "localhost:*"))

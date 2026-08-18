@@ -16,18 +16,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/checkpoint"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/provider/ollama"
-	route "github.com/cj-vana/switchboard/internal/router"
-	"github.com/cj-vana/switchboard/internal/session"
-	"github.com/cj-vana/switchboard/internal/tools"
-	"github.com/cj-vana/switchboard/internal/trust"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/checkpoint"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
+	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/trust"
 )
 
 func main() {
@@ -46,6 +47,7 @@ type options struct {
 	tier      string
 	host      string
 	mode      string
+	sandbox   string
 	think     string
 	workspace string
 	prompt    string
@@ -77,6 +79,20 @@ func run() error {
 			shell = os.Args[2]
 		}
 		return runCompletionCLI(os.Stdout, shell)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "plugins" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return runPluginsCLI(os.Stdout, cwd, os.Args[2:])
+	}
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return runMCPCLI(os.Stdout, cwd, os.Args[2:])
 	}
 	if len(os.Args) > 1 && os.Args[1] == "auth" {
 		cfg, err := config.Load()
@@ -287,7 +303,8 @@ func run() error {
 	flag.StringVar(&opts.model, "model", os.Getenv("SB_MODEL"), "Ollama model to bind directly, bypassing the configured tiers")
 	flag.StringVar(&opts.tier, "tier", "", "tier to start on, for example t2 (default: the lowest configured tier)")
 	flag.StringVar(&opts.host, "host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")
-	flag.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, or bypass")
+	flag.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, auto, yolo, or bypass")
+	flag.Var(sandboxFlag{target: &opts.sandbox}, "sandbox", "command confinement: bare flag means on; also accepts off, on, or auto (default: config, then off)")
 	flag.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")
 	flag.StringVar(&opts.workspace, "workspace", "", "workspace root (default: current directory)")
 	flag.StringVar(&opts.profile, "profile", "", "run on a named alternate ladder from [profiles.<name>] in the config")
@@ -393,8 +410,22 @@ func run() error {
 	defer sess.Close()
 
 	capability := execution.Detect()
+	sandboxMode := cfg.Sandbox
+	if opts.sandbox != "" {
+		sandboxMode, err = execution.ParseSandboxMode(opts.sandbox)
+		if err != nil {
+			return err
+		}
+	}
+	if err := validateExecutionPosture(mode, sandboxMode); err != nil {
+		return err
+	}
+	executionController, err := execution.NewController(capability, sandboxMode)
+	if err != nil {
+		return err
+	}
 
-	registry, err := tools.NewRegistry(workspace, capability)
+	registry, err := tools.NewRegistryWithExecution(workspace, executionController)
 	if err != nil {
 		return err
 	}
@@ -411,22 +442,68 @@ func run() error {
 	// Computer use joins the same way, where the platform can serve it.
 	addComputerUse(registry)
 
-	// Skills load the same way named agents do — both directories, no trust
-	// gate, nothing executing at read time — and with none found the tool is
-	// absent, keeping the schemas byte-identical.
-	skillList, skillNotes := addSkills(registry, workspace)
+	// Plugins are inventory before they are behavior. Native Codex/Claude state
+	// contributes provenance only; Switchboard's own activation ledger decides
+	// which prompt-only skill roots may join this frozen session. Executable
+	// components remain behind their separate digest-bound trust gate.
+	// Full native provenance is needed here even though only Switchboard-owned
+	// cached copies can activate. Codex managed plugin-MCP rules use the exact
+	// marketplace-qualified native ID; deriving it from a manifest namespace
+	// would let an unrelated local plugin spoof another plugin's policy entry.
+	pluginEnv := openPluginInventory(workspace, true)
+	pluginSkillRoots, pluginSkillNotes := pluginEnv.enabledSkillRoots()
+
+	// Skills load the same way named agents do — native trees in place plus
+	// explicitly enabled plugin roots, no executable trust implied. With none
+	// found the tool is absent, keeping the schemas byte-identical.
+	skillList, skillNotes := addSkills(registry, workspace, pluginSkillRoots...)
 
 	// The trust store is opened before MCP assembly because it is what
 	// decides whether a repository's declared servers may start.
 	trustStore, trustErr := trust.Open()
-	mcpEnv, mcpRules := connectMCP(ctx, workspace, trustStore, registry)
+
+	// Native definitions are discovered read-only, then independently gated by
+	// Switchboard activation, managed policy, runtime feature support, and
+	// executable trust. Plugin MCP gets the same gates plus the plugin's exact
+	// digest-bound execution grant. All of this happens before connectMCP freezes
+	// the tool registry for the session.
+	nativeMCPEnv := openNativeMCPInventory(ctx, workspace, pluginEnv.requiresCodexAppServer())
+	nativePolicy, nativePolicyNotes := loadNativeMCPPolicy(workspace, nativeMCPEnv.codexRequirementsChecked)
+	nativeSpecs, nativeNotes, err := activatedNativeMCPSpecs(nativeMCPEnv, trustStore, nativePolicy)
+	if err != nil {
+		return err
+	}
+	pluginSpecs, pluginMCPNotes, err := enabledPluginMCPSpecs(pluginEnv, workspace, nativePolicy)
+	if err != nil {
+		return err
+	}
+	additionalMCP := append(nativeSpecs, pluginSpecs...)
+	mcpEnv, mcpRules, err := connectMCP(ctx, workspace, trustStore, registry, additionalMCP...)
+	if err != nil {
+		return err
+	}
 	defer mcpEnv.Close()
+	for _, n := range nativePolicyNotes {
+		mcpEnv.add(n)
+	}
+	for _, n := range nativeNotes {
+		mcpEnv.add(n)
+	}
+	for _, n := range pluginMCPNotes {
+		mcpEnv.add(n)
+	}
 
 	hookSet, hookNotes := loadHooks(workspace, trustStore)
 	for _, n := range hookNotes {
 		mcpEnv.add(n)
 	}
 	for _, n := range skillNotes {
+		mcpEnv.add(n)
+	}
+	for _, n := range pluginSkillNotes {
+		mcpEnv.add(n)
+	}
+	for _, n := range pluginEnv.diagnostics {
 		mcpEnv.add(n)
 	}
 
@@ -455,11 +532,12 @@ func run() error {
 	// manager, and the tracker are all present and never consulted.
 	cache := cacheFor(tier.Target, cat)
 
+	permEngine := permission.NewEngineWithExecution(mode, executionController, mcpRules...)
 	loop := &agent.Loop{
 		Provider:    client,
 		Target:      tier.Target,
 		Tools:       registry,
-		Perms:       permission.NewEngine(mode, capability, mcpRules...),
+		Perms:       permEngine,
 		Session:     sess,
 		Catalog:     cat,
 		Cache:       cache,
@@ -472,7 +550,8 @@ func run() error {
 	// it; /budget adjusts the shared state mid-session.
 	budget := &budgetState{}
 	budget.set(cfg.Budget)
-	loop.Budget = primaryGate(budget, loop, cat)
+	wireBudget(loop, primaryGate(budget, loop, cat))
+	wireCommandReviewer(loop, cfg, cat, reg, tier, budget)
 
 	// The delegate tool joins after the loop exists because its subagents
 	// share the loop's permission engine and asker; it still lands before the
@@ -495,7 +574,8 @@ func run() error {
 		}
 	}
 	sticky := route.NewSticky(route.Policy{}, startRank)
-	if opts.tier != "" || opts.model != "" {
+	resumedPin := resumed && sess.State().RuntimeBinding.Target != "" && sess.State().RuntimeBinding.Pinned
+	if opts.tier != "" || opts.model != "" || resumedPin {
 		sticky.Pin(startRank)
 	}
 
@@ -542,7 +622,7 @@ func run() error {
 		// with the reason rather than reading an answer out of the pipe.
 		registry.SetQuestioner(&terminalQuestioner{in: in, out: out})
 	}
-	loop.Observer = out
+	loop.SetObserver(out)
 	subagentForward.set(out)
 
 	r := &repl{
@@ -556,11 +636,12 @@ func run() error {
 		tier:       tier,
 		providers:  reg,
 		budget:     budget,
+		caches:     newCacheSet(tier.Target, loop.Cache),
 	}
 	r.route = routeDec
 	r.sticky = sticky
-	loop.Observer = newWatcher(out, sticky, len(cfg.Tiers)-1, r.moveTo)
-	r.watcher = loop.Observer.(*watcher)
+	r.watcher = newWatcher(out, sticky, len(cfg.Tiers)-1, r.moveTo)
+	loop.SetObserver(r.watcher)
 
 	r.banner(sess, resumed)
 	// The REPL drains what buffered and attaches no live target: the
@@ -581,6 +662,10 @@ func run() error {
 		err := r.once(ctx, opts.prompt)
 		if opts.output == "json" {
 			rep := buildHeadlessReport(loop.Session.State(), cat, r.tier, err)
+			rep.PermissionMode = string(loop.Perms.Mode())
+			rep.Sandbox = string(loop.Perms.Execution().SandboxMode())
+			rep.ExecutionPosture = loop.Perms.Execution().Summary()
+			rep.FullHostAccess = !loop.Perms.Execution().SandboxActive()
 			if wErr := writeHeadlessReport(os.Stdout, rep); wErr != nil {
 				return wErr
 			}
@@ -588,6 +673,13 @@ func run() error {
 		return err
 	}
 	return r.interactive(ctx)
+}
+
+func validateExecutionPosture(mode permission.Mode, sandbox execution.SandboxMode) error {
+	if mode == permission.ModeYOLO && sandbox != execution.SandboxOff {
+		return fmt.Errorf("-mode yolo requires sandbox off; remove -sandbox or set [execution] sandbox = \"off\"")
+	}
+	return nil
 }
 
 func isTerminal(f *os.File) bool {
@@ -626,6 +718,12 @@ func openSession(
 			return nil, config.Tier{}, nil, false, "", buildErr
 		}
 		sess, err = store.Create(workspace, tier.Target.ID(), cat.Revision)
+		if err == nil {
+			err = persistRuntimeBinding(sess, tier, opts.tier != "" || opts.model != "")
+		}
+		if err != nil && sess != nil {
+			_ = sess.Close()
+		}
 		return sess, tier, client, false, note, err
 	}
 
@@ -633,10 +731,31 @@ func openSession(
 		return nil, config.Tier{}, nil, false, "", err
 	}
 
-	tier, client, note, err := resolveTier(ctx, reg, cfg, cat, opts, sess.State().Target, chosen)
+	state := sess.State()
+	var tier config.Tier
+	var client provider.Provider
+	var note string
+	if opts.model != "" || opts.tier != "" {
+		tier, client, note, err = resolveTier(ctx, reg, cfg, cat, opts, "", chosen)
+	} else {
+		var configured bool
+		tier, configured, err = tierForSessionState(cfg, state)
+		if err == nil {
+			if configured {
+				tier, client, note, err = reg.probeTierFallback(ctx, tier)
+			} else {
+				tier, client, err = reg.probeTier(ctx, tier)
+			}
+		}
+	}
 	if err != nil {
 		sess.Close()
 		return nil, config.Tier{}, nil, false, "", err
+	}
+	pinned := opts.model != "" || opts.tier != "" || (state.RuntimeBinding.Target != "" && state.RuntimeBinding.Pinned)
+	if err := persistRuntimeBinding(sess, tier, pinned); err != nil {
+		sess.Close()
+		return nil, config.Tier{}, nil, false, "", fmt.Errorf("saving resumed runtime binding: %w", err)
 	}
 	return sess, tier, client, true, note, nil
 }
@@ -662,7 +781,11 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *c
 	case recorded != "":
 		// A resumed session stays on the target it was recorded with unless the
 		// user asked otherwise, so replaying it means what it meant.
-		if tier, ok := tierForTarget(cfg, recorded); ok {
+		tier, ok, matchErr := tierForTarget(cfg, recorded)
+		if matchErr != nil {
+			return config.Tier{}, nil, "", matchErr
+		}
+		if ok {
 			return reg.probeTierFallback(ctx, tier)
 		}
 		target, err := parseRecordedTarget(recorded)
@@ -676,30 +799,126 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *c
 	if len(cfg.Tiers) == 0 {
 		return config.Tier{}, nil, "", noTargetError(ctx, reg.ollama, cfg)
 	}
+	if opts.prompt == "" {
+		// Interactive startup needs a live provider to assemble the session, but
+		// there is no routing decision until a user turn exists. Bootstrap on the
+		// first reachable rung and let planUserTurn route the full prospective
+		// request. An unavailable bottom rung must not prevent reaching that
+		// router, and recording an empty-prompt "decision" would be false
+		// provenance.
+		return probeAutomaticBootstrap(ctx, reg, cfg, opts.think)
+	}
 
-	// Nothing was pinned, so the router picks. With no prompt yet this is the
-	// opening choice only, which §8.3 says is worth less than the mid-task
-	// adjustments; it exists so the ladder is entered deliberately rather than
-	// by taking the bottom rung on principle.
-	decision, err := route.Heuristic{}.Route(route.Input{
-		Prompt:       opts.prompt,
-		Candidates:   candidatesFor(cfg, cat, nil, 0),
-		Requirements: route.Requirements{NeedsTools: true},
+	// A headless prompt is already known, so choose a feasible bootstrap target.
+	// The assembled loop still re-routes immediately before the call with exact
+	// system/tool/history token counts; this early pass avoids probing a rung the
+	// visible request has already ruled out.
+	bootstrapRequest := provider.Request{Messages: []provider.Message{provider.UserText(opts.prompt)}}
+	input := route.Input{
+		Prompt:     opts.prompt,
+		Candidates: candidatesForContext(cfg, cat, prefix.RequestTokens(bootstrapRequest), prefix.RequestTokenCeiling(bootstrapRequest), nil),
+		// Tool capability is established by the live probe below. Applying the
+		// catalog filter first would make an unlisted but tool-capable local model
+		// impossible to bootstrap in headless mode.
+		Requirements: route.Requirements{},
 		// The session opens with nothing spent, so the whole ceiling is what
 		// a rung's upper bound is checked against (§15).
 		Budgets: route.Budgets{MaxCost: cfg.Budget},
-	})
-	if err != nil {
-		return config.Tier{}, nil, "", err
 	}
-	*chosen = decision
+	return routeAutomaticBootstrap(ctx, reg, cfg, cat, input, opts.think, chosen)
+}
 
-	tier, ok := cfg.Tier(decision.Tier)
-	if !ok {
-		return config.Tier{}, nil, "", fmt.Errorf("the router chose %q, which is not on the ladder", decision.Tier)
+func probeAutomaticBootstrap(ctx context.Context, reg *providers, cfg *config.Config, effort string) (config.Tier, provider.Provider, string, error) {
+	var rejected []string
+	for _, configured := range cfg.Tiers {
+		tier := configured
+		applyEffort(&tier.Target, effort)
+		probed, client, fallbackNote, err := reg.probeTierFallback(ctx, tier)
+		if err == nil {
+			return probed, client, bootstrapNote(rejected, probed.ID, fallbackNote), nil
+		}
+		rejected = append(rejected, fmt.Sprintf("tier %s was unavailable at startup: %v", configured.ID, err))
 	}
-	applyEffort(&tier.Target, opts.think)
-	return reg.probeTierFallback(ctx, tier)
+	return config.Tier{}, nil, "", fmt.Errorf("no configured tier is reachable:\n  %s", strings.Join(rejected, "\n  "))
+}
+
+func routeAutomaticBootstrap(ctx context.Context, reg *providers, cfg *config.Config, cat *catalog.Catalog,
+	input route.Input, effort string, chosen *route.Decision,
+) (config.Tier, provider.Provider, string, error) {
+	rejected := map[string]string{}
+	for {
+		candidates := make([]route.Candidate, 0, len(input.Candidates))
+		for _, candidate := range input.Candidates {
+			if rejected[candidate.Tier] == "" {
+				candidates = append(candidates, candidate)
+			}
+		}
+		attempt := input
+		attempt.Candidates = candidates
+		decision, err := (route.Heuristic{}).Route(attempt)
+		for _, configured := range cfg.Tiers {
+			if reason := rejected[configured.ID]; reason != "" {
+				decision.Infeasible = append(decision.Infeasible, reason)
+			}
+		}
+		if err != nil {
+			if len(decision.Infeasible) == 0 {
+				return config.Tier{}, nil, "", err
+			}
+			return config.Tier{}, nil, "", fmt.Errorf("%v\n  %s", err, strings.Join(decision.Infeasible, "\n  "))
+		}
+		tier, ok := cfg.Tier(decision.Tier)
+		if !ok {
+			return config.Tier{}, nil, "", fmt.Errorf("the router chose %q, which is not on the ladder", decision.Tier)
+		}
+		var selected route.Candidate
+		for _, candidate := range input.Candidates {
+			if candidate.Tier == tier.ID {
+				selected = candidate
+				break
+			}
+		}
+		applyEffort(&tier.Target, effort)
+		probed, client, fallbackNote, probeErr := reg.probeTierFallbackFeasible(ctx, tier, func(concrete config.Tier) error {
+			candidate := withLiveCapabilities(candidateForTierContext(concrete, selected.Rank, cat,
+				selected.PromptTokens, selected.ContextTokens, 0), reg)
+			_, checkErr := (route.Heuristic{}).Route(route.Input{
+				Candidates: []route.Candidate{candidate}, Requirements: attempt.Requirements,
+				Budgets: attempt.Budgets, Pin: concrete.ID,
+			})
+			return checkErr
+		})
+		if probeErr != nil {
+			rejected[tier.ID] = fmt.Sprintf("tier %s was unavailable at startup: %v", tier.ID, probeErr)
+			continue
+		}
+
+		// The concrete target (including a configured fallback or effort
+		// override) is what receives and bills the request.
+		concreteCandidate := candidateForTierContext(probed, selected.Rank, cat,
+			selected.PromptTokens, selected.ContextTokens, 0)
+		decision.EstimatedCost = concreteCandidate.Estimate
+		decision.Target = probed.Target.ID()
+		*chosen = decision
+		var ordered []string
+		for _, configured := range cfg.Tiers {
+			if reason := rejected[configured.ID]; reason != "" {
+				ordered = append(ordered, reason)
+			}
+		}
+		return probed, client, bootstrapNote(ordered, probed.ID, fallbackNote), nil
+	}
+}
+
+func bootstrapNote(rejected []string, selected, fallbackNote string) string {
+	parts := append([]string(nil), rejected...)
+	if len(rejected) > 0 {
+		parts = append(parts, "startup continued on tier "+selected)
+	}
+	if fallbackNote != "" {
+		parts = append(parts, fallbackNote)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func applyEffort(target *provider.RouteTarget, effort string) {
@@ -708,25 +927,55 @@ func applyEffort(target *provider.RouteTarget, effort string) {
 	}
 }
 
-func tierForTarget(cfg *config.Config, recorded string) (config.Tier, bool) {
+func tierForTarget(cfg *config.Config, recorded string) (config.Tier, bool, error) {
+	// New IDs are injective, but an exact canonical ID can still equal another
+	// configured target's pre-escaping spelling. Gather both forms and accept
+	// only one concrete target, so an old ambiguous record never picks a rung by
+	// iteration order.
+	var matched config.Tier
+	matches := 0
+	type matchKey struct {
+		tierID string
+		target provider.RouteTargetID
+	}
+	seen := map[matchKey]bool{}
+	consider := func(tier config.Tier, target provider.RouteTarget) {
+		exact := string(target.ID()) == recorded
+		legacyLossless := target.Params.MaxOutputTokens == 0 && target.Params.Temperature == nil &&
+			(target.Params.Reasoning == nil || target.Params.Reasoning.Enabled)
+		if !exact && (!legacyLossless || string(target.LegacyID()) != recorded) {
+			return
+		}
+		key := matchKey{tierID: tier.ID, target: target.ID()}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		matched, matches = tierWithActiveTargetFirst(tier, target), matches+1
+	}
 	for _, t := range cfg.Tiers {
-		if string(t.Target.ID()) == recorded {
-			return t, true
+		consider(t, t.Target)
+		for _, fallback := range t.Fallbacks {
+			consider(t, fallback)
 		}
 	}
-	return config.Tier{}, false
+	if matches > 1 {
+		return config.Tier{}, false, fmt.Errorf(
+			"session target %q matches %d configured targets under legacy identity rules; choose -tier or -model explicitly",
+			provider.DisplayRouteTargetID(provider.RouteTargetID(recorded)), matches)
+	}
+	return matched, matches == 1, nil
 }
 
 // parseRecordedTarget reads a target back out of a session record. The catalog
 // owns target identity, so this is deliberately narrow: it recovers what was
 // recorded rather than inventing a target the user never configured.
 func parseRecordedTarget(recorded string) (provider.RouteTarget, error) {
-	parts := strings.SplitN(recorded, "/", 3)
-	if len(parts) < 3 {
-		return provider.RouteTarget{}, fmt.Errorf("session recorded an unreadable target %q", recorded)
+	target, err := provider.ParseRouteTargetID(provider.RouteTargetID(recorded))
+	if err != nil {
+		return provider.RouteTarget{}, fmt.Errorf("session recorded an unreadable target %q: %w", recorded, err)
 	}
-	model, _, _ := strings.Cut(parts[2], "+")
-	return provider.RouteTarget{Provider: parts[0], Surface: parts[1], ModelID: model}, nil
+	return target, nil
 }
 
 func noTargetError(ctx context.Context, client *ollama.Client, cfg *config.Config) error {

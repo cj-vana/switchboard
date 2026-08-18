@@ -107,6 +107,10 @@ func TestOutcomeLabellingFollowsTheEvidence(t *testing.T) {
 	if ab.Negative || !ab.Censored {
 		t.Errorf("abandonment = %+v, want censored", ab)
 	}
+	failed := LabelFor(Failed, false)
+	if failed.Positive || failed.Negative || !failed.Censored || failed.Weight != 0 {
+		t.Errorf("failed route = %+v, want unavailable/censored evidence", failed)
+	}
 
 	// A reviewer rejection against a rubric is the strongest negative.
 	rej := LabelFor(ReviewerRejected, false)
@@ -123,7 +127,7 @@ func TestOutcomeLabellingFollowsTheEvidence(t *testing.T) {
 // Censored outcomes must be excluded rather than counted as neutral, or the
 // majority of a real session's turns quietly become training evidence.
 func TestCensoredOutcomesCarryNoWeight(t *testing.T) {
-	for _, o := range []Outcome{Escalated, Abandoned} {
+	for _, o := range []Outcome{Escalated, Abandoned, Failed} {
 		if got := LabelFor(o, false); got.Weight != 0 {
 			t.Errorf("%s carries weight %.2f while censored", o, got.Weight)
 		}

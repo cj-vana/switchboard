@@ -15,11 +15,11 @@ import (
 	"io"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // attachPipedInput carries piped stdin into the prompt the way an @path
@@ -62,6 +62,12 @@ type headlessReport struct {
 	Result  string `json:"result"`
 	Outcome string `json:"outcome"`
 	Error   string `json:"error,omitempty"`
+	// A machine-readable run must make its authority as visible as the text
+	// banner. These fields are filled by main from the live shared controller.
+	PermissionMode   string `json:"permission_mode,omitempty"`
+	Sandbox          string `json:"sandbox,omitempty"`
+	ExecutionPosture string `json:"execution_posture,omitempty"`
+	FullHostAccess   bool   `json:"full_host_access"`
 
 	Session string `json:"session"`
 	Tier    string `json:"tier"`
@@ -83,7 +89,11 @@ type headlessCost struct {
 	// EstimatedUSD is present only when the metering is per-token and the
 	// catalog priced the session. It is an estimate against the named
 	// revision, never a substitute for the provider's invoice (§15).
-	EstimatedUSD    *catalog.Money `json:"estimated_usd,omitempty"`
+	EstimatedUSD *catalog.Money `json:"estimated_usd,omitempty"`
+	// RetryReserveUSD is a pessimistic allowance for failed or unsettled
+	// attempts. It is never folded into EstimatedUSD, which remains observed
+	// priced work only.
+	RetryReserveUSD *catalog.Money `json:"retry_reserve_usd,omitempty"`
 	CatalogRevision string         `json:"catalog_revision,omitempty"`
 }
 
@@ -101,6 +111,10 @@ func buildHeadlessReport(state session.State, cat *catalog.Catalog, tier config.
 		Usage:   state.Usage,
 		Cost:    headlessCost{Metering: "unknown"},
 	}
+	if state.RetryReserveMicroUSD > 0 {
+		reserve := catalog.Money(state.RetryReserveMicroUSD)
+		rep.Cost.RetryReserveUSD = &reserve
+	}
 	switch {
 	case errors.Is(turnErr, context.Canceled):
 		rep.Outcome = "cancelled"
@@ -113,6 +127,50 @@ func buildHeadlessReport(state session.State, cat *catalog.Catalog, tier config.
 	// The branches mirror summaryLines exactly: the wording a person reads in
 	// /cost and the fields a script reads here must not drift apart.
 	info, _, ok := cat.Lookup(tier.Target)
+	accounted := catalog.Money(state.AccountedCostMicroUSD())
+	if state.ExternalCostMicroUSD > 0 {
+		cost := accounted
+		rep.Cost.Metering = string(catalog.PerToken)
+		rep.Cost.Note = "includes priced delegate or race work; estimated against recorded catalog data, not the provider's invoice"
+		rep.Cost.EstimatedUSD = &cost
+		rep.Cost.CatalogRevision = state.CatalogRevision
+		return rep
+	}
+	if accounted > 0 {
+		cost := accounted
+		rep.Cost.Metering = string(catalog.PerToken)
+		rep.Cost.Note = "includes priced work across routed targets; estimated against recorded catalog data, not the provider's invoice"
+		rep.Cost.EstimatedUSD = &cost
+		rep.Cost.CatalogRevision = state.CatalogRevision
+		return rep
+	}
+	if kinds, known := routedMeteringKinds(cat, state); known {
+		if len(kinds) > 1 {
+			rep.Cost.Metering = "mixed"
+			rep.Cost.Note = "mixed metering across routed calls: " + strings.Join(kinds, " + ")
+			return rep
+		}
+		switch kinds[0] {
+		case "local":
+			rep.Cost.Metering = string(catalog.Local)
+			rep.Cost.Note = "routed calls ran locally, so there is nothing to bill"
+		case "plan":
+			rep.Cost.Metering = string(catalog.Plan)
+			rep.Cost.Note = "routed calls were billed as a plan; quota, not dollars, is what this consumed"
+		case "dollar-metered":
+			cost := accounted
+			rep.Cost.Metering = string(catalog.PerToken)
+			rep.Cost.Note = "dollar-metered routed calls rounded to zero against recorded catalog data"
+			rep.Cost.EstimatedUSD = &cost
+			rep.Cost.CatalogRevision = state.CatalogRevision
+		case "no per-token cost":
+			rep.Cost.Metering = string(catalog.PerToken)
+			rep.Cost.Note = "no per-token cost recorded for the routed calls"
+		default:
+			rep.Cost.Note = "routed calls include a target the catalog could not price"
+		}
+		return rep
+	}
 	switch {
 	case !ok:
 		rep.Cost.Note = "no catalog entry for this target, so nothing was priced"
@@ -126,7 +184,7 @@ func buildHeadlessReport(state session.State, cat *catalog.Catalog, tier config.
 		rep.Cost.Metering = string(info.Metering)
 		rep.Cost.Note = "no per-token cost recorded for this target"
 	default:
-		cost := catalog.Money(state.CostMicroUSD)
+		cost := accounted
 		rep.Cost.Metering = string(info.Metering)
 		rep.Cost.Note = "estimated against catalog " + state.CatalogRevision + ", not the provider's invoice"
 		rep.Cost.EstimatedUSD = &cost

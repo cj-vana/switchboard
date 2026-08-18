@@ -17,12 +17,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 type skillTool struct {
-	byName map[string]Skill
+	byName map[string][]Skill
 	names  []string
 }
 
@@ -31,10 +31,24 @@ type skillTool struct {
 // schemas byte-identical to a build without the feature — that absence is
 // the cache promise, and the test that pins it lives beside this package's.
 func NewTool(list []Skill) tools.Tool {
-	t := &skillTool{byName: map[string]Skill{}}
-	for _, sk := range list {
-		t.byName[sk.Name] = sk
-		t.names = append(t.names, sk.Name)
+	t := &skillTool{byName: map[string][]Skill{}}
+	for _, sk := range ModelVisible(list) {
+		if sk.rootDir == "" {
+			if resolved, err := filepath.EvalSymlinks(sk.Dir); err == nil {
+				sk.rootDir = resolved
+			}
+		}
+		if sk.rootInfo == nil && sk.rootDir != "" {
+			if root, err := os.OpenRoot(sk.rootDir); err == nil {
+				sk.rootInfo, _ = root.Stat(".")
+				root.Close()
+			}
+		}
+		key := sk.Key()
+		if len(t.byName[key]) == 0 {
+			t.names = append(t.names, key)
+		}
+		t.byName[key] = append(t.byName[key], sk)
 	}
 	return t
 }
@@ -48,7 +62,15 @@ func (t *skillTool) Description() string {
 		"what it says. The body may reference supporting files beside it; pass file to fetch one. " +
 		"Available skills:\n")
 	for _, name := range t.names {
-		b.WriteString("- " + name + ": " + t.byName[name].Description + "\n")
+		// YAML literal blocks may preserve newlines. Keep one skill on one
+		// schema line so a description cannot masquerade as another entry.
+		sk := t.byName[name][0]
+		description := strings.Join(strings.Fields(sk.Description), " ")
+		label := name
+		if name != sk.Name {
+			label += " (" + sk.Name + ")"
+		}
+		b.WriteString("- " + label + ": " + description + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -60,7 +82,7 @@ func (t *skillTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
   "type": "object",
   "properties": {
-    "name": {"type": "string", "description": "The skill to load, from the available list."},
+		"name": {"type": "string", "description": "The canonical skill selector to load, from the available list."},
     "file": {"type": "string", "description": "A supporting file the skill references, relative to the skill's own directory, e.g. references/style.md. Omit for the skill itself."}
   },
   "required": ["name"]
@@ -77,10 +99,14 @@ func (t *skillTool) Plan(input json.RawMessage) (tools.Plan, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return tools.Plan{}, fmt.Errorf("skill: %w", err)
 	}
-	sk, ok := t.byName[in.Name]
-	if !ok {
+	matches := t.byName[in.Name]
+	if len(matches) == 0 {
 		return tools.Plan{}, fmt.Errorf("skill: no skill named %q; the available ones are listed in this tool's description", in.Name)
 	}
+	if len(matches) != 1 {
+		return tools.Plan{}, fmt.Errorf("skill: selector %q is ambiguous across %d definitions", in.Name, len(matches))
+	}
+	sk := matches[0]
 
 	detail := in.Name
 	if in.File != "" {
@@ -99,30 +125,41 @@ func (t *skillTool) Plan(input json.RawMessage) (tools.Plan, error) {
 
 // serveFile answers with a file from the skill's directory and refuses
 // everything else: the skill named its own references, not the filesystem.
-// The comparison runs on resolved paths so a symlink cannot carry the read
-// outside the directory the skill actually occupies.
+// os.Root holds the confinement through the read itself, so a symlink swap
+// cannot carry the operation outside the directory after a separate check.
 func serveFile(sk Skill, rel string) (tools.Result, error) {
 	if filepath.IsAbs(rel) {
 		return tools.Result{Content: "skill files are relative to the skill's directory; " + rel + " is absolute", IsError: true}, nil
 	}
-	root, err := filepath.EvalSymlinks(sk.Dir)
+	clean := filepath.Clean(rel)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return tools.Result{Content: rel + " leaves skill " + sk.Name + "'s directory, which this tool does not serve", IsError: true}, nil
+	}
+	rootDir := sk.rootDir
+	if rootDir == "" {
+		rootDir = sk.Dir
+	}
+	root, err := os.OpenRoot(rootDir)
 	if err != nil {
 		return tools.Result{Content: err.Error(), IsError: true}, nil
 	}
-	joined := filepath.Join(root, rel)
-	resolved, err := filepath.EvalSymlinks(joined)
+	defer root.Close()
+	openedInfo, err := root.Stat(".")
+	if err != nil {
+		return tools.Result{Content: err.Error(), IsError: true}, nil
+	}
+	if sk.rootInfo == nil || !os.SameFile(sk.rootInfo, openedInfo) {
+		return tools.Result{Content: "skill " + sk.Name + "'s directory changed after discovery; refusing to serve supporting files", IsError: true}, nil
+	}
+	data, err := readFileFromRoot(root, rel, maxSupportingBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return tools.Result{Content: rel + " does not exist in skill " + sk.Name + "'s directory", IsError: true}, nil
 		}
-		return tools.Result{Content: err.Error(), IsError: true}, nil
-	}
-	if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
-		return tools.Result{Content: rel + " leaves skill " + sk.Name + "'s directory, which this tool does not serve", IsError: true}, nil
-	}
-	data, err := os.ReadFile(resolved)
-	if err != nil {
-		return tools.Result{Content: err.Error(), IsError: true}, nil
+		if strings.Contains(err.Error(), "path escapes from parent") {
+			return tools.Result{Content: rel + " leaves skill " + sk.Name + "'s directory, which this tool does not serve", IsError: true}, nil
+		}
+		return tools.Result{Content: rel + " cannot be read within skill " + sk.Name + "'s directory: " + err.Error(), IsError: true}, nil
 	}
 	return tools.Result{Content: string(data)}, nil
 }

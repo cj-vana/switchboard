@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func appendWrite(t *testing.T, sess *session.Session, callID, path string) {
@@ -108,6 +108,36 @@ func TestRecapSkipsTheSessionItRunsIn(t *testing.T) {
 	out := strings.Join(recapLines(store, workspace, "", currentID), "\n")
 	if !strings.Contains(out, oldID) || strings.Contains(out, currentID) {
 		t.Errorf("bare recap must land on the previous session, not the running one:\n%s", out)
+	}
+}
+
+func TestRecapCountsSharedTargetTierMoves(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	shared := provider.RouteTargetID("ollama/local/shared")
+	sess, err := store.Create(workspace, shared, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendMessage(provider.UserText("move across shared rungs")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendRoute(session.Route{
+		Tier: "t1", Target: shared, Outcome: "escalated", Escalations: 2,
+		EndedTier: "t2", EndedOn: shared,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := strings.Join(recapLines(store, workspace, id, ""), "\n")
+	if !strings.Contains(out, "first turn on t1, last on t2, 2 mid-turn moves") {
+		t.Fatalf("recap flattened shared-target tier moves:\n%s", out)
 	}
 }
 

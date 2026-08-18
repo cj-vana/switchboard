@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // The caps below bound what a search can put into the context. A search that

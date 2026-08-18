@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func pins() Pins {
@@ -30,11 +30,15 @@ func runs(arm string, n, seeds int, solved bool, cost catalog.Money) []Run {
 	var out []Run
 	for i := range n {
 		for s := range seeds {
-			out = append(out, Run{
+			run := Run{
 				TaskID:     string(rune('a'+i%26)) + string(rune('0'+i/26)),
 				Provenance: HandWritten, Arm: arm, Target: "t/s/m",
 				Solved: solved, Cost: cost, Seed: s, Duration: time.Second,
-			})
+			}
+			if !solved {
+				run.Failure = FailureVerification
+			}
+			out = append(out, run)
 		}
 	}
 	return out
@@ -88,6 +92,98 @@ func TestASingleSeedIsRefused(t *testing.T) {
 	v := Gate{}.Evaluate(tasks, all, pins())
 	if !v.Refused {
 		t.Fatal("a single seed per task produced a verdict")
+	}
+}
+
+func TestADuplicateMatrixCellIsRefused(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+	all := append(runs(RoutedArm, 25, 3, true, 60), runs("always-highest", 25, 3, true, 100)...)
+	all = append(all, all[0])
+
+	v := Gate{}.Evaluate(tasks, all, pins())
+	if !v.Refused {
+		t.Fatal("a journal with a duplicate task-arm-replicate cell produced a verdict")
+	}
+	if !strings.Contains(strings.Join(v.Reasons, " "), "duplicate cell") {
+		t.Errorf("reasons = %v", v.Reasons)
+	}
+}
+
+func TestAConflictingDuplicateMatrixCellIsRefused(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+	all := append(runs(RoutedArm, 25, 3, true, 60), runs("always-highest", 25, 3, true, 100)...)
+	conflict := all[0]
+	conflict.Solved = false
+	conflict.Failure = FailureVerification
+	all = append(all, conflict)
+
+	v := Gate{}.Evaluate(tasks, all, pins())
+	if !v.Refused {
+		t.Fatal("a journal with conflicting results for one cell produced a verdict")
+	}
+	if !strings.Contains(strings.Join(v.Reasons, " "), "conflicting duplicate") {
+		t.Errorf("reasons = %v", v.Reasons)
+	}
+}
+
+func TestAMissingMatrixCellIsRefused(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+	all := append(runs(RoutedArm, 25, 3, true, 60), runs("always-highest", 25, 3, true, 100)...)
+	all = all[:len(all)-1]
+
+	v := Gate{}.Evaluate(tasks, all, pins())
+	if !v.Refused {
+		t.Fatal("an incomplete task-arm-replicate matrix produced a verdict")
+	}
+	if !strings.Contains(strings.Join(v.Reasons, " "), "matrix is incomplete") {
+		t.Errorf("reasons = %v", v.Reasons)
+	}
+}
+
+func TestAConfiguredArmWithNoRunsIsRefused(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+	all := append(runs(RoutedArm, 25, 3, true, 60), runs("always-highest", 25, 3, true, 100)...)
+
+	v := (Gate{ExpectedArms: []string{RoutedArm, "always-highest", "always-lowest"}}).
+		Evaluate(tasks, all, pins())
+	if !v.Refused {
+		t.Fatal("a configured arm with no cells produced a verdict")
+	}
+	if !strings.Contains(strings.Join(v.Reasons, " "), "always-lowest") {
+		t.Errorf("reasons = %v", v.Reasons)
+	}
+}
+
+func TestEveryConfiguredTargetNeedsASnapshot(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+	all := append(runs(RoutedArm, 25, 3, true, 60), runs("always-highest", 25, 3, true, 100)...)
+
+	v := (Gate{ExpectedTargets: []provider.RouteTargetID{"t/s/m", "t/s/n"}}).
+		Evaluate(tasks, all, pins())
+	if !v.Refused {
+		t.Fatal("a target with no resolved snapshot produced a verdict")
+	}
+	if !strings.Contains(strings.Join(v.Reasons, " "), "model snapshot for t/s/n") {
+		t.Errorf("reasons = %v", v.Reasons)
+	}
+}
+
+func TestEveryObservedTargetNeedsASnapshotEvenWithConfiguredTargets(t *testing.T) {
+	tasks := corpus(25, HandWritten)
+	all := runs(RoutedArm, 25, 3, true, 60)
+	baseline := runs("always-highest", 25, 3, true, 100)
+	for i := range baseline {
+		baseline[i].Target = "t/s/unexpected"
+	}
+	all = append(all, baseline...)
+
+	v := (Gate{ExpectedTargets: []provider.RouteTargetID{"t/s/m"}}).
+		Evaluate(tasks, all, pins())
+	if !v.Refused {
+		t.Fatal("an observed target outside the configured list produced a verdict without a snapshot")
+	}
+	if !strings.Contains(strings.Join(v.Reasons, " "), "model snapshot for t/s/unexpected") {
+		t.Errorf("reasons = %v", v.Reasons)
 	}
 }
 
@@ -159,6 +255,7 @@ func TestASolveRateDropFailsEvenWithASaving(t *testing.T) {
 	for i, r := range runs(RoutedArm, 25, 3, true, 10) {
 		if i%4 == 0 {
 			r.Solved = false
+			r.Failure = FailureVerification
 		}
 		all = append(all, r)
 	}
@@ -172,6 +269,79 @@ func TestASolveRateDropFailsEvenWithASaving(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(v.Reasons, " "), "solve rate fell") {
 		t.Errorf("reasons = %v", v.Reasons)
+	}
+}
+
+func TestCompleteIdentityBoundMatrixRefusesInfrastructureAndExcludesItFromQualityRates(t *testing.T) {
+	tasks := corpus(MinimumTier1Tasks, HandWritten)
+	all := append(runs(RoutedArm, len(tasks), 3, true, 60),
+		runs("always-highest", len(tasks), 3, true, 100)...)
+
+	// The matrix is otherwise complete. This one cell represents provider or
+	// harness reliability, not a model-quality loss, and must neither disappear
+	// nor lower the routed solve rate.
+	all[0].Solved = false
+	all[0].Failure = FailureTimeout
+	all[0].Detail = "the turn failed: context deadline exceeded"
+
+	gate := Gate{
+		ExpectedArms:        []string{RoutedArm, "always-highest"},
+		ExpectedTargets:     []provider.RouteTargetID{"t/s/m"},
+		RequireEvaluationID: true,
+		EvaluationWorkers:   4,
+	}
+	id := evaluationID(
+		tasks,
+		gate.ExpectedArms,
+		map[string][]provider.RouteTargetID{"always-highest": {"t/s/m"}},
+		gate.ExpectedTargets,
+		[]int{0, 1, 2},
+		gate.EvaluationWorkers,
+		pins(),
+	)
+	for i := range all {
+		all[i].EvaluationID = id
+	}
+
+	v := gate.Evaluate(tasks, all, pins())
+	if !v.Refused || v.Passed {
+		t.Fatalf("infrastructure-contaminated matrix produced a verdict: %#v", v)
+	}
+	reasons := strings.Join(v.Reasons, "\n")
+	for _, want := range []string{
+		"infrastructure-contaminated cell",
+		"task a0, arm routed, replicate 0",
+		`failure kind "timeout"`,
+	} {
+		if !strings.Contains(reasons, want) {
+			t.Fatalf("refusal did not identify %q:\n%s", want, reasons)
+		}
+	}
+	if v.Routed.Runs != len(tasks)*3-1 || v.Routed.Solved != v.Routed.Runs || v.Routed.SolveRate != 1 {
+		t.Fatalf("infrastructure leaked into quality rates: %#v", v.Routed)
+	}
+}
+
+func TestMovedRoutedEstimateIsUnavailableRatherThanChargedToFinalTarget(t *testing.T) {
+	run := Run{
+		Arm: RoutedArm, TaskID: "move", Provenance: HandWritten, Solved: true,
+		Target: "p/s/b", Cost: 100, EstimatedCost: 10, EstimatedTarget: "p/s/a",
+		Escalations: 1,
+	}
+	got := Summarize(RoutedArm, []Run{run})
+	if len(got.EstimateError) != 0 {
+		t.Fatalf("opening estimate was attributed to the destination: %v", got.EstimateError)
+	}
+	if got.EstimatesUnavailable != 1 {
+		t.Fatalf("unavailable estimates = %d, want 1", got.EstimatesUnavailable)
+	}
+
+	// Returning to the opening target does not make a multi-target run
+	// comparable: the middle target's spend is still in the actual total.
+	run.Target = run.EstimatedTarget
+	got = Summarize(RoutedArm, []Run{run})
+	if len(got.EstimateError) != 0 || got.EstimatesUnavailable != 1 {
+		t.Fatalf("A -> B -> A estimate was treated as like-for-like: %#v", got)
 	}
 }
 
@@ -205,8 +375,12 @@ func TestSystematicUnderestimationFailsRegardlessOfSaving(t *testing.T) {
 func TestCostIsPerSolvedTask(t *testing.T) {
 	var all []Run
 	for i := range 10 {
-		all = append(all, Run{TaskID: "t", Provenance: HandWritten, Arm: "cheap-failer",
-			Solved: i == 0, Cost: 10, Seed: i})
+		run := Run{TaskID: "t", Provenance: HandWritten, Arm: "cheap-failer",
+			Solved: i == 0, Cost: 10, Seed: i}
+		if !run.Solved {
+			run.Failure = FailureVerification
+		}
+		all = append(all, run)
 	}
 	got := Summarize("cheap-failer", all)
 	if got.Solved != 1 {
@@ -258,6 +432,9 @@ func TestTheBestBaselineIsDeterministicWhenCostsTie(t *testing.T) {
 	// Two free baselines: one strong, one weak. Cost cannot separate them.
 	for i, r := range runs("weak-baseline", 25, 3, true, 0) {
 		r.Solved = i%2 == 0
+		if !r.Solved {
+			r.Failure = FailureVerification
+		}
 		all = append(all, r)
 	}
 	all = append(all, runs("strong-baseline", 25, 3, true, 0)...)

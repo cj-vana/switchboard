@@ -3,11 +3,11 @@ package agent
 import (
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/breakpoint"
-	"github.com/cj-vana/switchboard/internal/cachestate"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/breakpoint"
+	"github.com/switchboard-code/switchboard/internal/cachestate"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // Cache connects §6 to the loop.
@@ -58,11 +58,7 @@ func (c *Cache) plan(system []provider.Block, tools []provider.ToolDefinition, m
 		return nil
 	}
 
-	layout := prefix.New(system, tools, 0)
-	if len(messages) > 0 {
-		layout.AppendHistory(messages[:len(messages)-1]...)
-		layout.SetTail(messages[len(messages)-1].Content...)
-	}
+	layout := cacheLayout(system, tools, messages)
 
 	decision := c.Manager.Plan(layout)
 	c.lastHash = layout.PrefixHash()
@@ -76,7 +72,37 @@ func (c *Cache) plan(system []provider.Block, tools []provider.ToolDefinition, m
 			Declined:   decision.Declined,
 		})
 	}
-	return decision.Plan
+	if decision.Plan == nil && decision.RoutingKey == "" {
+		return nil
+	}
+	plan := &provider.CachePlan{RoutingKey: decision.RoutingKey}
+	if decision.Plan != nil {
+		plan.Breakpoints = append(plan.Breakpoints, decision.Plan.Breakpoints...)
+	}
+	return plan
+}
+
+func cacheLayout(system []provider.Block, tools []provider.ToolDefinition, messages []provider.Message) *prefix.Layout {
+	layout := prefix.New(system, tools, 0)
+	if len(messages) > 0 {
+		layout.AppendHistory(messages[:len(messages)-1]...)
+		layout.SetTail(messages[len(messages)-1].Content...)
+	}
+	return layout
+}
+
+// Predict reports the tracker's belief for a prospective request without
+// mutating the cache controller. The router calls it for every target before
+// selection; only the target that actually serves the call may update state.
+func (c *Cache) Predict(system []provider.Block, tools []provider.ToolDefinition, messages []provider.Message, now time.Time) (cachestate.Expectation, bool) {
+	if c == nil || c.Tracker == nil || c.Manager == nil {
+		return cachestate.Expectation{}, false
+	}
+	hash := cacheLayout(system, tools, messages).PrefixHash()
+	if hash == "" {
+		return cachestate.Expectation{}, false
+	}
+	return c.Tracker.Expect(c.Target, hash, now), true
 }
 
 // observe records what the provider reported.

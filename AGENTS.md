@@ -10,6 +10,8 @@ point into it, and this file restates the constraints that bind the code.
     cmd/sb/              CLI entry point, the phase-0 REPL, and the phase-3 TUI
     internal/provider/   canonical message types, Provider interface, adapters
     internal/session/    append-only event log, replay, resume
+    internal/router/     deterministic per-turn selection, hard feasibility,
+                         sticky mid-turn evidence and transactional moves
     internal/execution/  process runner and sandbox capability reporting
     internal/permission/ modes and rules
     internal/tools/      the core tool suite
@@ -20,6 +22,12 @@ point into it, and this file restates the constraints that bind the code.
     internal/mcp/        MCP client over stdio and Streamable HTTP, and the
                          bridge that puts each discovered tool in the registry
                          as mcp__server__tool
+    internal/mcpnative/  bounded Codex and Claude MCP-config discovery;
+                         sensitive values stay sealed until activation, trust,
+                         policy, and runtime-feature gates all pass
+    internal/extensions/ bounded Codex and Claude plugin discovery, offline
+                         local installation, and Switchboard's independent
+                         enablement/executable-trust ledger
     internal/hooks/      user commands at the seams of a tool call; a pre_tool
                          hook blocks on non-zero exit and on timeout
     internal/delegate/   the delegate tool: one level of subagent on a chosen
@@ -27,10 +35,14 @@ point into it, and this file restates the constraints that bind the code.
                          agent definitions load from .switchboard/agents/
     internal/skills/     instruction packs the model pulls in by tool call:
                          descriptions ride the tool's schema, bodies stay on
-                         disk until asked for; loads without a trust grant
-                         because nothing executes at read time
+                         disk until asked for; native .agents and .claude
+                         invocation controls fail closed; legacy Claude
+                         commands are explicit-only prompt entries; prompts
+                         load without a trust grant because nothing executes
+                         at read time
     internal/trust/      per-workspace grants that gate repository-declared
-                         MCP servers, hooks, and the language server
+                         MCP servers (Switchboard or native), hooks, and the
+                         language server
     internal/watch/      the /watch verifier: the user's own command, run at
                          a turn's seams when the checkpoint recorder says
                          files changed, reporting only the delta
@@ -88,13 +100,35 @@ an unknown profile is an error rather than a fall back to the generic floor,
 since a typo would otherwise quietly disable the capabilities the user asked
 for. A profile nobody has run against a real server does not belong in the map.
 
-**The router is rules, and a learned one is not a near-term option.** §8.2
-defines every classifier dimension by a measurement procedure against the §8.6
-eval corpus, and that corpus is phase 2b. Weights cannot be fit against data
-that does not exist, the same section records the null hypothesis that a task
-profile loses to a plain scalar, and §19.2 gates a learned router on beating
-heuristics after runtime and distribution costs. Running the heuristic is what
-produces the evidence to settle it.
+**The router is rules until evidence earns a learned one.** §8.2 defines every
+classifier dimension by a measurement procedure against the §8.6 eval corpus,
+and §19.2 gates a learned router on beating the heuristic after runtime and
+distribution costs. The current historical journal fails the strengthened
+matrix-integrity gate, and its diagnostic projection has only one rung on the
+capability front. There is no routing decision to learn from that evidence.
+Do not fit a model, call a dirty journal training data, or ship weights until a
+clean harder corpus produces at least two useful rungs and the candidate passes
+the gate. Running the deterministic policy is what produces the evidence to
+settle this.
+
+**Opening routing is per user turn, over the prospective request.** An
+interactive session bootstraps on the bottom rung only because no user request
+exists yet. Immediately before each user turn, `cmd/sb/turn_route.go` measures
+the request that would actually be sent: frozen system and tool zones, replayed
+messages plus the opening message, attachments and vision need, live capability
+evidence, context fit, cache state, and the remaining hard budget including
+retry reserve. Do not route on the prompt string alone, and do not record the
+empty startup bootstrap as a decision. A user pin still passes every hard
+feasibility check; `/tier auto` removes the pin and resumes this per-turn path.
+
+**A route move is a prepared transaction at a completed model-round seam.**
+Planning a user turn and assessing a sticky escalation are pure proposals.
+Probe the destination and recheck capability, context, and budget against the
+request it would receive before applying the prepared provider binding and
+sticky rank together. A failed probe, stale proposal, or refused hard check
+must leave both unchanged. Mid-turn signals can arrive from tool calls, but a
+move is assessed only after the model round and its tool work complete; never
+swap the provider under an in-flight round.
 
 **A trigger that needs state the loop does not keep is absent, not guessed.**
 `internal/router` detects repeated tool calls, tool error spikes, new test
@@ -387,9 +421,23 @@ because bypass suppresses prompts inside a granted sandbox and an external
 tool was never inside one. Only an explicit rule (the server's `allow` list)
 or a remembered answer lets one run without asking, and the remembered answer
 covers the tool, not one byte-exact invocation — that is what the display-only
-`Request.Detail` field exists for. A spawned server inherits the parent
-environment minus the model credentials; the test that fails if one leaks is
-in `internal/mcp/stdio_test.go`.
+`Request.Detail` field exists for. A legacy Switchboard stdio declaration
+inherits the ordinary environment only after SSH-agent sockets and secret-,
+token-, key-, password-, credential-, auth-, session-, cookie-, database-URL-,
+and DSN-like names are removed case-insensitively. A restricted/native
+declaration starts from the process baseline, admits only named `inherit_env`
+values, then applies its explicit `env`; the tests that fail on ambient or
+explicit-value leakage are in `internal/mcp/stdio_test.go`.
+
+**Protocol downgrade requires protocol evidence.** The client probes stateless
+MCP 2026-07-28, and can negotiate the initialization-based 2025-06-18 and
+2025-03-26 revisions. An explicit supported-version answer, the bounded stdio
+probe behavior, or an unrecognized HTTP 400 can establish an older server.
+Authentication failures, rate limits, 5xx responses, owner cancellation, and
+recognized modern protocol errors cannot. Do not turn an operational failure
+into a legacy retry. Modern request metadata, HTTP headers, result types,
+cancellation, pagination, and secret redaction are protocol semantics, not
+cosmetic compatibility.
 
 **A repository's configuration may speak; only a trusted checkout executes.**
 `.switchboard/mcp.toml` and `.switchboard/hooks.toml` in a repository are read
@@ -418,9 +466,47 @@ is what the frozen zone requires.
 
 **MCP discovery is once, at session assembly.** Tool definitions sit in the
 frozen zone (§6.1), so a server that changes its tool list mid-session is
-noted and deliberately not followed; the next session lists again. Bridged
+noted and deliberately not followed; the next Switchboard run lists again. Bridged
 names are sorted before registration so the frozen-zone ordering never
-depends on which server answered first.
+depends on which server answered first. Keep each raw server/tool identity
+beside its sanitized bridge through collision resolution: an `allow` entry
+becomes a permission rule only after that exact bridge registered, never for a
+different raw name that sanitized the same way.
+
+`required` is an assembly invariant, not display metadata. A required
+declaration shadowed by an earlier equal server name is an error, and a required
+connection failure closes every peer that did connect and aborts assembly.
+Optional failures remain diagnostics. Keep this check before tool registration
+so a failed required set cannot leave a partial frozen schema behind.
+
+**Native MCP execution starts at one fail-closed materialization seam.**
+`internal/mcpnative` treats partial Codex user/project TOML as inventory only.
+Executable Codex definitions must come from the installed app-server's bounded
+`config/read(includeLayers=true)` result for the same canonical cwd, which
+contains the effective package, system, managed, cloud, user/profile, project,
+and session stack. The app-server is launched only for an existing activation,
+a trusted Codex plugin that needs policy, or an explicit `sb mcp` command; a
+workspace-local `codex` binary is rejected. Claude user, local,
+workspace-to-cwd project, and optional exclusive managed configuration remains
+an in-process bounded read. The normalizer seals sensitive values and preserves
+every non-baseline semantic as a typed feature requirement. `cmd/sb` may turn
+one winner into an `mcp.Spec` only after exact keyed activation, authoritative
+managed policy, workspace trust where required, and an explicit runtime-feature
+claim all pass.
+
+The current adapter claims stdio and HTTP, working directories, restricted
+forwarded environment, static/environment-backed/bearer headers, startup and
+tool timeout forms, `required`, tool filters, controlled Claude environment
+expansion, and eager `alwaysLoad` assembly. Its feature list and mapper tests
+are the compatibility contract. OAuth and ChatGPT auth, native approval modes,
+SSE, WebSocket, remote execution, header helpers, tool-exposure behavior, and
+parallel-tool declarations must fail closed rather than be discarded or
+relabeled as baseline HTTP/stdio. `configRequirements/read` is also
+authoritative: null means no managed requirements; a non-null bundle remains
+quarantined until its MCP projection is implemented exactly. Never treat raw
+Codex files, a missing auth file, or a manifest namespace as proof that the
+effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
+public matrix.
 
 **A hook that hangs has answered.** A pre_tool hook blocks the call on
 non-zero exit and on timeout both, because a gate that fails open the moment
@@ -449,28 +535,84 @@ what it was before the feature existed; the test that guards that is the
 cache promise, not the comment. A definition naming a rung the ladder lacks
 runs on the default rung with a note, rather than erroring on every call.
 
-Skills follow the named-agent posture exactly, because a skill is a prompt
-the way a definition is (§13): both directories load without a trust grant,
-nothing executes at read time, and whatever a skill persuades the model to
-do passes the permission engine on its own merits. Discovery is once, at
-session assembly, sorted by name, because the descriptions ride the skill
-tool's schema into the frozen zone; with nothing discovered the tool is not
-registered at all, and the schemas render byte-identical to a build without
-the feature — that absence is the cache promise, and
-`TestNoSkillsLeavesTheSchemasByteIdentical` is what pins it. The tool
-serves a skill's own directory and nothing else, on resolved paths so a
-symlink cannot carry the read outside it: the workspace-rooted read tool
-cannot reach a pack under ~/.switchboard, and the skill named its own
-references, not the filesystem. Frontmatter keys other than name and
-description are ignored rather than errors, so packs written for the
-neighboring tools load as copied.
+**A native plugin record is inventory, not authority.** `internal/extensions`
+discovers exact Codex and Claude roots, and `internal/extensions/native` joins
+them to bounded marketplace, installed-registry, and native settings records.
+Native enablement is provenance. Only Switchboard's own per-user ledger may
+enable an exact dialect, scope, physical root, and workspace identity. An
+available catalog entry has no activation capability; it must first be copied
+by the offline local installer and freshly rediscovered. Do not scan caches,
+guess an installed root, prefer an ambiguous duplicate, or let a product's
+enabled bit cross this boundary. An applicable managed denial remains a hard
+upper bound: permission does not cross from a native client, but policy may
+still forbid execution.
 
-/learn writes a skill and inherits both postures at once. The distillation
-is /compact's mechanism reused whole — one request outside the loop, the
-summarizer slot when bound, no tools, nothing appended to the session — and
+Plugin enablement and executable trust are distinct. Enablement may expose
+prompt-only skills at the next frozen-zone assembly. MCP and hook declarations
+make a plugin executable, and trust is bound to the digest of the bounded
+plugin tree; changed bytes invalidate it. The current session adapter loads
+enabled plugin skills and MCP declarations from one unambiguous enabled root.
+MCP additionally requires the current digest's executable grant, exact cache
+rediscovery before and after parsing, managed-policy approval, and the same
+typed runtime-feature gate as direct native MCP. Plugin hooks, agents,
+commands, apps, LSP, and other recognized components remain inventory-only;
+merely detecting or trusting them does not wire them to an existing runtime
+surface. The installer copies an already present exact local source into the
+content-addressed Switchboard cache; it never fetches, resolves packages, or
+runs lifecycle code.
+
+Skills follow the named-agent posture exactly, because a skill is a prompt
+the way a definition is (§13): `.switchboard/skills`, native `.agents/skills`
+and `.claude/skills`, bounded recursive `.claude/commands`, the Unix Codex
+managed root, and enabled plugin skill roots load without executable trust,
+nothing executes at read time, and whatever a skill persuades the model to do
+passes the permission engine on its own merits. Discovery is once, at session
+assembly, sorted by canonical source-qualified selector, because the
+descriptions ride the skill tool's schema into the frozen zone. If nothing is
+model-visible the tool is not registered at all, and the schemas render
+byte-identical to a build without the feature — that absence is the cache
+promise, and
+`TestNoSkillsLeavesTheSchemasByteIdentical` is what pins it. `/skills` still
+shows the full inventory, including manual-only and blocked packs.
+
+Legacy Claude command files are always manual-only skills. Discover
+`.claude/commands/**/*.md` at each cwd-to-Git-root project layer and under the
+user root, pin the resolved tree and file identities, and require `/skill` with
+the exact canonical path selector. Their frontmatter description and argument
+hint plus static Claude argument substitution are prompt metadata, never a
+request to execute a command. Unsupported host controls, dynamic shell or
+context expansion, and implicit attachments block invocation. A native Claude
+skill wins a same-scope basename collision and the command is omitted with a
+diagnostic. Retain cross-scope definitions under distinct selectors rather
+than importing Claude's personal-over-project winner; invisible precedence is
+the security bug exact selectors exist to avoid.
+
+Equal display names never resolve through invisible ecosystem precedence.
+Model tool calls and `/skill` use the exact canonical selector. Native
+invocation metadata is a safety boundary: Codex implicit opt-out, Claude
+model/user opt-outs, and Claude argument substitution are implemented;
+unsupported tool grants, forced models or contexts, agents, hooks, shell or
+dynamic-context expansion, Codex dependencies, and implicit Claude
+attachments block the affected invocation rather than being ignored.
+Malformed controls fail closed. A Claude `paths` filter blocks automatic model
+exposure because the host lacks that activation context, but does not by itself
+make explicit invocation unsafe. Codex `interface.default_prompt` is UI-only
+metadata and is deliberately not substituted for the `SKILL.md` body.
+
+The tool serves a skill's own directory and nothing else, on a pinned resolved
+root so a symlink or replacement cannot carry the read outside it: the
+workspace-rooted read tool cannot reach a user pack, and the skill named its
+own references, not the filesystem. Do not broaden the YAML reader into
+guessing behavior: portable unknown descriptive metadata may be ignored, but
+any known behavior-bearing control must be honored or block invocation.
+
+`/learn` writes `.agents/skills/<name>/SKILL.md` and inherits both postures at
+once. The distillation is `/compact`'s mechanism reused whole — one request
+outside the loop, the summarizer slot when bound, no tools, nothing appended to
+the session — and
 the pack it writes does not hot-register: discovery stays once-per-assembly
 because the descriptions ride the frozen zone, so the command reports
-"offered next session" rather than pretending otherwise. The composed file
+"offered on the next Switchboard run" rather than pretending otherwise. The composed file
 passes `credential.ScanPrompt` before anything reaches disk and redacts
 unconditionally, the race record's posture, because a skill pack outlives
 every chance to ask and may be committed; the test that greps the composed
@@ -602,12 +744,17 @@ edit. docs/tui.svg is generated, not drawn: `SB_FRAMES=<dir> go test
 ./cmd/sb/ -run TestCaptureFrames` renders the frames from the real view
 code.
 
-Phase 4's extensibility has landed — MCP over stdio and Streamable HTTP,
-hooks, the workspace-trust flow, named subagent definitions, skills —
-along with the `glob`/`grep`/`todo`/`ask` tools and phase 6's `delegate`,
-each under the constraints above. Deliberately absent until their phases: the learned
-router (phase 7 gates it on beating the heuristic) and everything in the
-phase 8 platform program.
+Phase 4's extensibility has landed — modern and initialization-era MCP over
+stdio and Streamable HTTP, hooks, workspace trust, named subagent definitions,
+native skills, direct native MCP activation, and bounded plugin
+inventory/activation — along with the `glob`/`grep`/`todo`/`ask` tools and
+phase 6's `delegate`, each under the constraints above. “Plugin support” does
+not erase the component matrix in `docs/extensions.md`: plugin skills and
+digest-trusted baseline MCP assemble, while the other recognized plugin
+components remain inventory-only. Native skills include explicit-only legacy
+Claude command libraries; this does not make plugin commands executable. The
+learned router remains absent because phase 7's gate has no clean multi-rung
+training decision, and the phase 8 platform program remains out of scope.
 
 ## Working here
 

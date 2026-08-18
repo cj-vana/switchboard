@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
 )
 
 // TestReportJournal recomputes the gate from a recorded run, so a verdict can be
@@ -23,11 +22,15 @@ func TestReportJournal(t *testing.T) {
 	}
 
 	tasks := Tier1("../..")
-	v := Gate{}.Evaluate(tasks, runs, Pins{
+	tasks = selectTasks(t, tasks, len(tasks))
+	v := (Gate{
+		RequireEvaluationID: true,
+		EvaluationWorkers:   positiveIntEnv(t, "SB_EVAL_WORKERS", 0),
+	}).Evaluate(tasks, runs, Pins{
 		HarnessCommit:   os.Getenv("SB_EVAL_COMMIT"),
 		CatalogRevision: os.Getenv("SB_EVAL_CATALOG"),
 		PromptVersion:   "v1",
-		Snapshots:       map[provider.RouteTargetID]string{"kimi/coding/k3-256k": "k3-256k"},
+		Snapshots:       snapshotsFromEnv(t),
 	})
 
 	t.Logf("routed   %d/%d solved, median %s per solved task",

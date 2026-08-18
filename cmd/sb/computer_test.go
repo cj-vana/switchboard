@@ -4,8 +4,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // The platform gate is the whole registration decision: on macOS the tool

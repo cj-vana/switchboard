@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/skills"
+	"github.com/switchboard-code/switchboard/internal/skills"
 )
 
 func TestComposeSkillRedactsBeforeAnythingReachesDisk(t *testing.T) {
@@ -32,7 +32,7 @@ func TestComposeSkillRedactsBeforeAnythingReachesDisk(t *testing.T) {
 }
 
 func TestComposeSkillRoundTripsThroughTheLoader(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // the loader also reads ~/.switchboard/skills
+	t.Setenv("HOME", t.TempDir()) // the loader also reads user skill trees
 	generated := "Use when the build cache misbehaves in this repo.\n\n1. Stop the daemon.\n2. Clear ~/.cache/build.\n3. Rebuild with -x."
 
 	content, _, err := composeSkill("cache-repair", generated, "")
@@ -41,7 +41,7 @@ func TestComposeSkillRoundTripsThroughTheLoader(t *testing.T) {
 	}
 
 	workspace := t.TempDir()
-	dir := filepath.Join(workspace, ".switchboard", "skills", "cache-repair")
+	dir := filepath.Join(workspace, ".agents", "skills", "cache-repair")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

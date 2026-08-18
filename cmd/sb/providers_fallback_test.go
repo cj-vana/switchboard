@@ -2,14 +2,145 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/anthropic"
+	route "github.com/switchboard-code/switchboard/internal/router"
 )
+
+func TestProviderClientCacheIsConcurrentAndCoherent(t *testing.T) {
+	p := newProviders("http://127.0.0.1:11434", &config.Config{})
+	targets := []provider.RouteTarget{
+		{Provider: "openaicompat", Surface: "ollama", ModelID: "m"},
+		{Provider: "openaicompat", Surface: "generic", ModelID: "m"},
+	}
+	var wg sync.WaitGroup
+	results := make([][]provider.Provider, len(targets))
+	for index, target := range targets {
+		for range 32 {
+			wg.Add(1)
+			go func(index int, target provider.RouteTarget) {
+				defer wg.Done()
+				client, err := p.get(context.Background(), target)
+				if err != nil {
+					t.Errorf("get(%s): %v", target.Surface, err)
+					return
+				}
+				p.clientsMu.Lock()
+				results[index] = append(results[index], client)
+				p.clientsMu.Unlock()
+			}(index, target)
+		}
+	}
+	wg.Wait()
+	for index, clients := range results {
+		if len(clients) != 32 {
+			t.Fatalf("surface %s returned %d clients", targets[index].Surface, len(clients))
+		}
+		for _, client := range clients[1:] {
+			if client != clients[0] {
+				t.Fatalf("surface %s constructed duplicate clients", targets[index].Surface)
+			}
+		}
+	}
+}
+
+func TestProbeCancellationInterruptsCredentialResolution(t *testing.T) {
+	if os.Getenv("SB_TEST_BLOCKING_CREDENTIAL_HELPER") == "1" {
+		_ = os.WriteFile(os.Getenv("SB_TEST_CREDENTIAL_HELPER_STARTED"), []byte("started"), 0o600)
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+
+	marker := filepath.Join(t.TempDir(), "started")
+	t.Setenv("SB_TEST_BLOCKING_CREDENTIAL_HELPER", "1")
+	t.Setenv("SB_TEST_CREDENTIAL_HELPER_STARTED", marker)
+	cfg := &config.Config{Auth: map[string]credential.Settings{
+		anthropic.Name: {Helper: []string{os.Args[0], "-test.run=^TestProbeCancellationInterruptsCredentialResolution$"}},
+	}}
+	registry := newProviders("http://127.0.0.1:1", cfg)
+	target := provider.RouteTarget{Provider: anthropic.Name, Surface: "first-party", ModelID: "test"}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := registry.probeTier(ctx, config.Tier{ID: "t1", Target: target})
+		done <- err
+	}()
+
+	// A cold whole-repository -race run may still be compiling/linking other
+	// packages while this child test binary starts. The marker proves the helper
+	// actually reached its blocking point; give process startup enough headroom
+	// without weakening the prompt-cancellation deadline below.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("credential helper did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("probe error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled credential lookup did not return promptly")
+	}
+	if registry.anthropic != nil {
+		t.Fatal("cancelled credential lookup installed a provider client")
+	}
+	if _, ok := registry.probedCapabilities(target); ok {
+		t.Fatal("cancelled credential lookup installed probe evidence")
+	}
+}
+
+func TestProbeEvidenceSeparatesExplicitInferenceParameters(t *testing.T) {
+	server := fakeOllama(t, "same-model")
+	registry := newProviders(server.URL, &config.Config{})
+	base := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "same-model"}
+	withMax := base
+	withMax.Params.MaxOutputTokens = 2_048
+	temperature := 0.2
+	withTemperature := base
+	withTemperature.Params.Temperature = &temperature
+
+	for index, target := range []provider.RouteTarget{withMax, withTemperature} {
+		if _, _, err := registry.probeTier(context.Background(), config.Tier{ID: fmt.Sprintf("t%d", index+1), Target: target}); err != nil {
+			t.Fatalf("probe %s: %v", target.ID(), err)
+		}
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if len(registry.probes) != 2 {
+		t.Fatalf("parameter variants produced %d probe entries, want 2", len(registry.probes))
+	}
+	if _, ok := registry.probes[withMax.ID()]; !ok {
+		t.Fatalf("max-output probe was lost: %#v", registry.probes)
+	}
+	if _, ok := registry.probes[withTemperature.ID()]; !ok {
+		t.Fatalf("temperature probe was lost: %#v", registry.probes)
+	}
+}
 
 // fakeOllama serves a tags list holding only the named models, each
 // advertising tool support, which is what the probe needs to accept one.
@@ -88,6 +219,213 @@ func TestProbeTierFallbackReportsEveryAttempt(t *testing.T) {
 	for _, want := range []string{"missing", "backup", "all unavailable"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q; the user needs every attempt named", err, want)
+		}
+	}
+}
+
+func TestInteractiveBootstrapIsNotRecordedAsAnEmptyPromptDecision(t *testing.T) {
+	ts := fakeOllama(t, "small", "large")
+	cfg := &config.Config{Tiers: []config.Tier{
+		ollamaTier("t1", "small"),
+		ollamaTier("t2", "large"),
+	}}
+	p := newProviders(ts.URL, cfg)
+	var chosen route.Decision
+	tier, _, _, err := resolveTier(context.Background(), p, cfg, &catalog.Catalog{}, &options{}, "", &chosen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier.ID != "t1" {
+		t.Fatalf("bootstrap tier = %s, want bottom rung", tier.ID)
+	}
+	if chosen.Source != "" {
+		t.Fatalf("empty interactive prompt was recorded as a routing decision: %+v", chosen)
+	}
+}
+
+func TestAutomaticInteractiveBootstrapSkipsUnavailableTier(t *testing.T) {
+	server := fakeOllama(t, "healthy")
+	cfg := &config.Config{Tiers: []config.Tier{
+		ollamaTier("t1", "missing", "also-missing"),
+		ollamaTier("t2", "healthy"),
+	}}
+	registry := newProviders(server.URL, cfg)
+	var chosen route.Decision
+	tier, client, note, err := resolveTier(context.Background(), registry, cfg, &catalog.Catalog{}, &options{}, "", &chosen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier.ID != "t2" || tier.Target.ModelID != "healthy" || client == nil {
+		t.Fatalf("automatic bootstrap = %s/%s (%T), want reachable t2", tier.ID, tier.Target.ModelID, client)
+	}
+	if chosen.Source != "" {
+		t.Fatalf("interactive bootstrap fabricated an empty-prompt route decision: %+v", chosen)
+	}
+	if !strings.Contains(note, "tier t1") || !strings.Contains(note, "continued on tier t2") {
+		t.Fatalf("bootstrap exclusion note = %q", note)
+	}
+}
+
+func TestAutomaticHeadlessBootstrapReroutesAroundUnavailableTier(t *testing.T) {
+	cat := catalogWithLocalModels(t,
+		localModelSpec{name: "missing", contextWindow: 100_000},
+		localModelSpec{name: "also-missing", contextWindow: 100_000},
+		localModelSpec{name: "healthy", contextWindow: 100_000},
+	)
+	server := fakeOllama(t, "healthy")
+	cfg := &config.Config{Tiers: []config.Tier{
+		ollamaTier("t1", "missing", "also-missing"),
+		ollamaTier("t2", "healthy"),
+	}}
+	registry := newProviders(server.URL, cfg)
+	var chosen route.Decision
+	tier, client, note, err := resolveTier(context.Background(), registry, cfg, cat,
+		&options{prompt: "make the small edit"}, "", &chosen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier.ID != "t2" || tier.Target.ModelID != "healthy" || client == nil {
+		t.Fatalf("automatic headless bootstrap = %s/%s (%T), want reachable t2", tier.ID, tier.Target.ModelID, client)
+	}
+	if chosen.Tier != "t2" || chosen.Target != tier.Target.ID() || chosen.Source != route.SourceHeuristic {
+		t.Fatalf("headless startup decision = %+v", chosen)
+	}
+	joined := strings.Join(chosen.Infeasible, " ")
+	if !strings.Contains(joined, "tier t1") || !strings.Contains(joined, "unavailable at startup") {
+		t.Fatalf("live startup exclusion missing from decision: %v", chosen.Infeasible)
+	}
+	if !strings.Contains(note, "continued on tier t2") {
+		t.Fatalf("headless bootstrap note = %q", note)
+	}
+}
+
+func TestResumeRecognizesConfiguredFallbackAsItsOriginalTier(t *testing.T) {
+	server := fakeOllama(t, "backup")
+	tier := ollamaTier("t1", "primary", "backup")
+	cfg := &config.Config{Tiers: []config.Tier{tier}}
+	registry := newProviders(server.URL, cfg)
+	recorded := string(tier.Fallbacks[0].ID())
+
+	resolved, _, _, err := resolveTier(context.Background(), registry, cfg, &catalog.Catalog{}, &options{}, recorded, &route.Decision{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ID != "t1" || resolved.Target.ID() != tier.Fallbacks[0].ID() {
+		t.Fatalf("resumed fallback resolved as %s/%s, want t1/%s", resolved.ID, resolved.Target.ID(), tier.Fallbacks[0].ID())
+	}
+	if len(resolved.Fallbacks) == 0 || resolved.Fallbacks[0].ID() != tier.Target.ID() {
+		t.Fatalf("active fallback did not retain the primary as a later option: %+v", resolved.Fallbacks)
+	}
+}
+
+func TestRecordedTargetRoundTripsPlusModelAndMatchesLegacySession(t *testing.T) {
+	target := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "vendor/model+preview%2B"}
+	parsed, err := parseRecordedTarget(string(target.ID()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parsed, target) {
+		t.Fatalf("canonical recorded target = %#v, want %#v", parsed, target)
+	}
+
+	legacy := string(target.LegacyID())
+	parsed, err = parseRecordedTarget(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parsed, target) {
+		t.Fatalf("legacy plus-bearing target = %#v, want %#v", parsed, target)
+	}
+	cfg := &config.Config{Tiers: []config.Tier{{ID: "t1", Target: target}}}
+	matched, ok, err := tierForTarget(cfg, legacy)
+	if err != nil || !ok || !reflect.DeepEqual(matched.Target, target) {
+		t.Fatalf("legacy session target %q did not recover configured target: %#v, %v", legacy, matched, ok)
+	}
+}
+
+func TestLegacySuffixLookingSessionRequiresUniqueConfiguredTarget(t *testing.T) {
+	literal := provider.RouteTarget{Provider: "openai", Surface: "api", ModelID: "model+think:high"}
+	parameterized := provider.RouteTarget{Provider: "openai", Surface: "api", ModelID: "model"}
+	parameterized.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	recorded := string(literal.LegacyID())
+	if matched, ok, err := tierForTarget(&config.Config{Tiers: []config.Tier{{ID: "t1", Target: literal}}}, recorded); err != nil || !ok || matched.Target.ID() != literal.ID() {
+		t.Fatalf("unique legacy literal target did not resume: %#v, %v", matched, ok)
+	}
+	if _, ok, err := tierForTarget(&config.Config{Tiers: []config.Tier{
+		{ID: "t1", Target: literal}, {ID: "t2", Target: parameterized},
+	}}, recorded); ok || err == nil {
+		t.Fatalf("ambiguous legacy suffix-looking target selected an arbitrary tier: ok=%v err=%v", ok, err)
+	}
+	registry := newProviders("http://127.0.0.1:1", &config.Config{})
+	if _, _, _, err := resolveTier(context.Background(), registry, &config.Config{Tiers: []config.Tier{
+		{ID: "t1", Target: literal}, {ID: "t2", Target: parameterized},
+	}}, &catalog.Catalog{}, &options{}, recorded, &route.Decision{}); err == nil || !strings.Contains(err.Error(), "matches 2 configured targets") {
+		t.Fatalf("ambiguous resumed target did not fail before probing: %v", err)
+	}
+}
+
+func TestSharedTargetResumeRequiresExplicitTierBeforeProbe(t *testing.T) {
+	shared := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "shared"}
+	shared.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	cfg := &config.Config{Tiers: []config.Tier{
+		{ID: "t1", Target: provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "small"}, Fallbacks: []provider.RouteTarget{shared}},
+		{ID: "t2", Target: shared},
+	}}
+	if _, ok, err := tierForTarget(cfg, string(shared.ID())); ok || err == nil ||
+		!strings.Contains(err.Error(), "matches 2 configured targets") || !strings.Contains(err.Error(), "think:high") ||
+		strings.Contains(err.Error(), "rt2:") {
+		t.Fatalf("shared target recovered an arbitrary owner or leaked its machine ID: ok=%v err=%v", ok, err)
+	}
+	registry := newProviders("http://127.0.0.1:1", cfg)
+	if _, _, _, err := resolveTier(context.Background(), registry, cfg, &catalog.Catalog{}, &options{},
+		string(shared.ID()), &route.Decision{}); err == nil || !strings.Contains(err.Error(), "choose -tier or -model") {
+		t.Fatalf("shared resumed target did not fail before provider probing: %v", err)
+	}
+}
+
+func TestOffConfigLegacyPercentModelIsNotDecodedAsPlus(t *testing.T) {
+	const model = "gpt%2Bpreview"
+	server := fakeOllama(t, model)
+	cfg := &config.Config{}
+	registry := newProviders(server.URL, cfg)
+	tier, _, _, err := resolveTier(context.Background(), registry, cfg, &catalog.Catalog{}, &options{},
+		"ollama/local/"+model, &route.Decision{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier.Target.ModelID != model {
+		t.Fatalf("legacy percent model resumed as %q, want literal %q", tier.Target.ModelID, model)
+	}
+}
+
+func TestCanonicalDefaultWinsOverLossyExplicitThinkFalseLegacyID(t *testing.T) {
+	ordinary := provider.RouteTarget{Provider: "ollama", Surface: "local", ModelID: "same"}
+	disabled := ordinary
+	disabled.Params.Reasoning = &provider.Reasoning{Enabled: false}
+	if ordinary.ID() == disabled.ID() {
+		t.Fatal("explicit think:false still aliases the omitted provider default")
+	}
+	cfg := &config.Config{Tiers: []config.Tier{
+		{ID: "t1", Target: ordinary}, {ID: "t2", Target: disabled},
+	}}
+	matched, ok, err := tierForTarget(cfg, string(ordinary.ID()))
+	if err != nil || !ok || matched.ID != "t1" || matched.Target.ID() != ordinary.ID() {
+		t.Fatalf("canonical default did not win over lossy think:false legacy spelling: matched=%#v ok=%v err=%v", matched, ok, err)
+	}
+}
+
+func TestCanonicalDefaultSessionIsNotReinterpretedThroughLossyLegacyID(t *testing.T) {
+	base := provider.RouteTarget{Provider: "openai", Surface: "api", ModelID: "same"}
+	temperature := 0.2
+	variants := []provider.RouteTarget{base, base, base}
+	variants[0].Params.MaxOutputTokens = 2_048
+	variants[1].Params.Temperature = &temperature
+	variants[2].Params.Reasoning = &provider.Reasoning{Enabled: false}
+	for _, variant := range variants {
+		cfg := &config.Config{Tiers: []config.Tier{{ID: "t1", Target: variant}}}
+		if matched, ok, err := tierForTarget(cfg, string(base.ID())); err != nil || ok {
+			t.Errorf("canonical default %q was reinterpreted as lossy target %q: matched=%#v ok=%v err=%v",
+				base.ID(), variant.ID(), matched, ok, err)
 		}
 	}
 }

@@ -19,11 +19,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/costmodel"
-	"github.com/cj-vana/switchboard/internal/prefix"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/costmodel"
+	"github.com/switchboard-code/switchboard/internal/prefix"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // estimateOutputAllowance keeps the rungs comparable: output length is
@@ -40,8 +40,9 @@ func cmdEstimate(m *tuiModel, args string) tea.Cmd {
 	promptTokens := len(prompt) / 4
 
 	var hit float64
-	if m.app.loop.Cache != nil {
-		if exp, ok := m.app.loop.Cache.Expectation(time.Now()); ok {
+	binding := m.app.loop.Binding()
+	if binding.Cache != nil {
+		if exp, ok := binding.Cache.Expectation(time.Now()); ok {
 			hit = exp.HitProbability
 		}
 	}

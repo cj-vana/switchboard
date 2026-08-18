@@ -102,3 +102,137 @@ func TestEscalationMemoryLastsOneTurn(t *testing.T) {
 		t.Error("the escalation memory outlived the turn after it")
 	}
 }
+
+func TestProposalDoesNotMoveUntilCommitted(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+	if move.Direction != 1 || move.ToRank != 1 {
+		t.Fatalf("proposal = %+v", move)
+	}
+	if s.Rank() != 0 {
+		t.Fatal("assessment changed the rank before the destination was bound")
+	}
+	if !s.Commit(move) || s.Rank() != 1 {
+		t.Fatal("a successfully bound proposal did not commit")
+	}
+	if s.Commit(move) || s.Rank() != 1 {
+		t.Fatal("a stale proposal committed twice")
+	}
+}
+
+func TestSameRankRebasePreservesDwell(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 2}, 0)
+	s.CallServed()
+
+	// Per-turn routing commonly selects the rung already serving the session.
+	// That is not a switch and must not erase the call already served there.
+	s.Rebase(0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+	if move.Direction != 1 || move.Held {
+		t.Fatalf("same-rank rebase reset dwell: %+v", move)
+	}
+}
+
+func TestApplyNeverBindsAStaleProposal(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+
+	// The user pin leaves the rank numerically unchanged, but invalidates the
+	// automatic proposal. FromRank alone cannot detect this stale state.
+	s.Pin(0)
+	bound := false
+	if s.Apply(move, func() { bound = true }) {
+		t.Fatal("stale proposal committed")
+	}
+	if bound {
+		t.Fatal("stale proposal mutated the live binding before it was rejected")
+	}
+	if s.Rank() != 0 {
+		t.Fatalf("rank = %d, want unchanged", s.Rank())
+	}
+}
+
+func TestApplyBindsAndCommitsInOneCriticalSection(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+	bound := false
+	if !s.Apply(move, func() { bound = true }) || !bound || s.Rank() != 1 {
+		t.Fatalf("binding and policy did not land together: bound=%v rank=%d", bound, s.Rank())
+	}
+}
+
+func TestApplyCheckedFailureLeavesBindingAndRankUncommitted(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+	if s.ApplyChecked(move, func() bool { return false }) {
+		t.Fatal("fallible precommit was reported as committed")
+	}
+	if s.Rank() != 0 {
+		t.Fatalf("failed precommit advanced rank to %d", s.Rank())
+	}
+}
+
+func TestApplyCheckedDoesNotRunPrecommitForStaleProposal(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+	s.Pin(0)
+	called := false
+	if s.ApplyChecked(move, func() bool { called = true; return true }) {
+		t.Fatal("stale proposal committed")
+	}
+	if called {
+		t.Fatal("stale proposal ran its durable precommit")
+	}
+}
+
+func TestSnapshotRestorePreservesPolicyStateAndInvalidatesMoves(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 0)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(2)
+	before := s.Snapshot()
+	revision := s.revision
+
+	s.Pin(2)
+	s.StartTurn()
+	s.CallServed()
+	s.Restore(before)
+
+	after := s.Snapshot()
+	if after.rank != before.rank || after.callsSinceSwitch != before.callsSinceSwitch ||
+		after.escalatedLastTurn != before.escalatedLastTurn || after.pinned != before.pinned ||
+		len(after.signals) != len(before.signals) {
+		t.Fatalf("restored state = %#v, want %#v", after, before)
+	}
+	if s.revision <= revision {
+		t.Fatalf("restore rolled revision back: got %d, before %d", s.revision, revision)
+	}
+	if s.Commit(move) {
+		t.Fatal("move assessed before temporary override committed after restore")
+	}
+}
+
+func TestBoundaryEvidenceIsReportedAndConsumed(t *testing.T) {
+	s := NewSticky(Policy{MinimumDwell: 1}, 1)
+	s.Observe(RepeatedToolCall)
+	s.CallServed()
+	move := s.Assess(1)
+	if !move.Boundary || !strings.Contains(move.Rationale, "top of the ladder") {
+		t.Fatalf("move = %+v", move)
+	}
+	if again := s.Assess(1); again.Boundary {
+		t.Fatalf("boundary evidence was not consumed: %+v", again)
+	}
+}

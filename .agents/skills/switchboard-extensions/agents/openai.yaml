@@ -1,0 +1,6 @@
+interface:
+  display_name: "Switchboard Extensions"
+  short_description: "Build native skills, plugins, and MCP safely"
+  default_prompt: "Use $switchboard-extensions to add or review native extension compatibility safely."
+policy:
+  allow_implicit_invocation: true

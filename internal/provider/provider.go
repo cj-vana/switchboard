@@ -36,6 +36,11 @@ type Request struct {
 // definitions, or on the request itself.
 type CachePlan struct {
 	Breakpoints []Breakpoint
+
+	// RoutingKey gives automatic provider caches stable affinity without
+	// pretending they accept explicit marker positions. Adapters must render it
+	// or return a CapabilityError; silently dropping it changes cache economics.
+	RoutingKey string
 }
 
 type Breakpoint struct {
@@ -80,8 +85,41 @@ type CapabilityError struct {
 	Detail     string
 }
 
+// RequestIssued reports whether an error can have happened after a provider
+// request left the process. Unknown errors are conservatively treated as
+// issued. Adapters mark local request construction failures so budget ledgers
+// can release a reservation without inventing retry debt.
+func RequestIssued(err error) bool {
+	if err == nil {
+		return false
+	}
+	var marked interface{ RequestIssued() bool }
+	if errors.As(err, &marked) {
+		return marked.RequestIssued()
+	}
+	return true
+}
+
+// MarkUnissued wraps a failure known to have occurred before transport.
+func MarkUnissued(err error) error {
+	if err == nil || !RequestIssued(err) {
+		return err
+	}
+	return &unissuedError{err: err}
+}
+
+type unissuedError struct{ err error }
+
+func (e *unissuedError) Error() string       { return e.err.Error() }
+func (e *unissuedError) Unwrap() error       { return e.err }
+func (e *unissuedError) RequestIssued() bool { return false }
+
+// CapabilityError is produced while translating a canonical request, before
+// any built-in adapter performs network I/O.
+func (*CapabilityError) RequestIssued() bool { return false }
+
 func (e *CapabilityError) Error() string {
-	return fmt.Sprintf("target %s does not support %s: %s", e.Target, e.Capability, e.Detail)
+	return fmt.Sprintf("target %s does not support %s: %s", DisplayRouteTargetID(e.Target), e.Capability, e.Detail)
 }
 
 // ProtocolError reports content that does not fit the adapter's expected shape.

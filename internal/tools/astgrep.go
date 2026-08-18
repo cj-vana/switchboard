@@ -8,13 +8,10 @@ package tools
 // found once at session assembly and the tool is absent rather than broken
 // when the machine lacks one.
 //
-// The §11 posture decides how it runs. Inside demonstrated confinement the
-// call carries the read effect and runs wrapped — the same value that
-// proved containment is the value that applies it, per the execution
-// package's contract. Without confinement the call carries the execute
-// effect and is approved like any other subprocess, because a binary the
-// sandbox never held is a binary the user vouches for per call. It is
-// never read-effect unwrapped.
+// It always carries the execute effect. Even under verified confinement the
+// standard profile permits writes to the workspace, temp, and build caches;
+// a PATH-shadowed external binary therefore cannot honestly be treated as a
+// read in plan mode. Confinement still limits the approved process's reach.
 
 import (
 	"context"
@@ -22,8 +19,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 // astGrepMaxMatches bounds the formatted result the way grep's own cap
@@ -60,9 +57,10 @@ func (t *astGrepTool) Description() string {
 		"call alone."
 }
 
-// ParallelSafe: the binary only reads, and each invocation is its own
-// process, so concurrent calls cannot interleave state.
-func (t *astGrepTool) ParallelSafe() bool { return true }
+// The external binary runs under a profile that still permits workspace/cache
+// writes. Treat it like exec so a PATH-shadowed process cannot race a read in
+// the same model batch.
+func (t *astGrepTool) ParallelSafe() bool { return false }
 
 func (t *astGrepTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -115,25 +113,32 @@ func (t *astGrepTool) Plan(input json.RawMessage) (Plan, error) {
 		return Plan{}, err
 	}
 
-	confine := t.r.capability.Confinement()
-	effect := permission.EffectRead
-	if confine == nil {
-		effect = permission.EffectExecute
-	}
+	policy := t.r.execution.CommandPolicy(false)
+	requestPolicy := policy
+	runPolicy := policy
+	runArgv := t.argv(in, abs)
+	requestArgv := append([]string(nil), runArgv...)
 	return Plan{
 		Request: permission.Request{
-			Tool:   t.Name(),
-			Effect: effect,
-			Path:   t.r.display(abs),
-			Detail: in.Pattern,
+			Tool:      t.Name(),
+			Effect:    permission.EffectExecute,
+			Path:      t.r.display(abs),
+			Argv:      requestArgv,
+			Detail:    in.Pattern,
+			Execution: &requestPolicy,
 		},
 		Run: func(ctx context.Context) (Result, error) {
-			return t.run(ctx, in, abs, confine)
+			release, err := t.r.execution.Hold(runPolicy, false)
+			if err != nil {
+				return errorf("astgrep: %v", err)
+			}
+			defer release()
+			return t.run(ctx, in, runArgv, runPolicy)
 		},
 	}, nil
 }
 
-func (t *astGrepTool) run(ctx context.Context, in astGrepInput, abs string, confine *execution.Confinement) (Result, error) {
+func (t *astGrepTool) argv(in astGrepInput, abs string) []string {
 	argv := []string{t.binary, "run", "--pattern", in.Pattern, "--json=compact"}
 	if in.Lang != "" {
 		argv = append(argv, "--lang", in.Lang)
@@ -142,12 +147,23 @@ func (t *astGrepTool) run(ctx context.Context, in astGrepInput, abs string, conf
 		argv = append(argv, "--selector", in.Selector)
 	}
 	argv = append(argv, abs)
+	return argv
+}
 
-	res, err := execution.Run(ctx, execution.Command{
+func (t *astGrepTool) command(argv []string, policy execution.CommandPolicy) execution.Command {
+	return execution.Command{
 		Argv:    argv,
 		Dir:     t.r.root,
-		Confine: confine,
-	})
+		Confine: policy.Confinement,
+		Policy: execution.Policy{
+			Workspace: t.r.root,
+			Network:   policy.Network,
+		},
+	}
+}
+
+func (t *astGrepTool) run(ctx context.Context, in astGrepInput, argv []string, policy execution.CommandPolicy) (Result, error) {
+	res, err := execution.Run(ctx, t.command(argv, policy))
 	if err != nil {
 		return Result{}, err
 	}

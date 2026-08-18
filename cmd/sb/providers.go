@@ -7,14 +7,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/provider/anthropic"
-	"github.com/cj-vana/switchboard/internal/provider/kimi"
-	"github.com/cj-vana/switchboard/internal/provider/ollama"
-	"github.com/cj-vana/switchboard/internal/provider/openai"
-	"github.com/cj-vana/switchboard/internal/provider/openaicompat"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider/anthropic"
+	"github.com/switchboard-code/switchboard/internal/provider/kimi"
+	"github.com/switchboard-code/switchboard/internal/provider/ollama"
+	"github.com/switchboard-code/switchboard/internal/provider/openai"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
 // providers binds a route target to the adapter that can serve it.
@@ -23,7 +23,8 @@ import (
 // provider this build has no adapter for fails at startup with a list of what
 // it does have, rather than partway through the first turn.
 type providers struct {
-	ollama *ollama.Client
+	clientsMu sync.Mutex
+	ollama    *ollama.Client
 
 	// compat is keyed by serving surface, which for this adapter is also the
 	// profile name: two profiles are two different servers with different
@@ -67,10 +68,21 @@ func newProviders(host string, cfg *config.Config) *providers {
 // the caller falls back to the catalog, whose entries carry their own
 // verification dates.
 func (p *providers) probedVision(target provider.RouteTarget) (attested, known bool) {
+	probe, known := p.probedCapabilities(target)
+	return probe.Vision, known
+}
+
+// probedCapabilities returns the immutable result of the latest live probe.
+// Routing reads this snapshot rather than holding the registry lock while it
+// scores candidates.
+func (p *providers) probedCapabilities(target provider.RouteTarget) (provider.ProbeResult, bool) {
+	if p == nil {
+		return provider.ProbeResult{}, false
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	probe, ok := p.probes[target.ID()]
-	return probe.Vision, ok
+	return probe, ok
 }
 
 // baseURL is the configured address for a provider, or empty for its default.
@@ -78,7 +90,13 @@ func (p *providers) baseURL(name string) string {
 	return p.config.ProviderFor(name).BaseURL
 }
 
-func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) {
+func (p *providers) get(ctx context.Context, target provider.RouteTarget) (provider.Provider, error) {
+	// Provider construction is lazy and probes may overlap (routing, advisor,
+	// and escalation all run asynchronously). Serialize map access and first
+	// construction so callers see one coherent client without concurrent map
+	// writes or duplicate OAuth-backed adapters.
+	p.clientsMu.Lock()
+	defer p.clientsMu.Unlock()
 	switch target.Provider {
 	case ollama.Name:
 		return p.ollama, nil
@@ -87,7 +105,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if p.anthropic != nil {
 			return p.anthropic, nil
 		}
-		key, err := p.credential(target)
+		key, err := p.credential(ctx, target)
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +119,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if p.kimi != nil {
 			return p.kimi, nil
 		}
-		key, err := p.credential(target)
+		key, err := p.credential(ctx, target)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +133,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 			if p.responses != nil {
 				return p.responses, nil
 			}
-			token, err := p.credential(target)
+			token, err := p.credential(ctx, target)
 			if err != nil {
 				return nil, err
 			}
@@ -128,7 +146,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if c, ok := p.openai[target.Surface]; ok {
 			return c, nil
 		}
-		opts, err := p.authOptions(target)
+		opts, err := p.authOptions(ctx, target)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +161,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if c, ok := p.compat[target.Surface]; ok {
 			return c, nil
 		}
-		opts, err := p.authOptions(target)
+		opts, err := p.authOptions(ctx, target)
 		if err != nil {
 			return nil, err
 		}
@@ -161,7 +179,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 		if newErr != nil {
 			return nil, fmt.Errorf(
 				"target %s names serving surface %q, which is not a profile this build has tested: %w",
-				target.ID(), target.Surface, newErr)
+				target.Display(), target.Surface, newErr)
 		}
 		p.compat[target.Surface] = c
 		return c, nil
@@ -169,7 +187,7 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 
 	return nil, fmt.Errorf(
 		"target %s names provider %q; this build has adapters for %s, %s, %s, %s, and %s",
-		target.ID(), target.Provider,
+		target.Display(), target.Provider,
 		anthropic.Name, kimi.Name, ollama.Name, openai.Name, openaicompat.Name)
 }
 
@@ -185,11 +203,11 @@ func (p *providers) get(target provider.RouteTarget) (provider.Provider, error) 
 // Turning a rejection into "you have no credential" needs a server that can
 // actually issue one, and this build has no adapter that reaches such a server.
 // That message gets written against a real 401 rather than a guess at one.
-func (p *providers) credential(target provider.RouteTarget) (string, error) {
+func (p *providers) credential(ctx context.Context, target provider.RouteTarget) (string, error) {
 	ref := credential.Ref{Provider: target.Provider, Account: target.Surface}
 	resolver := credential.Chain(authSettings(p.config, target))
 
-	secret, err := resolver.Get(context.Background(), ref)
+	secret, err := resolver.Get(ctx, ref)
 	if err != nil {
 		if errors.Is(err, credential.ErrNotFound) {
 			return "", nil
@@ -206,8 +224,8 @@ func (p *providers) credential(target provider.RouteTarget) (string, error) {
 
 // authOptions adapts credential resolution for the two adapters built on the
 // OpenAI-compatible client.
-func (p *providers) authOptions(target provider.RouteTarget) ([]openaicompat.Option, error) {
-	key, err := p.credential(target)
+func (p *providers) authOptions(ctx context.Context, target provider.RouteTarget) ([]openaicompat.Option, error) {
+	key, err := p.credential(ctx, target)
 	if err != nil || key == "" {
 		return nil, err
 	}
@@ -244,7 +262,7 @@ func servedByOllama(target provider.RouteTarget) bool {
 // probeTier confirms the target can actually drive the loop before a turn
 // starts, so a missing model is an error now rather than halfway through.
 func (p *providers) probeTier(ctx context.Context, tier config.Tier) (config.Tier, provider.Provider, error) {
-	client, err := p.get(tier.Target)
+	client, err := p.get(ctx, tier.Target)
 	if err != nil {
 		return config.Tier{}, nil, fmt.Errorf("tier %s: %w", tier.ID, err)
 	}
@@ -258,7 +276,7 @@ func (p *providers) probeTier(ctx context.Context, tier config.Tier) (config.Tie
 	p.mu.Unlock()
 	switch {
 	case !probe.Reachable:
-		return config.Tier{}, nil, fmt.Errorf("no server responded for %s: %s", tier.Target.ID(), probe.Detail)
+		return config.Tier{}, nil, fmt.Errorf("no server responded for %s: %s", tier.Target.Display(), probe.Detail)
 	case !probe.ModelPresent:
 		if servedByOllama(tier.Target) {
 			return config.Tier{}, nil, fmt.Errorf("%s\nrun: ollama pull %s", probe.Detail, tier.Target.ModelID)
@@ -281,7 +299,19 @@ func (p *providers) probeTier(ctx context.Context, tier config.Tier) (config.Tie
 // the primary served, and the caller renders it before any content is sent
 // and records it on the session.
 func (p *providers) probeTierFallback(ctx context.Context, tier config.Tier) (config.Tier, provider.Provider, string, error) {
+	return p.probeTierFallbackFeasible(ctx, tier, nil)
+}
+
+// probeTierFallbackFeasible keeps following the user-ordered fallback list
+// when a reachable target still cannot serve this concrete turn. Availability
+// is only one hard requirement; context, vision, and budget apply to every
+// substitute before it may win.
+func (p *providers) probeTierFallbackFeasible(ctx context.Context, tier config.Tier, feasible func(config.Tier) error) (config.Tier, provider.Provider, string, error) {
+	turnSpecific := feasible != nil
 	probed, client, primaryErr := p.probeTier(ctx, tier)
+	if primaryErr == nil && feasible != nil {
+		primaryErr = feasible(probed)
+	}
 	if primaryErr == nil {
 		return probed, client, "", nil
 	}
@@ -289,18 +319,29 @@ func (p *providers) probeTierFallback(ctx context.Context, tier config.Tier) (co
 		return config.Tier{}, nil, "", primaryErr
 	}
 
-	attempts := []string{fmt.Sprintf("%s: %v", tier.Target.ID(), primaryErr)}
+	attempts := []string{fmt.Sprintf("%s: %v", tier.Target.Display(), primaryErr)}
 	for _, fb := range tier.Fallbacks {
 		sub := tier
 		sub.Target = fb
 		probed, client, err := p.probeTier(ctx, sub)
+		if err == nil && feasible != nil {
+			err = feasible(probed)
+		}
 		if err != nil {
-			attempts = append(attempts, fmt.Sprintf("%s: %v", fb.ID(), err))
+			attempts = append(attempts, fmt.Sprintf("%s: %v", fb.Display(), err))
 			continue
 		}
 		note := fmt.Sprintf("%s is served by its fallback %s: %s is unavailable (%v)",
-			tier.ID, fb.ID(), tier.Target.ID(), primaryErr)
+			tier.ID, fb.Display(), tier.Target.Display(), primaryErr)
+		if turnSpecific {
+			note = fmt.Sprintf("%s is served by its fallback %s: %s could not serve this turn (%v)",
+				tier.ID, fb.Display(), tier.Target.Display(), primaryErr)
+		}
 		return probed, client, note, nil
+	}
+	if turnSpecific {
+		return config.Tier{}, nil, "", fmt.Errorf("tier %s and its fallbacks cannot serve this turn:\n  %s",
+			tier.ID, strings.Join(attempts, "\n  "))
 	}
 	return config.Tier{}, nil, "", fmt.Errorf("tier %s and its fallbacks are all unavailable:\n  %s",
 		tier.ID, strings.Join(attempts, "\n  "))

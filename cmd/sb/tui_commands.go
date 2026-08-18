@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -12,13 +13,14 @@ import (
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/hooks"
-	"github.com/cj-vana/switchboard/internal/mcp"
-	"github.com/cj-vana/switchboard/internal/permission"
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/hooks"
+	"github.com/switchboard-code/switchboard/internal/mcp"
+	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // commandItem is one slash command. busySafe commands may run while a turn is
@@ -42,14 +44,14 @@ func commands() []commandItem {
 		{name: "recap", usage: "[id]", desc: "where you left off: the last session's story from its record", busySafe: true, run: cmdRecap},
 		{name: "fork", usage: "[n|pin]", desc: "branch this session, less its last n user turns, or back to a pin", run: cmdFork},
 		{name: "pin", usage: "[name]", desc: "name this point in the session; /fork <name> branches back to it", run: cmdPin},
-		{name: "tier", usage: "<id>", desc: "switch tier (bare /t2 works too)", run: cmdTier},
+		{name: "tier", usage: "[id|auto]", desc: "switch tier, or return routing to automatic", run: cmdTier},
 		{name: "tiers", desc: "show the configured ladder", busySafe: true, run: cmdTiers},
 		{name: "ladder", desc: "where recorded turns opened and where they ended, summed per rung", busySafe: true, run: cmdLadder},
 		{name: "why", desc: "how this tier was chosen, and what the others would have cost", busySafe: true, run: cmdWhy},
 		{name: "race", usage: "[tier [tier]] <prompt>", desc: "one prompt on two rungs at once; bare form races the next rung up", run: cmdRace},
 		{name: "races", usage: "[all]", desc: "every paired verdict collected, tallied by pair; all spans workspaces", busySafe: true, run: cmdRaces},
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
-		{name: "mode", usage: "[plan|default|acceptEdits|bypass]", desc: "show or change the permission mode", run: cmdMode},
+		{name: "mode", usage: "[plan|default|acceptEdits|auto|yolo|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs|turns]", desc: "tokens and cost; rungs reprices the session per rung, turns orders its asks by bill", busySafe: true, run: cmdCost},
 		{name: "estimate", usage: "[prompt]", desc: "price the next turn on every rung before it is sent", run: cmdEstimate},
 		{name: "stats", usage: "[all]", desc: "every session this workspace has recorded, repriced on today's ladder; all spans workspaces", busySafe: true, run: cmdStats},
@@ -63,13 +65,15 @@ func commands() []commandItem {
 		{name: "init", desc: "write an AGENTS.md for this repository", run: cmdInit},
 		{name: "export", usage: "[file]", desc: "save the conversation as markdown", busySafe: true, run: cmdExport},
 		{name: "session", desc: "session id, target, and message count", busySafe: true, run: cmdSession},
-		{name: "sandbox", desc: "what isolation this host provides", busySafe: true, run: cmdSandbox},
+		{name: "sandbox", usage: "[off|on|auto]", desc: "show or change command confinement", run: cmdSandbox},
 		{name: "doctor", desc: "probe every gate a session depends on, from inside the session", run: cmdDoctor},
 		{name: "trust", usage: "[grant|revoke|list]", desc: "let this workspace run what it declares (MCP servers, hooks)", busySafe: true, run: cmdTrust},
-		{name: "mcp", desc: "connected MCP servers and their tools", busySafe: true, run: cmdMCP},
+		{name: "mcp", usage: "[list|inspect|enable|disable] [server]", desc: "connected servers or native MCP activation", busySafe: true, run: cmdMCP},
+		{name: "plugins", usage: "[list|inspect|install|enable|disable|trust|untrust] [plugin]", desc: "native plugin inventory and Switchboard activation", run: cmdPlugins},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
 		{name: "agents", desc: "named subagents the model can delegate to", busySafe: true, run: cmdAgents},
-		{name: "skills", desc: "instruction packs the model pulls in when a task matches", busySafe: true, run: cmdSkills},
+		{name: "skills", desc: "discovered instruction packs, origins, and invocation status", busySafe: true, run: cmdSkills},
+		{name: "skill", usage: "<canonical-selector> [args]", desc: "invoke one instruction pack explicitly", run: cmdSkill},
 		{name: "learn", usage: "<name>", desc: "distill this session's method into a reusable skill pack", run: cmdLearn},
 		{name: "diff", desc: "review uncommitted changes", busySafe: true, run: cmdDiff},
 		{name: "changes", desc: "which files each turn touched, via write and edit", busySafe: true, run: cmdChanges},
@@ -126,8 +130,8 @@ var helpGroups = []struct {
 }{
 	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
-	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "learn"}},
-	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "mcp", "hooks", "agents", "skills", "login", "logout"}},
+	{"files and work", []string{"diff", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
+	{"safety and reach", []string{"mode", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }
 
@@ -188,11 +192,11 @@ func cmdExit(m *tuiModel, _ string) tea.Cmd {
 	return tea.Quit
 }
 
-func cmdClear(m *tuiModel, _ string) tea.Cmd { return m.app.clearSession() }
+func cmdClear(m *tuiModel, _ string) tea.Cmd { return m.clearSession() }
 
 func cmdResume(m *tuiModel, args string) tea.Cmd {
 	if args != "" {
-		return m.app.reopen(args)
+		return m.reopen(args)
 	}
 	infos, err := m.app.store.List(m.app.workspace)
 	if err != nil {
@@ -223,7 +227,7 @@ func cmdResume(m *tuiModel, args string) tea.Cmd {
 	m.dlg = &pickerDialog{
 		title:  "resume a session",
 		items:  items,
-		onPick: func(id string) tea.Cmd { return m.app.reopen(id) },
+		onPick: func(id string) tea.Cmd { return m.reopen(id) },
 	}
 	return nil
 }
@@ -258,7 +262,7 @@ func cmdFork(m *tuiModel, args string) tea.Cmd {
 					dropped++
 				}
 			}
-			return m.app.forkSession(m.app.loop.Session.ID(), pin.Messages, dropped)
+			return m.forkSession(m.app.loop.Session.ID(), pin.Messages, dropped)
 		}
 		if v < 0 {
 			return noticeCmd("error", "/fork takes how many user turns to leave behind, e.g. /fork 2, or a /pin name")
@@ -280,14 +284,25 @@ func cmdFork(m *tuiModel, args string) tea.Cmd {
 		}
 		keep = userAt[len(userAt)-n]
 	}
-	return m.app.forkSession(m.app.loop.Session.ID(), keep, n)
+	return m.forkSession(m.app.loop.Session.ID(), keep, n)
 }
 
 func cmdTier(m *tuiModel, args string) tea.Cmd {
 	if args == "" {
 		return m.openTierPicker()
 	}
-	return m.app.switchTier(args)
+	if args == "auto" {
+		if err := persistAutomaticPosture(m.app.loop.Session, m.app.tier); err != nil {
+			return noticeCmd("error", "automatic routing was not enabled: "+err.Error())
+		}
+		if m.app.sticky != nil {
+			m.app.sticky.Unpin()
+		}
+		m.app.route = nil
+		m.addNotice("route", "automatic per-turn routing resumed from "+m.app.tier.ID)
+		return nil
+	}
+	return m.switchTier(args)
 }
 
 func cmdTiers(m *tuiModel, _ string) tea.Cmd {
@@ -309,7 +324,7 @@ func cmdTiers(m *tuiModel, _ string) tea.Cmd {
 		if len(t.Fallbacks) > 0 {
 			var ids []string
 			for _, fb := range t.Fallbacks {
-				ids = append(ids, string(fb.ID()))
+				ids = append(ids, fb.Display())
 			}
 			b.WriteString("      falls back to " + strings.Join(ids, ", ") + "\n")
 		}
@@ -340,10 +355,12 @@ func cmdMode(m *tuiModel, args string) tea.Cmd {
 		permission.ModePlan:        "read-only: no writes, no commands",
 		permission.ModeDefault:     "writes and commands ask first",
 		permission.ModeAcceptEdits: "edits apply, commands ask first",
-		permission.ModeBypass:      "no prompts, inside a verified sandbox",
+		permission.ModeAuto:        "edits apply; a cheap model reviews ordinary non-sensitive commands",
+		permission.ModeYOLO:        "FULL HOST ACCESS: ordinary edits and non-sensitive commands skip prompts",
+		permission.ModeBypass:      "promptless only with verified confinement that isolates host network and IPC",
 	}
 	var items []pickerItem
-	for _, mode := range []permission.Mode{permission.ModePlan, permission.ModeDefault, permission.ModeAcceptEdits, permission.ModeBypass} {
+	for _, mode := range []permission.Mode{permission.ModePlan, permission.ModeDefault, permission.ModeAcceptEdits, permission.ModeAuto, permission.ModeYOLO, permission.ModeBypass} {
 		items = append(items, pickerItem{
 			id:      string(mode),
 			label:   string(mode),
@@ -370,7 +387,7 @@ func cmdCost(m *tuiModel, args string) tea.Cmd {
 	case "":
 		state := m.app.loop.Session.State()
 		m.refreshCost(state)
-		m.addInfo(strings.Join(summaryLines(state, m.app.catalog, m.app.loop.Target), "\n"))
+		m.addInfo(strings.Join(summaryLines(state, m.app.catalog, m.app.loop.Binding().Target), "\n"))
 		return nil
 	case "rungs":
 		// Read-only on the session's own log, which is open for appending:
@@ -416,10 +433,17 @@ func cmdBudget(m *tuiModel, args string) tea.Cmd {
 			return nil
 		}
 		state := m.app.loop.Session.State()
-		spent := catalog.Money(state.CostMicroUSD)
+		spent := catalog.Money(state.AccountedCostMicroUSD())
+		debt := bs.syncRetryDebt(state.ID, catalog.Money(state.RetryReserveMicroUSD))
+		accounted := addMoney(spent, debt)
+		left := ceiling - accounted
+		if left < 0 {
+			left = 0
+		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "  ceiling  %s\n  spent    %s\n  left     %s", ceiling, spent, ceiling-spent)
-		info, _, ok := m.app.catalog.Lookup(m.app.loop.Target)
+		fmt.Fprintf(&b, "  ceiling  %s\n  spent    %s\n  reserved %s  pending or failed provider attempts may still bill\n  accounted %s\n  left     %s",
+			ceiling, spent, debt, accounted, left)
+		info, _, ok := m.app.catalog.Lookup(m.app.loop.Binding().Target)
 		switch {
 		case !ok:
 			b.WriteString("\n  the active target has no catalog entry, so its calls are unpriced and pass the gate")
@@ -457,13 +481,34 @@ func cmdBudget(m *tuiModel, args string) tea.Cmd {
 func cmdSession(m *tuiModel, _ string) tea.Cmd {
 	state := m.app.loop.Session.State()
 	m.addInfo(fmt.Sprintf("  %s\n  target   %s\n  catalog  %s\n  messages %d\n  log      %s",
-		state.ID, state.Target, state.CatalogRevision, len(state.Messages), m.app.loop.Session.Path()))
+		state.ID, m.app.loop.Binding().Target.Display(), state.CatalogRevision, len(state.Messages), m.app.loop.Session.Path()))
 	return nil
 }
 
-func cmdSandbox(m *tuiModel, _ string) tea.Cmd {
+func cmdSandbox(m *tuiModel, args string) tea.Cmd {
 	cap := m.app.capability
-	m.addInfo(fmt.Sprintf("  platform  %s\n  mechanism %s\n  %s", cap.Platform, cap.Mechanism, cap.Summary()))
+	controller := m.app.loop.Perms.Execution()
+	args = strings.TrimSpace(args)
+	if args == "" || args == "status" {
+		m.addInfo(fmt.Sprintf("  platform  %s\n  mechanism %s\n  requested %s\n  %s",
+			cap.Platform, cap.Mechanism, controller.SandboxMode(), controller.Summary()))
+		return nil
+	}
+	mode, err := execution.ParseSandboxMode(args)
+	if err != nil {
+		return noticeCmd("error", err.Error())
+	}
+	if m.mode == permission.ModeYOLO && mode != execution.SandboxOff {
+		return noticeCmd("error", "yolo mode requires the sandbox to stay off; leave yolo before enabling confinement")
+	}
+	if err := controller.SetSandbox(mode); err != nil {
+		return noticeCmd("error", err.Error())
+	}
+	m.app.config.Sandbox = mode
+	m.addInfo("sandbox setting is now " + string(mode) + "\n  " + controller.Summary())
+	if err := m.app.config.Save(); err != nil {
+		return noticeCmd("warn", "sandbox changed for this process, but the config was not saved: "+err.Error())
+	}
 	return nil
 }
 
@@ -475,7 +520,14 @@ func cmdDiff(m *tuiModel, _ string) tea.Cmd {
 // what each brought, and which died since. It reads live state rather than
 // startup state, because a server that crashed an hour ago is the thing the
 // user is here to find out.
-func cmdMCP(m *tuiModel, _ string) tea.Cmd {
+func cmdMCP(m *tuiModel, args string) tea.Cmd {
+	args = strings.TrimSpace(args)
+	if args != "" {
+		cliArgs := splitExtensionAction(args)
+		return m.startExtensionAction("mcp "+cliArgs[0], "mcp", func(ctx context.Context, w io.Writer) error {
+			return runMCPCLIContext(ctx, w, m.app.workspace, cliArgs)
+		})
+	}
 	st := m.app.mcp
 	var clients []*mcp.Client
 	if st != nil {
@@ -483,7 +535,8 @@ func cmdMCP(m *tuiModel, _ string) tea.Cmd {
 	}
 	if len(clients) == 0 {
 		m.addInfo("  no MCP servers connected\n" +
-			"  declare them in ~/.switchboard/mcp.toml, or in this repository's .switchboard/mcp.toml behind /trust grant:\n\n" +
+			"  /mcp list shows native Codex and Claude declarations; /mcp enable <id> activates one on the next Switchboard run.\n" +
+			"  Or declare servers in ~/.switchboard/mcp.toml, or in this repository's .switchboard/mcp.toml behind /trust grant:\n\n" +
 			"    [mcp.github]\n" +
 			"    command = \"github-mcp-server\"\n" +
 			"    args = [\"stdio\"]\n\n" +
@@ -503,6 +556,17 @@ func cmdMCP(m *tuiModel, _ string) tea.Cmd {
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	return nil
+}
+
+func cmdPlugins(m *tuiModel, args string) tea.Cmd {
+	cliArgs := splitExtensionAction(args)
+	action := "list"
+	if len(cliArgs) > 0 {
+		action = cliArgs[0]
+	}
+	return m.startExtensionAction("plugins "+action, "plugins", func(ctx context.Context, w io.Writer) error {
+		return runPluginsCLIContext(ctx, w, m.app.workspace, cliArgs)
+	})
 }
 
 // cmdUndo takes back the most recent turn's write and edit effects. It is
@@ -627,7 +691,7 @@ func cmdAgents(m *tuiModel, _ string) tea.Cmd {
 			"    tools: read, grep, glob\n" +
 			"    ---\n" +
 			"    You review changes. Report problems; do not fix them.\n\n" +
-			"  the model runs one by calling delegate with its name; a new file is picked up next session")
+			"  the model runs one by calling delegate with its name; a new file is picked up on the next Switchboard run")
 		return nil
 	}
 	var b strings.Builder
@@ -649,33 +713,6 @@ func cmdAgents(m *tuiModel, _ string) tea.Cmd {
 	}
 	for _, n := range m.app.agentNotes {
 		fmt.Fprintf(&b, "  ! %s\n", n)
-	}
-	m.addInfo(strings.TrimRight(b.String(), "\n"))
-	return nil
-}
-
-// cmdSkills lists the loaded instruction packs. The model pulls one in
-// through the skill tool when a task matches its description; this command
-// is how the user checks what the model can see.
-func cmdSkills(m *tuiModel, _ string) tea.Cmd {
-	if len(m.app.skills) == 0 {
-		m.addInfo("  no skills defined\n" +
-			"  a markdown file per skill, in this repository's .switchboard/skills/ or in ~/.switchboard/skills/,\n" +
-			"  flat (<name>.md) or packaged (<name>/SKILL.md — the shape other tools' packs use, so those port by copying):\n\n" +
-			"    ---\n" +
-			"    description: how migrations are written in this repo\n" +
-			"    ---\n" +
-			"    Migrations live in db/migrations, numbered, never edited after merge.\n\n" +
-			"  the model pulls one in with the skill tool when the task matches; a new file is picked up next session")
-		return nil
-	}
-	var b strings.Builder
-	for _, sk := range m.app.skills {
-		src := "~/.switchboard/skills"
-		if !sk.FromHome {
-			src = ".switchboard/skills"
-		}
-		fmt.Fprintf(&b, "  %-18s %s · from %s\n", sk.Name, sk.Description, src)
 	}
 	m.addInfo(strings.TrimRight(b.String(), "\n"))
 	return nil

@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func TestPinSurvivesReopen(t *testing.T) {

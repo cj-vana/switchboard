@@ -7,7 +7,7 @@ package main
 import (
 	"strings"
 
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // openingLabel is the first words the user sent, collapsed to one line and

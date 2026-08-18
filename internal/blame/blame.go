@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 // Origin is one distinct source of lines: a turn, on a target, in a

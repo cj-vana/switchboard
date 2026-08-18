@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
-	"github.com/cj-vana/switchboard/internal/session"
+	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 )
 
 func TestExportPrintsTheTimelineNotJustTheWords(t *testing.T) {
@@ -84,5 +84,16 @@ func TestExportNamesTheMissingSession(t *testing.T) {
 	if err := runExportCLI(&b, store, workspace, "nope"); err == nil ||
 		!strings.Contains(err.Error(), "sb find") {
 		t.Errorf("a wrong id should point at sb find, got %v", err)
+	}
+}
+
+func TestExportDisplaysParameterizedRouteTargets(t *testing.T) {
+	target := provider.RouteTarget{Provider: "anthropic", Surface: "first-party", ModelID: "claude-opus-5"}
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	out := exportMarkdown(session.State{Target: string(target.ID())}, []session.Timeline{{Route: &session.Route{
+		Tier: "t2", Source: "signal", Rationale: "harder work", Escalations: 1, EndedTier: "t3", EndedOn: target.ID(),
+	}}})
+	if !strings.Contains(out, "ended on t3") || !strings.Contains(out, target.ModelID) || !strings.Contains(out, "think:high") || strings.Contains(out, "rt2:") {
+		t.Fatalf("parameterized export target is opaque: %q", out)
 	}
 }

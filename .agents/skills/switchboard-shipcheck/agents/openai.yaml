@@ -1,0 +1,6 @@
+interface:
+  display_name: "Switchboard Shipcheck"
+  short_description: "Run the offline release verification matrix"
+  default_prompt: "Use $switchboard-shipcheck to verify this branch before it ships."
+policy:
+  allow_implicit_invocation: true

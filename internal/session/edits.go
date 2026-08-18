@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // FileEdit is one successful write or edit call replayed from a log, with

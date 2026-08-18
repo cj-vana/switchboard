@@ -6,7 +6,7 @@ package main
 import (
 	"os/exec"
 
-	"github.com/cj-vana/switchboard/internal/tools"
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 // addStructuralSearch registers astgrep when the machine has the binary.

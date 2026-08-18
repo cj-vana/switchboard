@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/costmodel"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/costmodel"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func candidate(tier string, rank int, opts ...func(*Candidate)) Candidate {
@@ -69,7 +69,7 @@ func TestBreadthAndFailuresArgueUpward(t *testing.T) {
 
 	afterFailure, err := Heuristic{}.Route(Input{
 		Prompt:     "fix it",
-		Session:    SessionFeatures{PriorFailures: 1, TestsInvolved: true},
+		Session:    SessionFeatures{PriorFailures: 1, TestFailures: 1, TestsInvolved: true},
 		Candidates: ladder(),
 	})
 	if err != nil {
@@ -77,6 +77,63 @@ func TestBreadthAndFailuresArgueUpward(t *testing.T) {
 	}
 	if afterFailure.Tier == "t1" {
 		t.Error("a turn straight after a test failure stayed at the bottom")
+	}
+}
+
+func TestNonTestFailureIsNotCalledATestFailure(t *testing.T) {
+	got, err := Heuristic{}.Route(Input{
+		Prompt:     "run tests now",
+		Session:    SessionFeatures{PriorFailures: 1, TestsInvolved: true},
+		Candidates: ladder(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Rationale, "test failure") {
+		t.Fatalf("unrelated tool error was mislabeled: %s", got.Rationale)
+	}
+}
+
+func TestContextFilterUsesSeparateConservativeBound(t *testing.T) {
+	tight := candidate("t1", 0)
+	tight.Info.ContextWindow = 1_100
+	tight.PromptTokens = 1_000
+	tight.ContextTokens = 1_316
+	tight.Estimate = costmodel.Estimate{Expected: 123, High: 456}
+	roomy := candidate("t2", 1)
+
+	got, err := Heuristic{}.Route(Input{Candidates: []Candidate{tight, roomy}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tier != "t2" {
+		t.Fatalf("conservative context bound chose %s; exclusions=%v", got.Tier, got.Infeasible)
+	}
+	if tight.PromptTokens != 1_000 || tight.Estimate.Expected != 123 {
+		t.Fatal("context widening mutated the dollar-estimate input")
+	}
+}
+
+func TestContextFilterIncludesReservedOutputEnvelope(t *testing.T) {
+	tight := candidate("t1", 0)
+	tight.Info.ContextWindow = 200_000
+	tight.ContextTokens = 199_000
+	tight.ReservedOutputTokens = 8_192
+	roomy := candidate("t2", 1)
+	roomy.Info.ContextWindow = 1_000_000
+	roomy.ContextTokens = tight.ContextTokens
+	roomy.ReservedOutputTokens = tight.ReservedOutputTokens
+
+	got, err := (Heuristic{}).Route(Input{Candidates: []Candidate{tight, roomy}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tier != "t2" {
+		t.Fatalf("input-only context check chose %s; exclusions=%v", got.Tier, got.Infeasible)
+	}
+	joined := strings.Join(got.Infeasible, " ")
+	if !strings.Contains(joined, "199000 input") || !strings.Contains(joined, "8192 reserved output") {
+		t.Fatalf("context exclusion omitted the envelope: %v", got.Infeasible)
 	}
 }
 
@@ -207,5 +264,104 @@ func TestConfidenceStaysModest(t *testing.T) {
 	got, _ := Heuristic{}.Route(Input{Prompt: "hi", Candidates: ladder()})
 	if got.Confidence > 0.7 {
 		t.Errorf("confidence = %.2f; a rules router should not claim more", got.Confidence)
+	}
+}
+
+func TestCandidateOrderCannotChangeTheChosenRank(t *testing.T) {
+	ordered := []Candidate{candidate("t1", 0), candidate("t2", 1), candidate("t3", 2)}
+	reversed := []Candidate{ordered[2], ordered[1], ordered[0]}
+	for _, candidates := range [][]Candidate{ordered, reversed} {
+		got, err := (Heuristic{}).Route(Input{Prompt: "refactor this function", Candidates: candidates})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Tier != "t2" {
+			t.Fatalf("candidate order %v chose %s, want rank-one t2", candidates, got.Tier)
+		}
+	}
+}
+
+func TestHardCeilingUsesConservativeCostWithoutChangingDisplayedEstimate(t *testing.T) {
+	cheap := candidate("t1", 0)
+	cheap.Estimate = costmodel.Estimate{Expected: 100, High: 150}
+	cheap.CeilingCost = 900
+
+	_, err := (Heuristic{}).Route(Input{
+		Prompt: "hi", Candidates: []Candidate{cheap}, Budgets: Budgets{MaxCost: 500},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ceiling") {
+		t.Fatalf("err = %v, want conservative ceiling refusal", err)
+	}
+}
+
+func TestExhaustedDollarBudgetStillAllowsZeroDollarTarget(t *testing.T) {
+	free := candidate("local", 0)
+	free.Estimate = costmodel.Estimate{}
+	free.CeilingCost = 0
+	paid := candidate("paid", 1)
+	paid.CeilingCost = 1
+
+	got, err := (Heuristic{}).Route(Input{
+		Prompt:     "fix the repository-wide failure",
+		Candidates: []Candidate{free, paid},
+		Budgets:    Budgets{MaxCost: 0, MaxCostSet: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tier != "local" {
+		t.Fatalf("exhausted dollar budget chose %s, want the zero-dollar target", got.Tier)
+	}
+	if !strings.Contains(strings.Join(got.Infeasible, " "), "ceiling") {
+		t.Fatalf("paid target was not excluded by the exhausted ceiling: %v", got.Infeasible)
+	}
+}
+
+func TestPaidTargetWithoutConservativePriceIsHardInfeasible(t *testing.T) {
+	unpriceable := candidate("t1", 0)
+	unpriceable.CatalogKnown = true
+	unpriceable.Info.Metering = catalog.PerToken
+	unpriceable.Info.Pricing = []catalog.PriceBand{{InputPerMTok: catalog.PerMTok(1)}}
+	unpriceable.CeilingCost = 0
+	priceable := candidate("t2", 1)
+	priceable.CatalogKnown = true
+	priceable.Info.Metering = catalog.PerToken
+	priceable.Info.Pricing = []catalog.PriceBand{{InputPerMTok: catalog.PerMTok(1)}}
+	priceable.CeilingCost = 1
+
+	got, err := (Heuristic{}).Route(Input{Candidates: []Candidate{unpriceable, priceable}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tier != "t2" || !strings.Contains(strings.Join(got.Infeasible, " "), "no positive conservative cost bound") {
+		t.Fatalf("route = %+v, want priceable fallback and explicit exclusion", got)
+	}
+
+	unknown := candidate("unknown", 0)
+	if got, err := (Heuristic{}).Route(Input{Candidates: []Candidate{unknown}}); err != nil || got.Tier != "unknown" {
+		t.Fatalf("catalog-missing target was treated as a known unpriceable target: got=%+v err=%v", got, err)
+	}
+
+	free := candidate("free", 0)
+	free.CatalogKnown = true
+	free.Info.Metering = catalog.PerToken
+	free.Info.Pricing = []catalog.PriceBand{{}}
+	if got, err := (Heuristic{}).Route(Input{Candidates: []Candidate{free}}); err != nil || got.Tier != "free" {
+		t.Fatalf("explicit all-zero per-token target was rejected: got=%+v err=%v", got, err)
+	}
+}
+
+func TestStrongEvidenceCanReachTheTopOfALongerLadder(t *testing.T) {
+	candidates := []Candidate{
+		candidate("t1", 0), candidate("t2", 1), candidate("t3", 2), candidate("t4", 3),
+	}
+	got, err := (Heuristic{}).Route(Input{
+		Prompt: "fix it", Session: SessionFeatures{PriorFailures: 3, TestFailures: 3, TestsInvolved: true}, Candidates: candidates,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tier != "t4" {
+		t.Fatalf("tier = %s, want the top rung after repeated test failures", got.Tier)
 	}
 }

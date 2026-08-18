@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/config"
 )
 
 func TestThinkChangesEffortForTheSession(t *testing.T) {

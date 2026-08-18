@@ -1,13 +1,59 @@
 package main
 
 import (
+	"context"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/cj-vana/switchboard/internal/config"
-	"github.com/cj-vana/switchboard/internal/provider"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
+
+type blockingSummaryProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (*blockingSummaryProvider) Name() string { return "blocking-summary" }
+func (p *blockingSummaryProvider) Stream(context.Context, provider.RouteTarget, provider.Request) (provider.EventStream, error) {
+	return &blockingSummaryStream{started: p.started, release: p.release}, nil
+}
+func (*blockingSummaryProvider) CountTokens(context.Context, provider.RouteTarget, provider.Request) (provider.TokenEstimate, error) {
+	return provider.TokenEstimate{}, nil
+}
+func (*blockingSummaryProvider) Probe(context.Context, provider.RouteTarget) (provider.ProbeResult, error) {
+	return provider.ProbeResult{Reachable: true, ModelPresent: true}, nil
+}
+
+type blockingSummaryStream struct {
+	started chan struct{}
+	release chan struct{}
+	step    int
+}
+
+func (s *blockingSummaryStream) Next() (provider.Event, error) {
+	switch s.step {
+	case 0:
+		s.step++
+		close(s.started)
+		<-s.release
+		return provider.Event{Type: provider.EventTextDelta, Text: "Reusable procedure.\n\nFollow the established steps."}, nil
+	case 1:
+		s.step++
+		return provider.Event{Type: provider.EventDone, StopReason: provider.StopEndTurn}, nil
+	default:
+		return provider.Event{}, io.EOF
+	}
+}
+
+func (*blockingSummaryStream) Close() error { return nil }
 
 func TestShouldAutoCompactTriggersAtTheThreshold(t *testing.T) {
 	m := testModel(t)
@@ -134,6 +180,144 @@ func TestManualCompactRefusesUnreachableSummarizer(t *testing.T) {
 	}
 	if !strings.Contains(msg.text, "session unchanged") {
 		t.Fatalf("the refusal must say the session is intact: %q", msg.text)
+	}
+}
+
+func TestCompactOwnsSessionUntilSwapAndQueuesPrompts(t *testing.T) {
+	m := testModel(t)
+	appendTurn(t, m, "question", "answer")
+	sourceID := m.app.loop.Session.ID()
+	client := &blockingSummaryProvider{started: make(chan struct{}), release: make(chan struct{})}
+	released := false
+	defer func() {
+		if !released {
+			close(client.release)
+		}
+	}()
+	m.app.budget = &budgetState{}
+	m.app.loop.Bind(agent.Binding{Provider: client, Target: m.app.tier.Target, Cache: m.app.loop.Binding().Cache})
+
+	cmd := compactCmd(m, "", false)
+	if cmd == nil || !m.busy || !m.operationActive {
+		t.Fatalf("compact did not claim the session before launch: cmd=%v busy=%v operation=%v", cmd != nil, m.busy, m.operationActive)
+	}
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	select {
+	case <-client.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("compact provider did not start")
+	}
+
+	if next := m.enqueue("queued while compacting", ""); next != nil || len(m.queue) != 1 {
+		t.Fatalf("prompt crossed the compact barrier: cmd=%v queue=%v", next != nil, m.queue)
+	}
+	if overlap := cmdFork(m, ""); overlap == nil {
+		t.Fatal("overlapping fork returned nothing")
+	} else if notice, ok := overlap().(noticeMsg); !ok || !strings.Contains(notice.text, "already running") {
+		t.Fatalf("overlapping fork was not refused: %#v", notice)
+	}
+
+	close(client.release)
+	released = true
+	var swap sessionSwapMsg
+	select {
+	case got := <-result:
+		var ok bool
+		swap, ok = got.(sessionSwapMsg)
+		if !ok || swap.err != nil {
+			t.Fatalf("compact result = %#v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("compact did not finish")
+	}
+	defer swap.sess.Close()
+
+	next := m.onSessionSwap(swap)
+	if m.app.loop.Session.ID() == sourceID {
+		t.Fatal("successful compact did not install its session")
+	}
+	if next == nil || !m.busy || !m.turnPlanning || len(m.queue) != 0 {
+		t.Fatalf("queued prompt did not start after, and only after, swap: next=%v busy=%v planning=%v queue=%v",
+			next != nil, m.busy, m.turnPlanning, m.queue)
+	}
+}
+
+func TestCancelledLearnKeepsForkBlockedUntilBudgetAttemptSettles(t *testing.T) {
+	m := testModel(t)
+	appendTurn(t, m, "question", "answer")
+	m.app.workspace = t.TempDir()
+	cat, err := catalog.LoadBundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paid catalog.ModelInfo
+	for _, candidate := range cat.Entries() {
+		if candidate.Metering.String() == catalog.PerToken.String() && !candidate.Free() && candidate.MaxOutput > 0 {
+			paid = candidate
+			break
+		}
+	}
+	if paid.Provider == "" {
+		t.Fatal("bundled catalog has no paid per-token model")
+	}
+	target := provider.RouteTarget{Provider: paid.Provider, Surface: paid.Surface, ModelID: paid.ProviderModelID}
+	client := &blockingSummaryProvider{started: make(chan struct{}), release: make(chan struct{})}
+	released := false
+	defer func() {
+		if !released {
+			close(client.release)
+		}
+	}()
+	m.app.catalog = cat
+	m.app.budget = &budgetState{}
+	m.app.tier.Target = target
+	m.app.loop.Bind(agent.Binding{Provider: client, Target: target, Cache: nil})
+
+	cmd := cmdLearn(m, "ledger-barrier-test")
+	if cmd == nil || !m.operationActive || !m.busy {
+		t.Fatal("learn did not claim exclusive ownership")
+	}
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	select {
+	case <-client.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("learn provider did not start")
+	}
+	if reserve := m.app.loop.Session.State().RetryReserveMicroUSD; reserve <= 0 {
+		t.Fatalf("provider started without a durable pending attempt: reserve=%d", reserve)
+	}
+
+	m.interrupt()
+	if !m.operationActive || !m.operationCancelling || !m.busy {
+		t.Fatal("escape released learn before its metered call settled")
+	}
+	if fork := cmdFork(m, ""); fork == nil {
+		t.Fatal("fork returned nothing while learn was cancelling")
+	} else if notice, ok := fork().(noticeMsg); !ok || !strings.Contains(notice.text, "already running") {
+		t.Fatalf("fork crossed a cancelling learn: %#v", notice)
+	}
+
+	close(client.release)
+	released = true
+	var completion noticeMsg
+	select {
+	case got := <-result:
+		var ok bool
+		completion, ok = got.(noticeMsg)
+		if !ok {
+			t.Fatalf("learn completion = %#v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("learn did not settle after provider completion")
+	}
+	if reserve := m.app.loop.Session.State().RetryReserveMicroUSD; reserve != 0 {
+		t.Fatalf("successful learn left retry reserve %d", reserve)
+	}
+	m.Update(completion)
+	if m.operationActive || m.busy {
+		t.Fatal("learn did not release ownership after settlement")
 	}
 }
 

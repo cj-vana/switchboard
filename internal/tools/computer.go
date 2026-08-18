@@ -34,13 +34,13 @@ package tools
 // hold anything, a password manager included) is redacted unconditionally,
 // the injected-report posture, because mid-turn there is no one to ask.
 //
-// Element indexes name entries in the last state call's element list, and
-// each entry remembers its accessibility path — the chain of child ordinals
-// from the front window — so an action re-resolves the path directly
-// instead of re-walking the tree. The role is checked at resolution; a
-// mismatch means the window changed and the answer is "run state again",
-// never a click on whatever sits there now. Arguments travel to the fixed
-// scripts as argv, so no user string is ever spliced into script source.
+// Element indexes name entries in the last state call's element list. Each
+// entry remembers its accessibility path plus opaque front-window and element
+// fingerprints. An action re-resolves the path and verifies both fingerprints
+// immediately before mutation; an identity change means "run state again",
+// never a click on whatever sits there now. Raw accessibility values remain
+// inside the fixed scripts, and arguments travel as argv, so no user string is
+// ever spliced into script source.
 
 import (
 	"context"
@@ -51,9 +51,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/credential"
-	"github.com/cj-vana/switchboard/internal/execution"
-	"github.com/cj-vana/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/credential"
+	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
 )
 
 const (
@@ -90,12 +90,15 @@ type computerTool struct {
 	launch    func(ctx context.Context, app string) error
 }
 
-// computerElement is one entry of an app's last state: the path re-resolves
-// the element, the role is the staleness check, the label is for prompts.
+// computerElement is one entry of an app's last state. The opaque identities
+// bind a later action to the front window and element that were shown before
+// approval. UI-derived labels are deliberately not cached: permission details
+// and the action description use only the role and index.
 type computerElement struct {
-	path  []int
-	role  string
-	label string
+	path        []int
+	role        string
+	windowID    string
+	fingerprint string
 }
 
 // NewComputer wires the tool to a resolved osascript path. The caller
@@ -250,10 +253,7 @@ func (t *computerTool) Plan(input json.RawMessage) (Plan, error) {
 }
 
 func (e computerElement) describe() string {
-	if e.label == "" {
-		return e.role
-	}
-	return fmt.Sprintf("%s (%s)", e.role, e.label)
+	return e.role
 }
 
 // recalled looks an index up in the app's last state. Failing at Plan time
@@ -291,6 +291,7 @@ type computerStateWire struct {
 	Running   bool     `json:"running"`
 	Frontmost bool     `json:"frontmost"`
 	Windows   []string `json:"windows"`
+	WindowID  string   `json:"window_id"`
 	Menus     []string `json:"menus"`
 	Els       []struct {
 		Path []int  `json:"path"`
@@ -300,6 +301,7 @@ type computerStateWire struct {
 		V    string `json:"v"`
 		P    []int  `json:"p"`
 		S    []int  `json:"s"`
+		F    string `json:"f"`
 	} `json:"els"`
 	Walked   int  `json:"walked"`
 	TimedOut bool `json:"timedOut"`
@@ -345,7 +347,12 @@ func (t *computerTool) state(ctx context.Context, app string) (Result, error) {
 		b.WriteString("no windows are open; a menu item or key combo can usually open one\n")
 	}
 	for i, e := range out.Els {
-		el := computerElement{path: e.Path, role: e.R, label: firstOf(e.T, e.D)}
+		el := computerElement{
+			path:        e.Path,
+			role:        e.R,
+			windowID:    out.WindowID,
+			fingerprint: e.F,
+		}
 		els = append(els, el)
 		fmt.Fprintf(&b, "[%d] %s", i, e.R)
 		if e.T != "" {
@@ -420,12 +427,13 @@ func (t *computerTool) apps(ctx context.Context) (Result, error) {
 }
 
 // computerActWire is every action script's answer: what happened, or why
-// nothing did. Stale reports the role check failing at the recorded path.
+// nothing did. Reason is a fixed category, never UI content or a fingerprint.
 type computerActWire struct {
 	OK      bool   `json:"ok"`
 	Running bool   `json:"running"`
 	Stale   bool   `json:"stale"`
 	Role    string `json:"role"`
+	Reason  string `json:"reason"`
 	Value   string `json:"value"`
 	Window  string `json:"window"`
 	Error   string `json:"error"`
@@ -456,7 +464,10 @@ func (t *computerTool) finish(out computerActWire, err error, did string) (Resul
 		return errorf("computer: %v", err)
 	}
 	if out.Stale {
-		return errorf("computer: the window has changed since the last state (found %s at that path); call state again", out.Role)
+		if out.Reason == "window" {
+			return errorf("computer: the front window identity has changed since the last state; call state again")
+		}
+		return errorf("computer: the element identity has changed since the last state; call state again")
 	}
 	if out.Error != "" {
 		msg := out.Error
@@ -473,7 +484,10 @@ func (t *computerTool) finish(out computerActWire, err error, did string) (Resul
 }
 
 func (t *computerTool) clickElement(ctx context.Context, app string, el computerElement) (Result, error) {
-	out, err := t.act(ctx, app, computerClickScript, []string{pathArg(el.path), el.role})
+	if err := el.requireIdentity(); err != nil {
+		return errorf("computer: %v", err)
+	}
+	out, err := t.act(ctx, app, computerClickScript, []string{pathArg(el.path), el.role, el.windowID, el.fingerprint})
 	return t.finish(out, err, fmt.Sprintf("clicked %s in %s", el.describe(), app))
 }
 
@@ -493,11 +507,21 @@ func (t *computerTool) pressKey(ctx context.Context, app, spec, display string) 
 }
 
 func (t *computerTool) setValue(ctx context.Context, app string, el computerElement, value string) (Result, error) {
-	out, err := t.act(ctx, app, computerSetScript, []string{pathArg(el.path), el.role, value})
+	if err := el.requireIdentity(); err != nil {
+		return errorf("computer: %v", err)
+	}
+	out, err := t.act(ctx, app, computerSetScript, []string{pathArg(el.path), el.role, value, el.windowID, el.fingerprint})
 	if err == nil && out.OK {
 		return t.finish(out, nil, fmt.Sprintf("set %s in %s; it now reads %q", el.describe(), app, out.Value))
 	}
 	return t.finish(out, err, "")
+}
+
+func (e computerElement) requireIdentity() error {
+	if e.windowID == "" || e.fingerprint == "" {
+		return fmt.Errorf("the recorded window or element identity is missing; call state again")
+	}
+	return nil
 }
 
 func (t *computerTool) pickMenu(ctx context.Context, app string, items []string) (Result, error) {
@@ -569,13 +593,6 @@ func yesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
-}
-
-func firstOf(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func windowList(titles []string) string {

@@ -2,14 +2,91 @@ package session
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
+
+func TestAppendUsageRejectsNegativeAndOverflowingTelemetry(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if err := sess.AppendUsage(Usage{Usage: provider.Usage{InputTokens: -1}}); err == nil {
+		t.Fatal("negative provider usage was appended")
+	}
+	if err := sess.AppendUsage(Usage{Usage: provider.Usage{InputTokens: math.MaxInt}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendUsage(Usage{Usage: provider.Usage{InputTokens: 1}}); err == nil {
+		t.Fatal("overflowing provider usage was appended")
+	}
+	state := sess.State()
+	if state.Calls != 1 || state.Usage.InputTokens != math.MaxInt {
+		t.Fatalf("rejected usage changed state: %+v", state)
+	}
+}
+
+func TestReplayRejectsNegativeUsageFromTheLog(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := sess.Path()
+	sess.mu.Lock()
+	err = sess.append(RecordUsage, Usage{CallID: "hostile", Usage: provider.Usage{OutputTokens: -1}})
+	sess.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadState(path); err == nil || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("negative durable usage was accepted on replay: %v", err)
+	}
+}
+
+func TestUsageRecordsKeepParameterizedTargetIdentity(t *testing.T) {
+	store, workspace := newStore(t)
+	base := provider.RouteTarget{Provider: "openai", Surface: "api", ModelID: "same-model"}
+	withMax := base
+	withMax.Params.MaxOutputTokens = 2_048
+	temperature := 0.2
+	withTemperature := base
+	withTemperature.Params.Temperature = &temperature
+
+	sess, err := store.Create(workspace, base.ID(), "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []provider.RouteTarget{withMax, withTemperature} {
+		if err := sess.AppendUsage(Usage{Target: string(target.ID()), Usage: provider.Usage{InputTokens: 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := sess.Path()
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	usages, err := ReadUsages(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usages) != 2 || usages[0].Target != string(withMax.ID()) || usages[1].Target != string(withTemperature.ID()) {
+		t.Fatalf("usage target attribution collapsed parameter variants: %+v", usages)
+	}
+}
 
 func newStore(t *testing.T) (*Store, string) {
 	t.Helper()
@@ -213,7 +290,7 @@ func TestSchemaFromNewerBinaryIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bumped := strings.Replace(string(data), magic+" 1", magic+" 99", 1)
+	bumped := strings.Replace(string(data), fmt.Sprintf("%s %d", magic, SchemaVersion), magic+" 99", 1)
 	if err := os.WriteFile(path, []byte(bumped), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +298,76 @@ func TestSchemaFromNewerBinaryIsRefused(t *testing.T) {
 	_, err = store.Open(id)
 	if !errors.Is(err, ErrSchemaTooNew) {
 		t.Fatalf("err = %v, want ErrSchemaTooNew; a best-effort parse would drop records silently", err)
+	}
+}
+
+func TestSchemaOneIsDurablyUpgradedBeforeBudgetRecords(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "t", "test-revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, path := sess.ID(), sess.Path()
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := strings.Replace(string(data), fmt.Sprintf("%s %d", magic, SchemaVersion), magic+" 1", 1)
+	if err := os.WriteFile(path, []byte(v1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatalf("opening schema 1 for migration: %v", err)
+	}
+	upgraded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(upgraded), fmt.Sprintf("%s %d\n", magic, SchemaVersion)) {
+		t.Fatalf("schema header was not upgraded before append: %q", strings.SplitN(string(upgraded), "\n", 2)[0])
+	}
+	if _, err := reopened.BeginBudgetAttempt(1_234); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := store.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if got := again.State().RetryReserveMicroUSD; got != 1_234 {
+		t.Fatalf("budget record appended after migration replayed reserve %d, want 1234", got)
+	}
+}
+
+func TestFailedAppendPoisonsSessionAgainstLaterBudgetWAL(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "t", "test-revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closing the descriptor underneath Session deterministically forces the
+	// same Write failure path as a short or failed filesystem append.
+	if err := sess.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.BeginBudgetAttempt(111); !errors.Is(err, ErrSessionPoisoned) {
+		t.Fatalf("first failed WAL err = %v, want ErrSessionPoisoned", err)
+	}
+	if _, err := sess.BeginBudgetAttempt(222); !errors.Is(err, ErrSessionPoisoned) {
+		t.Fatalf("later WAL behind failed append err = %v, want ErrSessionPoisoned", err)
+	}
+	if err := sess.AppendNote("info", "must not land behind a torn frame"); !errors.Is(err, ErrSessionPoisoned) {
+		t.Fatalf("later non-budget append err = %v, want ErrSessionPoisoned", err)
 	}
 }
 
@@ -437,10 +584,10 @@ func TestRouteRecordsSurviveReplay(t *testing.T) {
 	}
 
 	route := Route{
-		TurnDepth: 2, PriorFailures: 1, TestsInvolved: true,
+		TurnDepth: 2, PromptTokens: 80, ContextTokens: 120, PriorFailures: 1, TestFailures: 1, TestsInvolved: true,
 		Tier: "t1", Target: "t/s/m", Source: "heuristic",
 		Rationale: "following a test failure", Escalations: 1,
-		EndedOn: "t/s/other", Outcome: "completed", Verified: true,
+		EndedOn: "t/s/other", Outcome: "completed", Verified: true, FailureKind: RouteFailureContext,
 		Usage: provider.Usage{InputTokens: 100, OutputTokens: 20}, WallTimeMS: 4200,
 	}
 	if err := sess.AppendRoute(route); err != nil {
@@ -448,6 +595,16 @@ func TestRouteRecordsSurviveReplay(t *testing.T) {
 	}
 	if err := sess.AppendMessage(provider.UserText("hello")); err != nil {
 		t.Fatal(err)
+	}
+	timeline, err := ReadTimeline(sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline) < 1 || timeline[0].Route == nil ||
+		timeline[0].Route.VerificationStatus != RouteVerificationPassed ||
+		!timeline[0].Route.VerificationRan || timeline[0].Route.TestFailures != 1 || timeline[0].Route.ContextTokens != 120 ||
+		timeline[0].Route.FailureKind != RouteFailureContext {
+		t.Fatalf("route verification telemetry = %+v", timeline)
 	}
 	id := sess.ID()
 	sess.Close()
@@ -462,5 +619,258 @@ func TestRouteRecordsSurviveReplay(t *testing.T) {
 
 	if got := len(reopened.State().Messages); got != 1 {
 		t.Errorf("replayed %d messages, want the one that was written", got)
+	}
+}
+
+func TestRouteUsageWindowCorrelatesTurnCallsAndExcludesOverlappingBackground(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "t/s/m", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	window := sess.BeginUsageWindow()
+	advisorDone := make(chan error, 1)
+	go func() {
+		_, appendErr := sess.AppendUsageRecord(Usage{
+			Purpose: UsagePurposeAdvisor, Usage: provider.Usage{InputTokens: 700, OutputTokens: 70}, CostMicroUSD: 7000,
+		})
+		advisorDone <- appendErr
+	}()
+	first, err := sess.AppendUsageRecord(Usage{
+		Purpose: UsagePurposeTurn, Usage: provider.Usage{InputTokens: 100, OutputTokens: 10}, CostMicroUSD: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-advisorDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendUsageRecord(Usage{
+		Purpose: UsagePurposeCompact, Usage: provider.Usage{InputTokens: 800, OutputTokens: 80}, CostMicroUSD: 8000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := sess.AppendUsageRecord(Usage{
+		Purpose: UsagePurposeTurn, Usage: provider.Usage{InputTokens: 200, OutputTokens: 20}, CostMicroUSD: 2000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Caller-supplied aggregate values are deliberately ignored. The exact
+	// durable purpose=turn receipts own route accounting.
+	if err := sess.AppendRouteWithUsage(window, Route{
+		Tier: "t1", Target: "t/s/m", Outcome: "completed",
+		Usage: provider.Usage{InputTokens: math.MaxInt}, CostMicroUSD: -1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := ReadTimeline(sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var route *Route
+	for _, item := range timeline {
+		if item.Route != nil {
+			route = item.Route
+		}
+	}
+	if route == nil {
+		t.Fatal("route record missing")
+	}
+	if route.Usage != (provider.Usage{InputTokens: 300, OutputTokens: 30}) || route.CostMicroUSD != 3000 {
+		t.Fatalf("route accounting = usage %+v cost %d", route.Usage, route.CostMicroUSD)
+	}
+	if len(route.UsageCallIDs) != 2 || route.UsageCallIDs[0] != first.CallID || route.UsageCallIDs[1] != second.CallID {
+		t.Fatalf("route CallIDs = %#v, want %q and %q", route.UsageCallIDs, first.CallID, second.CallID)
+	}
+	durable, err := ReadUsages(sess.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := make(map[string]int)
+	for _, usage := range durable {
+		counts[usage.CallID]++
+	}
+	for _, id := range route.UsageCallIDs {
+		if counts[id] != 1 {
+			t.Fatalf("route CallID %q resolves to %d durable usages", id, counts[id])
+		}
+	}
+}
+
+func TestRouteUsageWindowRejectsAnotherSession(t *testing.T) {
+	store, workspace := newStore(t)
+	first, err := store.Create(workspace, "t/s/first", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := store.Create(workspace, "t/s/second", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err := second.AppendRouteWithUsage(first.BeginUsageWindow(), Route{}); err == nil {
+		t.Fatal("cross-session route cursor was accepted")
+	}
+}
+
+func TestRetryReserveSurvivesReplayWithoutBecomingUsage(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendRetryReserve(42_000); err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	sess.Close()
+
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	state := reopened.State()
+	if state.RetryReserveMicroUSD != 42_000 {
+		t.Fatalf("retry reserve = %d, want 42000", state.RetryReserveMicroUSD)
+	}
+	if state.CostMicroUSD != 0 || state.Calls != 0 || state.Usage != (provider.Usage{}) {
+		t.Fatalf("retry reserve was misreported as successful usage: %+v", state)
+	}
+}
+
+func TestPendingBudgetAttemptSurvivesCrashAndRestart(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	attempt, err := sess.BeginBudgetAttempt(42_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt == "" {
+		t.Fatal("pending attempt has no durable identity")
+	}
+	if got := sess.State().RetryReserveMicroUSD; got != 42_000 {
+		t.Fatalf("live pending reserve = %d, want 42000", got)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	state := reopened.State()
+	if state.RetryReserveMicroUSD != 42_000 {
+		t.Fatalf("replayed pending reserve = %d, want 42000", state.RetryReserveMicroUSD)
+	}
+	if state.Calls != 0 || state.Usage != (provider.Usage{}) || state.AccountedCostMicroUSD() != 0 {
+		t.Fatalf("pending attempt invented successful usage: %+v", state)
+	}
+}
+
+func TestBudgetSettlementSeparatesObservedExternalCostFromUsage(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := sess.BeginBudgetAttempt(100_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SettleBudgetAttempt(attempt, BudgetOutcomeSucceeded, 12_345); err != nil {
+		t.Fatal(err)
+	}
+	state := sess.State()
+	if state.RetryReserveMicroUSD != 0 || state.ExternalCostMicroUSD != 12_345 || state.AccountedCostMicroUSD() != 12_345 {
+		t.Fatalf("settled external accounting = %+v", state)
+	}
+	if state.Calls != 0 || state.Usage != (provider.Usage{}) {
+		t.Fatalf("external charge became fake provider usage: %+v", state)
+	}
+	id := sess.ID()
+	sess.Close()
+	reopened, err := store.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got := reopened.State(); got.ExternalCostMicroUSD != 12_345 || got.RetryReserveMicroUSD != 0 {
+		t.Fatalf("replayed settlement = %+v", got)
+	}
+}
+
+func TestFailedBudgetSettlementKeepsTheWholeBound(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := sess.BeginBudgetAttempt(55_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SettleBudgetAttempt(attempt, BudgetOutcomeFailed, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.State().RetryReserveMicroUSD; got != 55_000 {
+		t.Fatalf("failed settlement reserve = %d, want 55000", got)
+	}
+	if err := sess.SettleBudgetAttempt(attempt, BudgetOutcomeSucceeded, 0); err == nil {
+		t.Fatal("a settled attempt was allowed to settle twice")
+	}
+}
+
+func TestSettlementAppendFailureCannotForgetPendingAttempt(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := sess.BeginBudgetAttempt(88_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SettleBudgetAttempt(attempt, BudgetOutcomeSucceeded, 11_000); err == nil {
+		t.Fatal("settlement unexpectedly appended to a closed log")
+	}
+	state := sess.State()
+	if state.RetryReserveMicroUSD != 88_000 || state.ExternalCostMicroUSD != 0 {
+		t.Fatalf("failed append forgot or partially settled reservation: %+v", state)
+	}
+}
+
+func TestBudgetTransferIsAtomicDistinctFromUsageAndDeduplicated(t *testing.T) {
+	store, workspace := newStore(t)
+	sess, err := store.Create(workspace, "anthropic/first-party/model", "rev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendBudgetTransfer("race:one", 23_000, 77_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendBudgetTransfer("race:one", 23_000, 77_000); err == nil {
+		t.Fatal("duplicate transfer was charged twice")
+	}
+	state := sess.State()
+	if state.ExternalCostMicroUSD != 23_000 || state.RetryReserveMicroUSD != 77_000 {
+		t.Fatalf("transfer accounting = %+v", state)
+	}
+	if state.Calls != 0 || state.Usage != (provider.Usage{}) {
+		t.Fatalf("transfer invented provider telemetry: %+v", state)
 	}
 }

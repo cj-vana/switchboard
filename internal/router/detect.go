@@ -3,6 +3,7 @@ package router
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,12 +29,13 @@ type Detector struct {
 	// Tools fail routinely, so one is not news.
 	ErrorSpikeAt int
 
-	calls     map[string]int
-	failures  map[string]bool
-	errors    int
-	spiked    bool
-	repeated  map[string]bool
-	uncertain bool
+	calls         map[string]int
+	failures      map[string]bool
+	errors        int
+	spiked        bool
+	repeated      map[string]bool
+	uncertain     bool
+	assistantTail string
 }
 
 const DefaultErrorSpikeAt = 3
@@ -65,13 +67,14 @@ func (d *Detector) Reset() {
 	d.errors = 0
 	d.spiked = false
 	d.uncertain = false
+	d.assistantTail = ""
 }
 
 // ToolCall reports a call about to run.
 func (d *Detector) ToolCall(name string, input []byte) []Signal {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	key := name + "\x00" + string(input)
+	key := name + "\x00" + canonicalInput(input)
 	d.calls[key]++
 
 	// Loop detection: the same call with the same arguments, which cannot be
@@ -82,6 +85,22 @@ func (d *Detector) ToolCall(name string, input []byte) []Signal {
 		return []Signal{RepeatedToolCall}
 	}
 	return nil
+}
+
+// canonicalInput makes repeat detection semantic for JSON tool arguments.
+// Providers are free to vary whitespace and object-key order between calls;
+// those representations still describe the same action. Invalid JSON is kept
+// byte-for-byte so a malformed call is never made equal to a different one.
+func canonicalInput(input []byte) string {
+	var value any
+	if len(input) == 0 || json.Unmarshal(input, &value) != nil {
+		return string(input)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return string(input)
+	}
+	return string(canonical)
 }
 
 // ToolResult reports what a call produced.
@@ -146,7 +165,12 @@ func (d *Detector) VerifierFailures(sigs []string) []Signal {
 func (d *Detector) AssistantText(text string) []Signal {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.uncertain || !hedging(text) {
+	combined := d.assistantTail + text
+	if len(combined) > 256 {
+		combined = combined[len(combined)-256:]
+	}
+	d.assistantTail = combined
+	if d.uncertain || !hedging(combined) {
 		return nil
 	}
 	d.uncertain = true

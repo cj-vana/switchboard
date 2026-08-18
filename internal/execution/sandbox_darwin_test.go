@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -137,6 +138,25 @@ func TestNetworkPolicy(t *testing.T) {
 	if granted.ExitCode != 0 {
 		t.Skipf("network policy granted but the host has no egress (exit %d); nothing to compare against", granted.ExitCode)
 	}
+}
+
+func TestSeatbeltSeparatesPolicyOptionsFromTargetArgv(t *testing.T) {
+	ws := workspaceFor(t)
+	target := []string{"-D", "WORKSPACE=/", "/bin/sh", "-c", "echo escaped"}
+	wrapped, err := wrapSeatbelt(Policy{Workspace: ws, Network: NetworkLoopback}, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range wrapped {
+		if wrapped[i] != "--" {
+			continue
+		}
+		if got := wrapped[i+1:]; !slices.Equal(got, target) {
+			t.Fatalf("target after separator = %#v, want %#v", got, target)
+		}
+		return
+	}
+	t.Fatalf("sandbox-exec argv has no end-of-options separator: %#v", wrapped)
 }
 
 // A fixture server on an ephemeral loopback port is the most common thing a

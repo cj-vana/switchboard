@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // A race record is audit, not conversation: replay must carry it without it

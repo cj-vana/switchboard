@@ -1,0 +1,183 @@
+{
+  "candidates": [
+    {
+      "native_id": "claude-managed@market",
+      "state": "installed",
+      "native_enabled": true,
+      "activation_eligible": true,
+      "candidate": {
+        "Root": "$ROOT/claude/plugins/managed",
+        "Scope": "managed",
+        "Dialect": "claude"
+      },
+      "provenance": {
+        "dialect": "claude",
+        "native_id": "claude-managed@market",
+        "enablement_path": "$ROOT/claude/managed-settings.json",
+        "registry_path": "$ROOT/claude/installed_plugins.json",
+        "native_scope": "managed",
+        "enablement_scope": "managed"
+      }
+    },
+    {
+      "native_id": "claude-project@market",
+      "state": "installed",
+      "native_enabled": true,
+      "activation_eligible": true,
+      "candidate": {
+        "Root": "$ROOT/claude/plugins/project",
+        "Scope": "workspace",
+        "Dialect": "claude"
+      },
+      "provenance": {
+        "dialect": "claude",
+        "native_id": "claude-project@market",
+        "enablement_path": "$ROOT/workspace/.claude/settings.json",
+        "registry_path": "$ROOT/claude/installed_plugins.json",
+        "native_scope": "project",
+        "project_path": "$ROOT/workspace",
+        "enablement_scope": "workspace"
+      }
+    },
+    {
+      "native_id": "claude-user@market",
+      "state": "installed",
+      "native_enabled": true,
+      "activation_eligible": true,
+      "candidate": {
+        "Root": "$ROOT/claude/plugins/user",
+        "Scope": "user",
+        "Dialect": "claude"
+      },
+      "provenance": {
+        "dialect": "claude",
+        "native_id": "claude-user@market",
+        "enablement_path": "$ROOT/claude/user-settings.json",
+        "registry_path": "$ROOT/claude/installed_plugins.json",
+        "native_scope": "user",
+        "enablement_scope": "user"
+      }
+    },
+    {
+      "native_id": "alpha@personal",
+      "state": "available",
+      "native_enabled": true,
+      "activation_eligible": false,
+      "candidate": {
+        "Root": "$ROOT/codex-user/marketplace/plugins/alpha",
+        "Scope": "user",
+        "Dialect": "codex"
+      },
+      "provenance": {
+        "dialect": "codex",
+        "native_id": "alpha@personal",
+        "enablement_path": "$ROOT/codex-user/config.toml",
+        "registry_path": "$ROOT/codex-user/marketplace/.agents/plugins/marketplace.json",
+        "marketplace": "personal",
+        "marketplace_path": "$ROOT/codex-user/config.toml",
+        "marketplace_scope": "user",
+        "native_scope": "catalog",
+        "enablement_scope": "user",
+        "marketplace_policy": {
+          "installation": "AVAILABLE",
+          "authentication": "ON_INSTALL"
+        }
+      }
+    },
+    {
+      "native_id": "mixed@personal",
+      "state": "available",
+      "native_enabled": false,
+      "activation_eligible": false,
+      "candidate": {
+        "Root": "$ROOT/codex-user/marketplace/plugins/mixed",
+        "Scope": "user",
+        "Dialect": "codex"
+      },
+      "provenance": {
+        "dialect": "codex",
+        "native_id": "mixed@personal",
+        "registry_path": "$ROOT/codex-user/marketplace/.agents/plugins/marketplace.json",
+        "marketplace": "personal",
+        "marketplace_path": "$ROOT/codex-user/config.toml",
+        "marketplace_scope": "user",
+        "native_scope": "catalog",
+        "marketplace_policy": {
+          "installation": "AVAILABLE",
+          "authentication": "ON_INSTALL"
+        }
+      }
+    },
+    {
+      "native_id": "off@personal",
+      "state": "available",
+      "native_enabled": false,
+      "activation_eligible": false,
+      "candidate": {
+        "Root": "$ROOT/codex-user/marketplace/plugins/off",
+        "Scope": "user",
+        "Dialect": "codex"
+      },
+      "provenance": {
+        "dialect": "codex",
+        "native_id": "off@personal",
+        "registry_path": "$ROOT/codex-user/marketplace/.agents/plugins/marketplace.json",
+        "marketplace": "personal",
+        "marketplace_path": "$ROOT/codex-user/config.toml",
+        "marketplace_scope": "user",
+        "native_scope": "catalog",
+        "marketplace_policy": {
+          "installation": "AVAILABLE",
+          "authentication": "ON_INSTALL"
+        }
+      }
+    },
+    {
+      "native_id": "project-tool@project",
+      "state": "available",
+      "native_enabled": false,
+      "activation_eligible": false,
+      "candidate": {
+        "Root": "$ROOT/workspace/plugins/project-tool",
+        "Scope": "workspace",
+        "Dialect": "codex"
+      },
+      "provenance": {
+        "dialect": "codex",
+        "native_id": "project-tool@project",
+        "registry_path": "$ROOT/workspace/.agents/plugins/marketplace.json",
+        "marketplace": "project",
+        "marketplace_path": "$ROOT/workspace/.agents/plugins/marketplace.json",
+        "marketplace_scope": "workspace",
+        "native_scope": "catalog",
+        "project_path": "$ROOT/workspace",
+        "marketplace_policy": {
+          "installation": "AVAILABLE",
+          "authentication": "ON_INSTALL"
+        }
+      }
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "enabled-plugin-install-unresolved",
+      "path": "$ROOT/codex-user/config.toml",
+      "message": "Codex plugin \"alpha@personal\" is enabled in user config, but no authoritative installed-root registry is available; catalogs and caches are not substituted or scanned"
+    },
+    {
+      "severity": "warning",
+      "code": "unsupported-plugin-policy",
+      "path": "$ROOT/codex-user/config.toml",
+      "message": "enabled Codex plugin \"alpha@personal\" declares native MCP policy; no Switchboard permission is inferred"
+    }
+  ],
+  "managed_plugin_constraints": [
+    {
+      "dialect": "claude",
+      "native_id": "local-off@market",
+      "denied": true,
+      "path": "$ROOT/claude/managed-settings.json"
+    }
+  ]
+}

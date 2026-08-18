@@ -1,12 +1,13 @@
 package costmodel
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 func infoFor(t *testing.T, p, surface, model string) (provider.RouteTarget, catalog.ModelInfo) {
@@ -141,6 +142,72 @@ func TestBoundsBracketTheExpectation(t *testing.T) {
 	got := Estimator{}.Turn(in)
 	if !(got.Low <= got.Expected && got.Expected <= got.High) {
 		t.Errorf("expectation %s is outside its bounds %s to %s", got.Expected, got.Low, got.High)
+	}
+}
+
+func TestExtremeCostsNeverWrapNegative(t *testing.T) {
+	info := catalog.ModelInfo{Pricing: []catalog.PriceBand{{
+		OutputPerMTok: catalog.Money(5_000_000_000_000_000_000),
+	}}}
+	got := Estimator{}.Turn(Inputs{
+		Info:           info,
+		OutputTokens:   math.MaxInt,
+		TokensAreExact: true,
+	})
+	if got.Expected != catalog.MaxMoney || got.Low != catalog.MaxMoney || got.High != catalog.MaxMoney {
+		t.Fatalf("saturated estimate = expected %d, low %d, high %d; want all %d",
+			got.Expected, got.Low, got.High, catalog.MaxMoney)
+	}
+	if got.HitCost < 0 || got.MissCost < 0 || got.Spread() < 0 {
+		t.Fatalf("extreme estimate wrapped negative: %+v", got)
+	}
+}
+
+func TestLargeRepresentableIntermediateStaysPositive(t *testing.T) {
+	info := catalog.ModelInfo{Pricing: []catalog.PriceBand{{
+		OutputPerMTok: catalog.Money(5_000_000_000_000_000_000),
+	}}}
+	got := Estimator{}.Turn(Inputs{
+		Info:           info,
+		OutputTokens:   2,
+		TokensAreExact: true,
+		HitProbability: 0.5,
+	})
+	if want := catalog.Money(10_000_000_000_000); got.Expected != want || got.High != want {
+		t.Fatalf("estimate = expected %d, high %d; want %d", got.Expected, got.High, want)
+	}
+}
+
+func TestSpreadNeverUnderflows(t *testing.T) {
+	got := Estimate{HitCost: catalog.MaxMoney, MissCost: 1}.Spread()
+	if got != 0 {
+		t.Fatalf("spread with a dearer hit = %d, want 0", got)
+	}
+}
+
+func TestSwitchTotalSaturatesInsteadOfWrapping(t *testing.T) {
+	from := Inputs{
+		Info: catalog.ModelInfo{Pricing: []catalog.PriceBand{{
+			CacheReadPerMTok:  0,
+			CacheWritePerMTok: map[string]catalog.Money{"5m": catalog.MaxMoney},
+		}}},
+		PrefixTokens:   math.MaxInt,
+		Eligible:       true,
+		HitProbability: 1,
+		TokensAreExact: true,
+	}
+	to := Inputs{
+		Info: catalog.ModelInfo{Pricing: []catalog.PriceBand{{
+			OutputPerMTok: catalog.MaxMoney,
+		}}},
+		OutputTokens:   math.MaxInt,
+		TokensAreExact: true,
+	}
+
+	got := (Estimator{}).SwitchCost(from, to, 1, 0)
+	if got.Difference != catalog.MaxMoney || got.LostWarmValue != catalog.MaxMoney || got.Total != catalog.MaxMoney {
+		t.Fatalf("saturated switch = difference %d, lost %d, total %d; want all %d",
+			got.Difference, got.LostWarmValue, got.Total, catalog.MaxMoney)
 	}
 }
 

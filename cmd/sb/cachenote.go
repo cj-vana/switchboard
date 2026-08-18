@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cj-vana/switchboard/internal/agent"
-	"github.com/cj-vana/switchboard/internal/catalog"
-	"github.com/cj-vana/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
 // abandonedCacheNote prices what a switch leaves behind on the old target,
@@ -60,5 +60,5 @@ func abandonedCacheNote(oldCache *agent.Cache, cat *catalog.Catalog, now time.Ti
 	}
 	return fmt.Sprintf(
 		"switching leaves %s warm prefix tokens behind on %s; against re-sending them cold there, that warmth's modeled value is ~%s (hit chance ~%.0f%%)",
-		compact(tokens), oldCache.Target, value, exp.HitProbability*100)
+		compact(tokens), provider.DisplayRouteTargetID(oldCache.Target), value, exp.HitProbability*100)
 }

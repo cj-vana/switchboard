@@ -13,13 +13,14 @@ package tools
 // is just a process that does not exist.
 //
 // Each script answers with one JSON line. running:false means the process
-// is absent; stale:true means the recorded element path no longer holds an
-// element of the recorded role, which the tool turns into "call state
-// again" rather than acting on whatever sits there now.
+// is absent; stale:true means the recorded front window or element identity
+// changed, which the tool turns into "call state again" rather than acting
+// on whatever sits at the old ordinal path now.
 
 // computerPrelude is shared by every script: find the process, or answer
 // running:false. The helpers resolve a recorded child-ordinal path from
-// the front window and read the front window's title for the answer.
+// the front window, derive opaque identity fingerprints, and read the front
+// window's title for the answer. Fingerprints never expose AX values.
 const computerPrelude = `
 function proc(argv) {
   const se = Application("System Events");
@@ -37,6 +38,62 @@ function resolvePath(p, pathStr) {
 function frontTitle(p) {
   try { const w = p.windows(); return w.length ? (w[0].title() || "") : "" } catch (_) { return "" }
 }
+function identityText(value) {
+  if (value == null) return "";
+  let text = "";
+  try { text = typeof value === "string" ? value : JSON.stringify(value); }
+  catch (_) { try { text = String(value); } catch (_) { return ""; } }
+  return text;
+}
+function opaqueIdentity(parts) {
+  const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  const primes = [0x01000193, 0x27d4eb2d, 0x165667b1, 0x9e3779b1];
+  const hs = seeds.slice();
+  for (let p = 0; p < parts.length; p++) {
+    const text = identityText(parts[p]);
+    const framed = text.length + ":" + text + ";";
+    for (let i = 0; i < framed.length; i++) {
+      const code = framed.charCodeAt(i);
+      for (let h = 0; h < hs.length; h++) {
+        hs[h] ^= code & 0xff;
+        hs[h] = Math.imul(hs[h], primes[h]);
+        hs[h] ^= code >>> 8;
+        hs[h] = Math.imul(hs[h], primes[h]);
+      }
+    }
+  }
+  return hs.map(h => ("00000000" + (h >>> 0).toString(16)).slice(-8)).join("");
+}
+function safeValue(spec, property) {
+  try { const value = spec[property](); return value == null ? "" : value; }
+  catch (_) { return ""; }
+}
+function safeAttribute(spec, name) {
+  try { const value = spec.attributes.byName(name).value(); return value == null ? "" : value; }
+  catch (_) { return ""; }
+}
+function genericDescription(value) {
+  const text = identityText(value).toLowerCase();
+  return text === "" || text === "button" || text === "checkbox" || text === "radio button" ||
+    text === "text field" || text === "text area" || text === "group" || text === "image" || text === "text";
+}
+function elementIdentity(role, title, description, value, position, size) {
+  const anonymous = identityText(title) === "" && identityText(value) === "" && genericDescription(description);
+  return opaqueIdentity(["element-v1", role, title, description, value,
+    anonymous ? position : "", anonymous ? size : ""]);
+}
+function liveElementIdentity(el) {
+  return elementIdentity(safeValue(el, "role"), safeValue(el, "title"), safeValue(el, "description"),
+    safeValue(el, "value"), safeValue(el, "position"), safeValue(el, "size"));
+}
+function windowIdentity(p) {
+  let w;
+  try { const windows = p.windows(); if (windows.length === 0) return ""; w = windows[0]; }
+  catch (_) { return ""; }
+  return opaqueIdentity(["window-v1", safeValue(w, "role"), safeAttribute(w, "AXSubrole"),
+    safeValue(w, "title"), safeValue(w, "description"), safeValue(w, "position"), safeValue(w, "size"),
+    safeAttribute(w, "AXIdentifier"), safeAttribute(w, "AXWindowNumber")]);
+}
 function activate(p) { p.frontmost = true; delay(0.3); }
 function notRunning() { return JSON.stringify({running: false}); }
 function ok(p, extra) {
@@ -44,7 +101,7 @@ function ok(p, extra) {
   const out = Object.assign({running: true, ok: true, window: frontTitle(p)}, extra || {});
   return JSON.stringify(out);
 }
-function stale(role) { return JSON.stringify({running: true, stale: true, role: role}); }
+function stale(role, reason) { return JSON.stringify({running: true, stale: true, role: role, reason: reason || "element"}); }
 function fail(msg, menus) {
   const out = {running: true, error: msg};
   if (menus) out.menus = menus;
@@ -66,7 +123,7 @@ function run(argv) {
   const maxWalk = parseInt(argv[1], 10);
   const maxShow = parseInt(argv[2], 10);
   const budgetMs = parseInt(argv[3], 10);
-  const out = {running: true, frontmost: p.frontmost(), windows: [], menus: [], els: [], walked: 0, timedOut: false};
+  const out = {running: true, frontmost: p.frontmost(), windows: [], window_id: "", menus: [], els: [], walked: 0, timedOut: false};
   try { out.menus = p.menuBars[0].menuBarItems.name().filter(n => n).slice(0, 24); } catch (_) {}
   const wins = p.windows();
   for (let i = 0; i < Math.min(wins.length, 8); i++) {
@@ -74,6 +131,7 @@ function run(argv) {
     out.windows.push(t);
   }
   if (wins.length === 0) return JSON.stringify(out);
+  out.window_id = windowIdentity(p);
   const always = {AXButton:1, AXTextField:1, AXTextArea:1, AXCheckBox:1, AXRadioButton:1,
     AXPopUpButton:1, AXComboBox:1, AXMenuButton:1, AXLink:1, AXSlider:1, AXIncrementor:1,
     AXMenuItem:1, AXSegmentedControl:1, AXDisclosureTriangle:1, AXSheet:1, AXColorWell:1};
@@ -109,7 +167,8 @@ function run(argv) {
       const v = vals[k] == null ? "" : cap(vals[k]);
       if (noise[r]) continue;
       if (!(always[r] || t !== "" || v !== "" || (d !== "" && !generic[d]))) continue;
-      out.els.push({path: path, r: r, t: t, d: d, v: v, p: poss[k] || null, s: sizes[k] || null});
+      out.els.push({path: path, r: r, t: t, d: d, v: v, p: poss[k] || null, s: sizes[k] || null,
+        f: elementIdentity(r, titles[k], descs[k], vals[k], poss[k] || null, sizes[k] || null)});
     }
   }
   return JSON.stringify(out);
@@ -135,18 +194,21 @@ function run() {
 }
 `
 
-// computerClickScript clicks a recorded element. The role check is the
-// staleness gate: element .click() lands on whatever the path resolves to,
-// so a changed window must answer stale, never click.
+// computerClickScript clicks a recorded element only when both the recorded
+// front window and opaque element fingerprint still match. Role alone is not
+// enough: Save and Delete can occupy the same ordinal path.
 const computerClickScript = computerPrelude + `
 function run(argv) {
   const got = proc(argv);
   if (!got) return notRunning();
   const p = got.p;
   activate(p);
+  if (windowIdentity(p) !== argv[3]) return stale("window", "window");
   let el, role = "";
   try { el = resolvePath(p, argv[1]); role = el.role() || "" } catch (_) { return stale("nothing"); }
   if (role !== argv[2]) return stale(role);
+  if (liveElementIdentity(el) !== argv[4]) return stale(role, "element");
+  if (windowIdentity(p) !== argv[3]) return stale("window", "window");
   try { el.click(); } catch (e) { return fail("the click failed: " + e.message); }
   return ok(p);
 }
@@ -212,9 +274,12 @@ function run(argv) {
   if (!got) return notRunning();
   const p = got.p;
   activate(p);
+  if (windowIdentity(p) !== argv[4]) return stale("window", "window");
   let el, role = "";
   try { el = resolvePath(p, argv[1]); role = el.role() || "" } catch (_) { return stale("nothing"); }
   if (role !== argv[2]) return stale(role);
+  if (liveElementIdentity(el) !== argv[5]) return stale(role, "element");
+  if (windowIdentity(p) !== argv[4]) return stale("window", "window");
   try { el.value = argv[3]; } catch (e) { return fail("setting the value failed: " + e.message); }
   let now = "";
   try { now = String(el.value()).slice(0, 120) } catch (_) {}
