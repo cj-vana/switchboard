@@ -14,11 +14,11 @@ func cmdTasks(m *tuiModel, args string) tea.Cmd {
 	parentID := m.app.loop.Session.ID()
 	fields := strings.Fields(args)
 	if len(fields) > 0 && fields[0] == "steer" {
-		if len(fields) < 3 {
+		id, message, ok := parseSteerArgs(args)
+		if !ok {
 			return noticeCmd("warn", "usage: /tasks steer <id> <what to tell it>")
 		}
-		return steerTask(m, parentID, fields[1], strings.TrimSpace(
-			strings.TrimPrefix(strings.TrimSpace(args), "steer")[len(fields[1])+1:]))
+		return steerTask(m, parentID, id, message)
 	}
 	if len(fields) > 0 {
 		if len(fields) != 2 || fields[0] != "cancel" {
@@ -43,6 +43,19 @@ func cmdTasks(m *tuiModel, args string) tea.Cmd {
 
 	m.addInfo(renderTasks(tasksForSession(subagentTasks, parentID), subagentTasks.MaxParallel(), parentID))
 	return nil
+}
+
+// parseSteerArgs splits "steer <id> <message>" without counting offsets. The
+// message is everything after the id, kept whole: a correction that arrives
+// with its first word eaten is worse than one that does not arrive.
+func parseSteerArgs(args string) (id, message string, ok bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), "steer"))
+	id, message, cut := strings.Cut(rest, " ")
+	message = strings.TrimSpace(message)
+	if !cut || id == "" || message == "" {
+		return "", "", false
+	}
+	return id, message, true
 }
 
 // steerTask sends guidance to a task this session owns. A subagent takes it up

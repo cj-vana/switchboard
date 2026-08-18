@@ -98,3 +98,31 @@ func TestTasksCancelTargetsOneDelegate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The message is everything after the id, spaces and all. Parsing it by
+// slicing offsets is how a steer arrives truncated or with its first word
+// eaten, so the shape is pinned here.
+func TestSteerArgumentsKeepTheWholeMessage(t *testing.T) {
+	for _, tc := range []struct {
+		args    string
+		wantID  string
+		wantMsg string
+	}{
+		{"steer task-001 stop reading tests", "task-001", "stop reading tests"},
+		{"steer task-001   look at cmd/sb, not internal  ", "task-001", "look at cmd/sb, not internal"},
+		{"steer task-002 one", "task-002", "one"},
+	} {
+		id, msg, ok := parseSteerArgs(tc.args)
+		if !ok {
+			t.Fatalf("%q did not parse", tc.args)
+		}
+		if id != tc.wantID || msg != tc.wantMsg {
+			t.Errorf("%q parsed as id=%q msg=%q, want id=%q msg=%q", tc.args, id, msg, tc.wantID, tc.wantMsg)
+		}
+	}
+	for _, bad := range []string{"steer", "steer task-001", "steer task-001   "} {
+		if _, _, ok := parseSteerArgs(bad); ok {
+			t.Errorf("%q should not parse: a steer with no message is not a steer", bad)
+		}
+	}
+}
