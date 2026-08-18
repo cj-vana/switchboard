@@ -18,12 +18,17 @@ import (
 // the life of the session, so each paragraph is paid for on every cold cache,
 // and a small local model follows three clear rules better than fifteen.
 //
-// Where a rule describes the shape of a call, it shows the call. A recorded
-// session on a 27B local model met the exec shell rule three times and got the
-// argument shape wrong twice, having read a correct sentence about it in the
-// tool description, the parameter description, and here: prose about a shape
-// is not the shape. The literal call costs a line and is what the model is
-// about to write.
+// Two rules for editing it, both learned the same way. Where a rule describes
+// the shape of a call, it shows the call: a recorded session on a 27B local
+// model read a correct sentence about exec's argument shape in three places
+// and got it wrong twice, because prose about a shape is not the shape. And
+// where a rule can be made unnecessary instead, it is deleted: the durable fix
+// for that failure was a schema the wrong shape cannot be expressed in, after
+// which the sentences describing it came back out.
+//
+// Nothing here should repeat a tool description. Tool definitions share this
+// cached prefix, so a rule stated in both is paid for twice and believed no
+// harder.
 //
 // Nothing here varies within a session. Mode, sandbox posture, and budget can
 // change during a run, so this block states their invariant contract instead
@@ -41,8 +46,8 @@ func SystemPrompt(workspace string, mode permission.Mode, capability execution.C
 - Prefer edit over write. edit replaces an exact string, so include enough surrounding text to make the match unique.
 - read, write, edit, glob, and grep paths are rooted in the workspace and refuse escapes, including symlink escapes.
 - Find files with glob and search contents with grep before reaching for exec. Both stay inside the workspace and cost no approval.
-- exec runs a command directly with no shell, so pipes, globs, redirection, and variables are not interpreted: {"command": ["go", "test", "./..."]}. For a pipe or a glob, set shell and pass the whole script as one string: {"command": ["grep -r foo . | head -20"], "shell": true}.
-- Command reach follows the current permission and sandbox posture shown by the interface. Sandbox is off by default; then an approved command runs on the host and can access files outside the workspace and the network. An active verified sandbox limits direct writes to the workspace, temp, and build caches, but broad system and outside-home paths remain readable; it gates direct non-loopback network access. Host-local IPC services retain their own authority, and on platforms that share host loopback, local services may relay traffic even when proxy environment is stripped. Never claim confinement from a permission prompt alone.
+- exec runs a command with no shell, so pipes, globs, redirection, and variables are not interpreted: {"command": ["go", "test", "./..."]}. A pipe, glob, redirection, or variable needs script instead: {"script": "grep -r foo . | head -20"}.
+- Command reach follows the session's permission and sandbox posture. Host-local IPC services retain their own authority, and on platforms that share host loopback, local services may relay traffic even when proxy environment is stripped. Never claim confinement from a permission prompt alone.
 - Use the tools to find things out rather than guessing. When a tool returns an error, read it: it usually says exactly what to do next.
 - Say what you did and what you found. Do not describe a change you have not made.
 - Answer when you can answer. Reading more is only worth it while it is still changing what you would say; a question that has been answered does not need another search to confirm it.
@@ -50,7 +55,10 @@ func SystemPrompt(workspace string, mode permission.Mode, capability execution.C
 
 	blocks := []provider.Block{provider.Text{Text: b.String()}}
 	if inst, ok := ProjectInstructions(workspace); ok {
-		blocks = append(blocks, provider.Text{Text: inst})
+		// Adapters that flatten the system blocks into one string join them
+		// with no separator, so without this the project's header lands as a
+		// lazy Markdown continuation of the last rule above it.
+		blocks = append(blocks, provider.Text{Text: "\n" + inst})
 	}
 	return blocks
 }

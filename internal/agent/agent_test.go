@@ -1253,8 +1253,6 @@ func TestSystemPromptIsStableWithinASession(t *testing.T) {
 	prompt := first[0].(provider.Text).Text
 	for _, want := range []string{
 		"paths are rooted in the workspace",
-		"Sandbox is off by default",
-		"approved command runs on the host",
 		"Never claim confinement from a permission prompt alone",
 	} {
 		if !strings.Contains(prompt, want) {

@@ -23,10 +23,8 @@ func (t *execTool) Description() string {
 	return "Run a command with the session's current execution reach. Sandbox is off by default, " +
 		"so an approved command can access the host filesystem outside the workspace and the network. " +
 		"When a verified sandbox is active, writes are limited to the workspace, temp, and build caches; broad system and outside-home paths remain readable, and network requests are gated. " +
-		"By default the command array is executed directly, " +
-		"with no shell, so quoting, globs, pipes, and variables are not interpreted. " +
-		"Set shell to true to run through /bin/sh, and then pass the whole script as a " +
-		"single element. Combined stdout and stderr are returned; long output has its " +
+		"Pass either command or script, never both. " +
+		"Combined stdout and stderr are returned; long output has its " +
 		"middle removed and says so."
 }
 
@@ -39,18 +37,18 @@ func (t *execTool) Schema() json.RawMessage {
     "command": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Program and arguments, for example [\"go\",\"test\",\"./...\"]. When shell is true, pass exactly one element holding the whole script, for example [\"grep -r foo . | head -20\"]."
+      "description": "Program and arguments, run directly with no shell: [\"go\",\"test\",\"./...\"]."
     },
-    "shell": {"type": "boolean", "description": "Run the single command element through /bin/sh. Only needed for pipes, redirection, or expansion."},
+    "script": {"type": "string", "description": "One /bin/sh script, used instead of command when you need a pipe, glob, redirection, or variable: \"grep -r foo . | head -20\"."},
 	"network": {"type": "boolean", "description": "Request internet access when a sandbox is active. With the default sandbox-off posture, approved commands already have the host's full network reach regardless of this hint."},
     "timeout_seconds": {"type": "integer", "description": "Wall-clock limit. Defaults to 120."}
-  },
-  "required": ["command"]
+  }
 }`)
 }
 
 type execInput struct {
 	Command        []string `json:"command"`
+	Script         string   `json:"script"`
 	Shell          bool     `json:"shell"`
 	Network        bool     `json:"network"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
@@ -61,17 +59,22 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return Plan{}, fmt.Errorf("exec: %w", err)
 	}
-	if len(in.Command) == 0 {
-		return Plan{}, fmt.Errorf("exec: command is empty")
+	// Shell is retired but still decoded. A resumed session replays its own
+	// earlier tool_use blocks and a model mimics its own history, so silently
+	// ignoring the old field would run a pipeline as argv[0]. Refusing it with
+	// the new shape shown is what the model corrected off twice in one
+	// recorded session: prose about a shape is not the shape.
+	if in.Shell {
+		return Plan{}, fmt.Errorf(`exec: shell is retired, script takes the whole script: {"script": %q}`,
+			strings.Join(in.Command, " "))
 	}
-	if in.Shell && len(in.Command) != 1 {
-		// The model met this twice in one session and corrected twice, which
-		// means the sentence it read was not the shape it needed. An error
-		// that shows the call is one it can act on without a second attempt.
-		return Plan{}, fmt.Errorf(
-			`exec: shell mode takes the whole script as one element, got %d; `+
-				`join them: {"command": [%q], "shell": true}`,
-			len(in.Command), strings.Join(in.Command, " "))
+	if (len(in.Command) == 0) == (in.Script == "") {
+		return Plan{}, fmt.Errorf(`exec: pass exactly one of command or script, ` +
+			`for example {"command": ["go","test","./..."]} or {"script": "grep -r foo . | head -20"}`)
+	}
+	argv, shell := in.Command, false
+	if in.Script != "" {
+		argv, shell = []string{in.Script}, true
 	}
 
 	timeout := time.Duration(in.TimeoutSeconds) * time.Second
@@ -89,7 +92,7 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 	// Keep the auditable request and the executable closure on distinct
 	// backing arrays. Permission/reviewer code may inspect Request.Argv, but
 	// cannot rewrite what Run will execute after approval.
-	runArgv := append([]string(nil), in.Command...)
+	runArgv := append([]string(nil), argv...)
 	requestArgv := append([]string(nil), runArgv...)
 	return Plan{
 		Request: permission.Request{
@@ -97,7 +100,7 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 			Effect:    permission.EffectExecute,
 			Path:      ".", // command working directory, relative to the workspace
 			Argv:      requestArgv,
-			Shell:     in.Shell,
+			Shell:     shell,
 			Network:   in.Network,
 			Execution: &requestPolicy,
 		},
@@ -109,7 +112,7 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 			defer release()
 			res, err := execution.Run(ctx, execution.Command{
 				Argv:    runArgv,
-				Shell:   in.Shell,
+				Shell:   shell,
 				Dir:     t.r.root,
 				Timeout: timeout,
 				// The confinement and the permission decision come from one
@@ -127,7 +130,7 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 				if ctx.Err() != nil {
 					return Result{}, err
 				}
-				return errorf("could not run %s: %v", Describe(in.Command, in.Shell), err)
+				return errorf("could not run %s: %v", Describe(argv, shell), err)
 			}
 			return execResult(res), nil
 		},
