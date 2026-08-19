@@ -209,7 +209,7 @@ manual changes. `/diff` remains the repository-wide view against `HEAD`.
 closing message is the claim, the recorded tool calls with their results and
 the recorder's captures are the evidence, and a finding is a place the two
 disagree. It reads the record and not the code, so it does not review the work
-or suggest changes. It takes no turn number — the message log and the
+or suggest changes. It takes no turn number: the message log and the
 checkpoint recorder number turns separately, and the turn that just finished is
 the one pair certainly the same in both. A turn that called no tools and
 changed no files is reported as having nothing to check. The report states its
