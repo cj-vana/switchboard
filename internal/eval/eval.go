@@ -113,6 +113,19 @@ type Run struct {
 	// a run that spent its rounds asking for things policy will never grant.
 	Denials int
 
+	// Rounds is how many model calls the attempt spent. A change that claims
+	// to shorten exploration has to move this, and solve rate cannot see it:
+	// a saturated corpus reports the same score whether a task took four
+	// rounds or thirty. Optional so journals written before it stay readable.
+	Rounds int `json:",omitempty"`
+
+	// ToolErrors counts failed tool calls, keyed by tool and a coarse class of
+	// failure. A change that claims to remove a malformed-call class has to
+	// drive its own key down, and a key per class is what separates "exec was
+	// called wrongly" from "the command exec ran exited non-zero" — those are
+	// the same tool and opposite findings.
+	ToolErrors map[string]int `json:",omitempty"`
+
 	Seed int
 
 	// EvaluationID binds a journal row to the exact harness, corpus, arms and

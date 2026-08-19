@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/agent"
@@ -215,9 +216,12 @@ func (r Runner) runSelected(
 	out.EstimatedCost = selection.estimatedCost
 	out.EstimatedTarget = selection.estimatedTarget
 
-	perTarget, denials, runErr := r.attempt(attemptCtx, selection.arm, prepared, selection.escalation)
+	stats, runErr := r.attempt(attemptCtx, selection.arm, prepared, selection.escalation)
+	perTarget := stats.perTarget
 	out.Duration = time.Since(started)
-	out.Denials = denials
+	out.Denials = stats.denials
+	out.Rounds = stats.rounds
+	out.ToolErrors = stats.toolErrors
 	if routed, ok := selection.escalation.(*escalator); ok {
 		out.Target = routed.finalTarget(selection.arm)
 		out.Escalations = routed.moves
@@ -293,13 +297,24 @@ func targetOf(cat *catalog.Catalog, id provider.RouteTargetID) provider.RouteTar
 	return target
 }
 
-func (r Runner) attempt(ctx context.Context, arm Arm, prepared *preparedAttempt, esc escalation) (map[provider.RouteTargetID]provider.Usage, int, error) {
+// attemptStats is what an attempt reveals beyond whether it solved the task.
+// Solve rate on a saturated corpus cannot distinguish a run that went straight
+// there from one that wandered for thirty rounds, and the changes worth making
+// to a prompt or a tool schema mostly move the second number.
+type attemptStats struct {
+	perTarget  map[provider.RouteTargetID]provider.Usage
+	denials    int
+	rounds     int
+	toolErrors map[string]int
+}
+
+func (r Runner) attempt(ctx context.Context, arm Arm, prepared *preparedAttempt, esc escalation) (attemptStats, error) {
 	if prepared == nil || prepared.registry == nil {
-		return nil, 0, fmt.Errorf("evaluation request was not assembled")
+		return attemptStats{}, fmt.Errorf("evaluation request was not assembled")
 	}
 	store, err := session.NewStore(prepared.dir + "/.sessions")
 	if err != nil {
-		return nil, 0, err
+		return attemptStats{}, err
 	}
 	revision := ""
 	if r.Catalog != nil {
@@ -307,7 +322,7 @@ func (r Runner) attempt(ctx context.Context, arm Arm, prepared *preparedAttempt,
 	}
 	sess, err := store.Create(prepared.dir, arm.Target.ID(), revision)
 	if err != nil {
-		return nil, 0, err
+		return attemptStats{}, err
 	}
 	defer sess.Close()
 
@@ -352,7 +367,12 @@ func (r Runner) attempt(ctx context.Context, arm Arm, prepared *preparedAttempt,
 	}
 
 	err = loop.TurnMessage(ctx, prepared.opening)
-	return collector.byTarget, asker.denied, err
+	return attemptStats{
+		perTarget:  collector.byTarget,
+		denials:    asker.denied,
+		rounds:     collector.rounds,
+		toolErrors: collector.toolErrors,
+	}, err
 }
 
 // usageCollector attributes each turn's usage to the target that served it,
@@ -361,6 +381,12 @@ type usageCollector struct {
 	agent.NopObserver
 	loop     *agent.Loop
 	byTarget map[provider.RouteTargetID]provider.Usage
+
+	// rounds counts model calls, which is what a turn spends its budget on
+	// and what a stopping change has to move.
+	rounds int
+
+	toolErrors map[string]int
 }
 
 func (c *usageCollector) TurnUsage(u session.Usage) {
@@ -369,6 +395,39 @@ func (c *usageCollector) TurnUsage(u session.Usage) {
 		id = c.loop.Target.ID()
 	}
 	c.byTarget[id] = c.byTarget[id].Add(u.Usage)
+	// One usage record per model call, so this is the round count without the
+	// loop having to report it separately.
+	c.rounds++
+}
+
+func (c *usageCollector) ToolEnd(call provider.ToolUse, _ permission.Request, res tools.Result, _ time.Duration) {
+	if !res.IsError {
+		return
+	}
+	if c.toolErrors == nil {
+		c.toolErrors = map[string]int{}
+	}
+	c.toolErrors[call.Name+"/"+toolErrorClass(res.Content)]++
+}
+
+// toolErrorClass separates a call the model got wrong from a call that ran and
+// failed. They are the same tool and opposite findings: the first is a schema
+// or prompt problem, the second is the task being hard, and a single count
+// per tool would average them into a number that moves for both reasons.
+func toolErrorClass(content string) string {
+	first := strings.ToLower(strings.TrimSpace(content))
+	if i := strings.IndexAny(first, "\n"); i >= 0 {
+		first = first[:i]
+	}
+	switch {
+	case strings.Contains(first, "exactly one"), strings.Contains(first, "retired"),
+		strings.Contains(first, "is not valid"), strings.Contains(first, "cannot unmarshal"),
+		strings.Contains(first, "must be"), strings.Contains(first, "missing"):
+		return "malformed"
+	case strings.Contains(first, "not approved"), strings.Contains(first, "denied"):
+		return "denied"
+	}
+	return "ran-and-failed"
 }
 
 // denyingAsker refuses a request and lets the turn continue, which is what an
