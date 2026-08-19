@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/switchboard-code/switchboard/internal/provider"
+	"github.com/switchboard-code/switchboard/internal/session"
 	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
@@ -157,5 +158,28 @@ func TestFailureCarriesWhatTheSubagentDidAndSuccessDoesNot(t *testing.T) {
 	defer quietDone()
 	if got := quiet.activityReport(); got != "" {
 		t.Errorf("a task with no activity reported %q", got)
+	}
+}
+
+// A user-role message that does not mark itself injected reads as the opening
+// of a turn to session.OpensTurn, which is what /fork, /retry, and blame cut
+// on. An unmarked steer puts a phantom turn boundary inside the errand.
+func TestASteerDoesNotOpenATurn(t *testing.T) {
+	m := NewTaskManager(1)
+	handle, finish := running(t, m, "scout")
+	defer finish()
+
+	if err := m.Steer(handle.id, "look at the handler"); err != nil {
+		t.Fatal(err)
+	}
+	msgs := handle.injectSteering()
+	if len(msgs) != 1 {
+		t.Fatalf("drained %d messages, want 1", len(msgs))
+	}
+	if !msgs[0].Injected {
+		t.Error("a steer must mark itself injected, like everything else on this seam")
+	}
+	if session.OpensTurn(msgs[0]) {
+		t.Error("a steer was mistaken for the start of a turn")
 	}
 }

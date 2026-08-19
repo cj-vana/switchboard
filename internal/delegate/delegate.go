@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/agent"
+	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/provider"
@@ -326,8 +327,12 @@ func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent, 
 	if named != nil {
 		who = named.Name + " on " + tier.ID
 	}
-	trailer := fmt.Sprintf("[delegate %s: %d model calls, %s]",
-		who, state.Calls, time.Since(started).Round(time.Second))
+	spent := ""
+	if state.CostMicroUSD > 0 {
+		spent = ", " + catalog.Money(state.CostMicroUSD).String()
+	}
+	trailer := fmt.Sprintf("[delegate %s: %d model calls, %s%s]",
+		who, state.Calls, time.Since(started).Round(time.Second), spent)
 	trailer = strings.TrimSuffix(trailer, "]") + "; task " + task.Label() + "]"
 
 	switch {

@@ -77,7 +77,14 @@ func (h *TaskHandle) injectSteering() []provider.Message {
 
 	out := make([]provider.Message, 0, len(pending))
 	for _, message := range pending {
-		out = append(out, provider.UserText(steerPrefix+" "+message))
+		// Injected, like everything else that rides this seam. A user-role
+		// message that does not say so reads as the opening of a turn to
+		// session.OpensTurn, which is what /fork, /retry, and blame cut on:
+		// an unmarked steer puts a phantom turn boundary in the middle of the
+		// subagent's errand.
+		steer := provider.UserText(steerPrefix + " " + message)
+		steer.Injected = true
+		out = append(out, steer)
 	}
 	return out
 }

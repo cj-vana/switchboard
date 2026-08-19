@@ -873,6 +873,21 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if m.dlg != nil {
+		// A modal may not swallow the interrupt. Every dialog here returns
+		// before the ctrl+c case below, so a user facing an approval they do
+		// not want to grant — a subagent's, most often, since those arrive
+		// unbidden — had no way out of the turn that raised it. Answering no
+		// on the way past is what makes this safe rather than abrupt: the
+		// loop is waiting on that channel and would otherwise block.
+		if msg.String() == "ctrl+c" {
+			if m.pendingAsk != nil {
+				m.pendingAsk <- permission.Response{}
+			}
+			m.dlg = nil
+			m.pendingAsk = nil
+			m.pendingQuestion = nil
+			return m.interrupt()
+		}
 		done, cmd := m.dlg.update(msg, m.th)
 		if done {
 			m.dlg = nil
