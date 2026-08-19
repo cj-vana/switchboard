@@ -95,6 +95,15 @@ type tuiApp struct {
 
 	// advisor, when non-nil, wraps the watcher as the loop's observer and
 	// feeds the loop's injection point (tui_advisor.go). Nil is off.
+	// pressure is the window occupancy the UI last saw, published for the
+	// loop's goroutine to read at a round boundary. Two goroutines, so a lock;
+	// warned is here rather than in the model because the thing that must not
+	// repeat is the injection, not the render.
+	pressureMu     sync.Mutex
+	pressureTokens int
+	pressureWindow int
+	pressureWarned bool
+
 	advisorMu sync.RWMutex
 	advisor   *advisor.Advisor
 

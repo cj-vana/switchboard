@@ -422,7 +422,8 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 				Content: results,
 			}
 			if successfulTodoResult(results) {
-				if _, err := l.Session.AppendToolResultsWithTasks(resultMessage, continuityTasks(l.Tools.Todos())); err != nil {
+				if _, err := l.Session.AppendToolResultsWithWorking(
+					resultMessage, continuityTasks(l.Tools.Todos()), l.Tools.Working()); err != nil {
 					return err
 				}
 			} else if err := l.Session.AppendMessage(resultMessage); err != nil {

@@ -224,6 +224,31 @@ func DecodeStored(raw []byte) (Capsule, error) {
 // Semantic fields from the latest capsule survive; the task list and immediate
 // next action are the only claims this operation has evidence to replace.
 func WithTasks(current *Capsule, tasks []Task) Capsule {
+	return WithWorking(current, tasks, Working{})
+}
+
+// Working is what the model says about the job beyond its task list: what it
+// is trying to achieve, what it would do next, and what would mean it is
+// finished.
+//
+// These fields have been specified, validated, redacted, bounded, and rendered
+// since the capsule existed, and nothing ever wrote them, so a task list
+// crossed a compaction while the reason for it did not. A model that resumes
+// with five checkboxes and no objective has the shape of the work and none of
+// its point.
+//
+// An empty field leaves what was there. The model updates its list far more
+// often than its objective changes, and a capsule that forgot the objective on
+// every todo call would be worse than one that never had it.
+type Working struct {
+	Objective     string
+	NextAction    string
+	StopCondition string
+}
+
+// WithWorking folds a task list and whatever the model said about the job into
+// the capsule that carries them across a boundary.
+func WithWorking(current *Capsule, tasks []Task, working Working) Capsule {
 	var out Capsule
 	if current != nil && !current.Cleared {
 		out = Clone(*current)
@@ -233,10 +258,28 @@ func WithTasks(current *Capsule, tasks []Task) Capsule {
 	out.Source = SourceTodo
 	out.Cleared = false
 	out.Tasks = append([]Task(nil), tasks...)
-	out.NextAction = ""
+
+	// NextAction is cleared rather than kept because it is the one field a
+	// stale value actively misleads about: it names the very next step, and
+	// the call that changed the list is the moment it stopped being true.
+	out.NextAction = working.NextAction
+	if working.Objective != "" {
+		out.Objective = working.Objective
+	}
+	if working.StopCondition != "" {
+		out.StopCondition = working.StopCondition
+	}
+
+	dropped := map[string]bool{"tasks": true, "next_action": true}
+	if working.Objective != "" {
+		dropped["objective"] = true
+	}
+	if working.StopCondition != "" {
+		dropped["stop_condition"] = true
+	}
 	keptOmissions := out.Omitted[:0]
 	for _, omission := range out.Omitted {
-		if omission != "tasks" && omission != "next_action" {
+		if !dropped[omission] {
 			keptOmissions = append(keptOmissions, omission)
 		}
 	}

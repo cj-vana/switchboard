@@ -539,6 +539,27 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**The capsule's fields are the model's to write, and it is told when they
+matter.** `continuity.Working` and `todo`'s `objective`, `next_action`, and
+`stop_condition` fill fields the capsule specified, validated, redacted,
+bounded, and rendered from the beginning, and that nothing ever set: only
+`Tasks` was written, so a list crossed a compaction while the reason for it did
+not. `WithTasks` is kept as `WithWorking` with an empty `Working` so no
+existing caller changes meaning.
+
+The keep rules are not symmetric and the asymmetry is the point. Objective and
+stop condition persist through a call that omits them, because the list changes
+far more often than the job does. Next action does not, because it names the
+step after this one and the call that changed the list is exactly when it went
+stale. Everything the model writes passes the same redaction the rest of the
+capsule does, since a capsule is durable and is rendered into a later context.
+
+`cmd/sb/tui_pressure.go` is the other half: automatic compaction used to arrive
+with no warning, so the model recorded what would survive only by accident. The
+notice fires once per session at 70 percent, below the compaction threshold on
+purpose — a warning that arrived at the boundary would be advice with no turn
+left to act on it — and says what crosses and what does not.
+
 **A process this program started and forgot is this program's fault.**
 `internal/execution/background.go` reuses `Run`'s body rather than
 reimplementing it, so the confinement is applied by the same code and fails

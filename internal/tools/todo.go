@@ -34,12 +34,43 @@ type TodoItem struct {
 type todoState struct {
 	mu    sync.Mutex
 	items []TodoItem
+
+	// working is what the model last said about the job itself. It is held
+	// here beside the list because the two travel together into the capsule,
+	// and a surface that read one without the other would carry checkboxes
+	// with no reason attached.
+	working continuity.Working
 }
 
 func (s *todoState) set(items []TodoItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.items = append([]TodoItem(nil), items...)
+}
+
+// setWorking replaces the list and folds in whatever the model said about the
+// job. Objective and stop condition persist when the call omits them, because
+// the list changes far more often than the reason for it; next action does not,
+// because a stale one names a step the model has already left behind.
+func (s *todoState) setWorking(items []TodoItem, working continuity.Working) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items = append([]TodoItem(nil), items...)
+	s.working.NextAction = working.NextAction
+	if working.Objective != "" {
+		s.working.Objective = working.Objective
+	}
+	if working.StopCondition != "" {
+		s.working.StopCondition = working.StopCondition
+	}
+}
+
+// Working returns what the model last said about the job, for the agent to
+// fold into the capsule beside the task list.
+func (r *Registry) Working() continuity.Working {
+	r.todos.mu.Lock()
+	defer r.todos.mu.Unlock()
+	return r.todos.working
 }
 
 // Todos returns a snapshot of the current task list. It is safe to call from
@@ -75,7 +106,12 @@ func (t *todoTool) Description() string {
 		"replaces the previous one. Statuses are pending, active, and done, with at most " +
 		"one item active. Use it for work with three or more distinct steps: write the " +
 		"list before starting, mark each step active when you begin it and done when it " +
-		"is finished. Skip it for single-step tasks."
+		"is finished. Skip it for single-step tasks. " +
+		"objective, next_action, and stop_condition are what survives a context boundary " +
+		"with the list: why this work is being done, what you would do next, and what " +
+		"would mean it is finished. Set objective and stop_condition once when the job " +
+		"starts; they are kept until you change them. A list that crosses a boundary " +
+		"without them arrives as checkboxes whose point is gone."
 }
 
 // ParallelSafe is false because each call replaces the whole list, and two
@@ -97,14 +133,20 @@ func (t *todoTool) Schema() json.RawMessage {
         },
         "required": ["text", "status"]
       }
-    }
+    },
+    "objective": {"type": "string", "description": "What this work is for, in a sentence. Kept until changed."},
+    "next_action": {"type": "string", "description": "The single thing you would do next. Cleared on every call that does not set it, because a stale one is worse than none."},
+    "stop_condition": {"type": "string", "description": "What would mean this job is finished. Kept until changed."}
   },
   "required": ["items"]
 }`)
 }
 
 type todoInput struct {
-	Items []TodoItem `json:"items"`
+	Items         []TodoItem `json:"items"`
+	Objective     string     `json:"objective"`
+	NextAction    string     `json:"next_action"`
+	StopCondition string     `json:"stop_condition"`
 }
 
 func (t *todoTool) Plan(input json.RawMessage) (Plan, error) {
@@ -124,7 +166,12 @@ func (t *todoTool) Plan(input json.RawMessage) (Plan, error) {
 	return Plan{
 		Request: permission.Request{Tool: t.Name(), Effect: permission.EffectRead},
 		Run: func(context.Context) (Result, error) {
-			t.r.todos.set(in.Items)
+			working := continuity.Working{
+				Objective:     strings.TrimSpace(in.Objective),
+				NextAction:    strings.TrimSpace(in.NextAction),
+				StopCondition: strings.TrimSpace(in.StopCondition),
+			}
+			t.r.todos.setWorking(in.Items, working)
 			return Result{Content: renderTodos(in.Items)}, nil
 		},
 	}, nil

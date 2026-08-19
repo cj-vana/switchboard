@@ -142,6 +142,24 @@ context window. `/compact preview` reports the messages and estimated tokens
 that would be replaced, the content that remains fixed, and the model that
 will summarize. `[slots] summarizer` assigns a dedicated tier to this work.
 
+### What crosses a context boundary
+
+`todo` carries three fields beside the task list: `objective`, `next_action`,
+and `stop_condition`. They are what the capsule takes across a compaction with
+the list, and they were specified, validated, redacted, bounded, and rendered
+long before anything wrote them, so a continuing model used to inherit
+checkboxes whose point had been left behind.
+
+`objective` and `stop_condition` are kept until changed, because the list moves
+far more often than the reason for it. `next_action` is cleared by every call
+that does not set it: it names the very next step, and the call that changed
+the list is the moment it stopped being true.
+
+When the window passes 70 percent and automatic compaction is on, the model is
+told once that the boundary is coming, what will cross it, and to set those
+fields now while it still has the whole picture. Once per session, not once per
+round: a warning repeated at every boundary is one that stops being read.
+
 ## Session history
 
 | Command | Purpose |

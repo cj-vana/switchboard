@@ -810,6 +810,14 @@ func (s *Session) AppendMessage(m provider.Message) error {
 // the exact todo continuity it produced in one checksummed, synced WAL frame.
 // A torn frame replays neither half; a complete frame replays both.
 func (s *Session) AppendToolResultsWithTasks(m provider.Message, tasks []continuity.Task) (continuity.Capsule, error) {
+	return s.AppendToolResultsWithWorking(m, tasks, continuity.Working{})
+}
+
+// AppendToolResultsWithWorking is the same commit, carrying what the model said
+// about the job alongside its list. The two are one WAL frame for the reason
+// the tasks alone were: a crash between them would leave replay holding a
+// successful tool result and an older belief about the work.
+func (s *Session) AppendToolResultsWithWorking(m provider.Message, tasks []continuity.Task, working continuity.Working) (continuity.Capsule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m = provider.CloneMessage(m)
@@ -824,7 +832,7 @@ func (s *Session) AppendToolResultsWithTasks(m provider.Message, tasks []continu
 		cloned := continuity.Clone(*s.state.Continuity)
 		current = &cloned
 	}
-	next := continuity.WithTasks(current, tasks)
+	next := continuity.WithWorking(current, tasks, working)
 	next.BasisMessages = len(s.state.Messages) + 1
 	prepared, err := continuity.Prepare(next)
 	if err != nil {

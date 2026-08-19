@@ -663,6 +663,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.callTokens = m.estimatedOccupancy()
 			m.callEstimated = m.callTokens > 0
 		}
+		// The loop's goroutine reads this at round boundaries to decide
+		// whether a boundary is close enough to warn about. It is published
+		// here because this is where the number is known, and read through a
+		// lock because the two goroutines are different ones.
+		m.app.publishOccupancy(m.callTokens, m.ctxWindow)
 		return m, nil
 
 	case askMsg:
