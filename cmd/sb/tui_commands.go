@@ -53,6 +53,7 @@ func commands() []commandItem {
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
 		{name: "audit", desc: "check the last turn's claims against what the record says it did", run: cmdAudit},
 		{name: "routing", usage: "[on|off|status]", desc: "whether the policy may move the primary on its own signals", busySafe: true, run: cmdRouting},
+		{name: "destinations", usage: "[<provider>… |any]", desc: "which providers this workspace's turns may reach", busySafe: true, run: cmdDestinations},
 		{name: "workflow", usage: "[list|show <name>|run <name> [args]]", desc: "run a multi-stage subagent script from a file", run: cmdWorkflow},
 		{name: "mode", usage: "[plan|default|acceptEdits|auto|yolo|bypass]", desc: "show or change the permission mode", run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs|turns]", desc: "tokens and cost; rungs reprices the session per rung, turns orders its asks by bill", busySafe: true, run: cmdCost},
@@ -145,7 +146,7 @@ var helpGroups = []struct {
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"files", "search", "diff", "review", "audit", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
 	{"language intelligence", []string{"lsp", "outline", "symbols", "problems", "definition", "references"}},
-	{"safety and reach", []string{"mode", "routing", "workflow", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
+	{"safety and reach", []string{"mode", "routing", "destinations", "workflow", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }
 

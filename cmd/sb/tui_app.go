@@ -225,7 +225,7 @@ func (a *tuiApp) moveTo(ctx context.Context, rank int, why string) (func() bool,
 	_, current := a.runtimeSnapshot()
 	staying := current.Target.Display()
 	probed, client, note, err := a.providers.probeTierFallbackFeasible(ctx, a.config.Tiers[rank], func(candidate config.Tier) error {
-		return checkMoveFeasible(a.loop, a.catalog, a.providers, a.budget, candidate, rank)
+		return checkMoveFeasible(a.loop, a.catalog, a.providers, a.budget, a.config.Destinations, candidate, rank)
 	})
 	if err != nil {
 		a.p.Send(noticeMsg{level: "warn", text: "staying on " + staying + ": " + err.Error()})
@@ -361,7 +361,7 @@ func (a *tuiApp) reopen(ctx context.Context, operation uint64, sourceID, id stri
 		if configured {
 			rank := a.rankOf(tier)
 			probed, client, note, err = a.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
-				return checkResumeFeasible(sess, a.loop, a.catalog, a.providers, a.budget, candidate, rank)
+				return checkResumeFeasible(sess, a.loop, a.catalog, a.providers, a.budget, a.config.Destinations, candidate, rank)
 			})
 		} else {
 			probed, client, err = a.providers.probeTier(ctx, tier)
@@ -376,7 +376,7 @@ func (a *tuiApp) reopen(ctx context.Context, operation uint64, sourceID, id stri
 	}
 }
 
-func checkResumeFeasible(sess *session.Session, loop *agent.Loop, cat *catalog.Catalog, probes *providers, budget *budgetState, tier config.Tier, rank int) error {
+func checkResumeFeasible(sess *session.Session, loop *agent.Loop, cat *catalog.Catalog, probes *providers, budget *budgetState, destinations []string, tier config.Tier, rank int) error {
 	state := sess.State()
 	request := provider.Request{System: loop.System, Tools: loop.Tools.Definitions(), Messages: state.Messages}
 	promptTokens := prefix.RequestTokens(request)
@@ -384,9 +384,13 @@ func checkResumeFeasible(sess *session.Session, loop *agent.Loop, cat *catalog.C
 	remaining, limited := remainingBudget(budget, state.ID,
 		catalog.Money(state.RetryReserveMicroUSD), catalog.Money(state.AccountedCostMicroUSD()))
 	_, err := (route.Heuristic{}).Route(route.Input{
-		Candidates:   []route.Candidate{withLiveVision(candidateForTierContext(tier, rank, cat, promptTokens, contextTokens, 0), probes)},
-		Requirements: route.Requirements{NeedsTools: true, NeedsVision: messagesNeedVision(state.Messages)},
-		Budgets:      route.Budgets{MaxCost: remaining, MaxCostSet: limited}, Pin: tier.ID,
+		Candidates: []route.Candidate{withLiveVision(candidateForTierContext(tier, rank, cat, promptTokens, contextTokens, 0), probes)},
+		Requirements: route.Requirements{
+			NeedsTools:        true,
+			NeedsVision:       messagesNeedVision(state.Messages),
+			ApprovedProviders: destinations,
+		},
+		Budgets: route.Budgets{MaxCost: remaining, MaxCostSet: limited}, Pin: tier.ID,
 	})
 	return err
 }

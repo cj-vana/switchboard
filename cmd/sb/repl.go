@@ -74,7 +74,7 @@ func (r *repl) moveTo(ctx context.Context, rank int, why string) (func() bool, f
 	}
 	tier := r.config.Tiers[rank]
 	probed, client, note, err := r.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
-		return checkMoveFeasible(r.loop, r.catalog, r.providers, r.budget, candidate, rank)
+		return checkMoveFeasible(r.loop, r.catalog, r.providers, r.budget, r.config.Destinations, candidate, rank)
 	})
 	if err != nil {
 		r.out.Notice("warn", "staying on "+r.tier.ID+": "+err.Error())
@@ -307,7 +307,7 @@ func (r *repl) turnPreparedMessage(ctx context.Context, opening provider.Message
 			if err != nil {
 				return fmt.Errorf("the current target cannot serve the turn: %w", err)
 			}
-			if err := checkTurnFeasible(r.loop, r.catalog, r.providers, r.budget, probed, 0, plan, opening); err != nil {
+			if err := checkTurnFeasible(r.loop, r.catalog, r.providers, r.budget, r.config.Destinations, probed, 0, plan, opening); err != nil {
 				return fmt.Errorf("the current target cannot serve the turn: %w", err)
 			}
 			if err := turnCtx.Err(); err != nil {
@@ -685,7 +685,7 @@ func (r *repl) turnOnTier(ctx context.Context, id, prompt string, images []provi
 	plan := prospectiveTurnPlan(r.loop, r.sticky, opening, r.workspace)
 	rank := slices.IndexFunc(r.config.Tiers, func(candidate config.Tier) bool { return candidate.ID == requested.ID })
 	probed, client, note, err := r.providers.probeTierFallbackFeasible(ctx, requested, func(candidate config.Tier) error {
-		return checkTurnFeasible(r.loop, r.catalog, r.providers, r.budget, candidate, rank, plan, opening)
+		return checkTurnFeasible(r.loop, r.catalog, r.providers, r.budget, r.config.Destinations, candidate, rank, plan, opening)
 	})
 	if err != nil {
 		return fmt.Errorf("the requested tier %s cannot serve the turn: %w", id, err)

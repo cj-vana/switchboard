@@ -754,7 +754,7 @@ func TestConcreteTurnFallbackMustPassHardFeasibility(t *testing.T) {
 	// receive a request beyond its own catalogued window.
 	fallback := config.Tier{ID: cfg.Tiers[1].ID, Target: cfg.Tiers[0].Target}
 	plan := turnPlan{PromptTokens: 250_000}
-	err := checkTurnFeasible(loop, cat, nil, nil, fallback, 1, plan, provider.UserText("continue"))
+	err := checkTurnFeasible(loop, cat, nil, nil, nil, fallback, 1, plan, provider.UserText("continue"))
 	if err == nil || !strings.Contains(err.Error(), "holds") {
 		t.Fatalf("oversized fallback feasibility error = %v", err)
 	}

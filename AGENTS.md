@@ -539,6 +539,23 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A destination policy is a requirement, not a preference.** `[routing]
+destinations` and /destinations (`cmd/sb/tui_destinations.go`) fill
+`Requirements.ApprovedProviders`, which the filter has always checked before
+economics and which nothing outside the tests ever set. It has to be filled at
+every seam or it is a rule with a hole: the opening route, a mid-turn move, a
+/tN pin, a retry, and resume all pass the same list, which is why the three
+`check*Feasible` functions take it explicitly rather than reading it from
+somewhere convenient. A preference here would be a policy the escalation
+detector could talk its way past on a bad turn.
+
+The unit is a provider name. "Local only" is a conclusion about where a server
+runs, and a target identity does not state that — an OpenAI-compatible endpoint
+is a laptop or a data centre and the name says neither — so the honest form is
+naming the providers. A policy that leaves no configured rung reachable is
+refused when it is typed, because the router would correctly exclude every rung
+on the next turn and the session would read as broken rather than as governed.
+
 **An audit reads the record, never the code.** /audit (`cmd/sb/tui_audit.go`)
 is the system prompt's oldest unenforced rule given a check: say what you did,
 and do not describe a change you have not made. The closing message is the

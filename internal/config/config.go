@@ -100,6 +100,18 @@ type Config struct {
 	// Read it through RouteAutoOn.
 	RouteAuto *bool
 
+	// Destinations names the providers a turn may be routed to. Empty means
+	// no restriction, which is the default and the only value most workspaces
+	// ever want. It is a hard requirement rather than a preference: the router
+	// checks it before economics, so a workspace that may not talk to a vendor
+	// reports the exclusion as policy and never as a price (§8.1).
+	//
+	// Provider names, not metering classes. "local only" is a conclusion about
+	// where a server runs, and a provider name is the only part of a target
+	// identity this program can state without guessing: an OpenAI-compatible
+	// endpoint may be a laptop or a data centre and the name says neither.
+	Destinations []string
+
 	// Theme is the TUI color theme, persisted so /theme survives a restart.
 	// Empty means the built-in default; the TUI owns what names are valid.
 	Theme string
@@ -321,7 +333,8 @@ type compactEntry struct {
 // routingEntry holds the escalation setting. Auto is a *bool so "absent" and
 // "explicitly off" are different facts: the default is on.
 type routingEntry struct {
-	Auto *bool `toml:"auto,omitempty"`
+	Auto         *bool    `toml:"auto,omitempty"`
+	Destinations []string `toml:"destinations,omitempty"`
 }
 
 // uiEntry holds presentation settings. They live in the config rather than a
@@ -484,6 +497,7 @@ func LoadFile(path string) (*Config, error) {
 		c.CompactAuto = *f.Compact.Auto
 	}
 	c.RouteAuto = f.Routing.Auto
+	c.Destinations = f.Routing.Destinations
 	if f.Compact.AtPercent != 0 {
 		if f.Compact.AtPercent < 50 || f.Compact.AtPercent > 95 {
 			// Below half the window it would compact constantly; above 95 it

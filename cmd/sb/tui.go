@@ -1239,7 +1239,7 @@ func (m *tuiModel) launchOverrideTurn(prompt string, images []provider.Image, ti
 			return result
 		}
 		probed, client, note, err := m.app.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
-			return checkTurnFeasible(m.app.loop, m.app.catalog, m.app.providers, m.app.budget, candidate, rank, plan, opening)
+			return checkTurnFeasible(m.app.loop, m.app.catalog, m.app.providers, m.app.budget, m.app.config.Destinations, candidate, rank, plan, opening)
 		})
 		if err != nil {
 			result.err = fmt.Errorf("the requested tier %s cannot serve the turn: %w", tier.ID, err)
@@ -1368,7 +1368,7 @@ func (m *tuiModel) launchTurn(prompt string, images []provider.Image) tea.Cmd {
 					return result
 				}
 			}
-			if err := checkTurnFeasible(m.app.loop, m.app.catalog, m.app.providers, m.app.budget,
+			if err := checkTurnFeasible(m.app.loop, m.app.catalog, m.app.providers, m.app.budget, m.app.config.Destinations,
 				probed, 0, result.plan, opening); err != nil {
 				result.err = fmt.Errorf("the current target cannot serve the turn: %w", err)
 				return result

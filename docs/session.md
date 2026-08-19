@@ -66,6 +66,8 @@ task asking, so prompts do not overlap or lose their owner.
 | `/context` | Show estimated system, tool, and conversation use separately from provider-reported usage |
 | `/compact [preview]` | Preview or perform context compaction |
 | `/budget 2.50` | Set the persistent dollar ceiling |
+| `/destinations` | Show or set the providers this workspace's turns may reach |
+| `/audit` | Check the finished turn's claims against its record on a second rung |
 | `/estimate <prompt>` | Estimate the next assembled request on every tier |
 | `/cache` | Show the cache belief used by routing |
 | `/doctor` | Run startup, credential, sandbox, tool, and MCP checks |

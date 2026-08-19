@@ -189,7 +189,7 @@ func (m *tuiModel) retryStart(msg retryStartMsg) tea.Cmd {
 				return result
 			}
 			probed, client, note, err := app.providers.probeTierFallbackFeasible(ctx, tier, func(candidate config.Tier) error {
-				return checkTurnFeasible(app.loop, app.catalog, app.providers, app.budget, candidate, rank, plan, opening)
+				return checkTurnFeasible(app.loop, app.catalog, app.providers, app.budget, app.config.Destinations, candidate, rank, plan, opening)
 			})
 			if err != nil {
 				result.err = fmt.Errorf("the requested tier %s cannot serve the turn: %w", tier.ID, err)

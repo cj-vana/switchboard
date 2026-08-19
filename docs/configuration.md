@@ -141,6 +141,11 @@ The `model` value identifies a provider and model. A tier may also set a
 reasoning `effort`, serving `surface`, and ordered `fallback` targets. See
 [Routing and the model ladder](routing.md) for selection and fallback rules.
 
+`[routing] destinations = ["ollama"]` limits every turn in the workspace to the
+named providers. It is a hard requirement checked before cost, so a target it
+excludes is reported as policy rather than price. `/destinations` reads and
+writes it.
+
 ## Profiles
 
 A profile replaces the ladder for one workload while keeping provider slots,

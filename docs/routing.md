@@ -24,8 +24,19 @@ send and routes that request. The inputs include:
 - cache state;
 - the remaining dollar budget, including retry reserve.
 
-A tier that fails a capability, context, availability, or hard-budget check is
-not eligible. A user pin still passes these checks.
+A tier that fails a capability, context, availability, destination-policy, or
+hard-budget check is not eligible. A user pin still passes these checks.
+
+`/destinations ollama anthropic` restricts every turn in the workspace to those
+providers, and `/destinations any` removes the restriction. It is a hard
+requirement rather than a preference: the filter checks it before economics, so
+an excluded target is reported as policy and never as a price, and the same
+check runs on the opening route, on a mid-turn move, on a `/tN` pin, on a
+retry, and on resume. The setting persists as `[routing] destinations` and is
+refused when it would leave no configured rung reachable. The unit is a
+provider name rather than a metering class, because where a server runs is not
+something a target identity states: an OpenAI-compatible endpoint may be a
+laptop or a data centre.
 
 Use `/t3` to pin the session to tier 3. `/tier auto` removes the pin. A command
 such as `/t3 fix the flaky test` runs one prompt on that feasible tier, then

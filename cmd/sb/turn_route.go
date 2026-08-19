@@ -94,7 +94,11 @@ func planUserTurnSkipping(
 			hitProbabilities[fallback.ID()] = caches.HitProbability(fallback, cat, request)
 		}
 	}
-	requirements := route.Requirements{NeedsTools: true, NeedsVision: messagesNeedVision(messages)}
+	requirements := route.Requirements{
+		NeedsTools:        true,
+		NeedsVision:       messagesNeedVision(messages),
+		ApprovedProviders: cfg.Destinations,
+	}
 	budgets := route.Budgets{MaxCost: remaining, MaxCostSet: limited}
 	candidates := make([]route.Candidate, 0, len(cfg.Tiers))
 	for rank, configured := range cfg.Tiers {
@@ -261,7 +265,11 @@ func resolveUserTurn(ctx context.Context, loop *agent.Loop, cfg *config.Config, 
 ) (config.Tier, provider.Provider, string, turnPlan, error) {
 	state := loop.Session.State()
 	messages := append(append([]provider.Message(nil), state.Messages...), opening)
-	requirements := route.Requirements{NeedsTools: true, NeedsVision: messagesNeedVision(messages)}
+	requirements := route.Requirements{
+		NeedsTools:        true,
+		NeedsVision:       messagesNeedVision(messages),
+		ApprovedProviders: cfg.Destinations,
+	}
 	ensureLiveCapabilityEvidence(ctx, cfg, cat, probes, requirements)
 
 	rejected := map[string]string{}
@@ -295,7 +303,7 @@ func resolveUserTurn(ctx context.Context, loop *agent.Loop, cfg *config.Config, 
 			configured = tierWithActiveTargetFirst(configured, current.Target)
 		}
 		probed, client, note, err := probes.probeTierFallbackFeasible(ctx, configured, func(candidate config.Tier) error {
-			return checkTurnFeasible(loop, cat, probes, budget, candidate, rank, plan, opening)
+			return checkTurnFeasible(loop, cat, probes, budget, cfg.Destinations, candidate, rank, plan, opening)
 		})
 		if err != nil {
 			rejected[tier.ID] = fmt.Sprintf("tier %s was rejected after live feasibility checking: %v", tier.ID, err)
@@ -356,7 +364,7 @@ func messagesNeedVision(messages []provider.Message) bool {
 // that the destination would receive on its next call. Mid-turn evidence is a
 // quality preference, never permission to overflow context, lose image
 // fidelity, or cross a hard budget.
-func checkMoveFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers, budget *budgetState, tier config.Tier, rank int) error {
+func checkMoveFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers, budget *budgetState, destinations []string, tier config.Tier, rank int) error {
 	state := loop.Session.State()
 	request := provider.Request{
 		System: loop.System, Tools: loop.Tools.Definitions(), Messages: state.Messages,
@@ -366,10 +374,14 @@ func checkMoveFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers
 	remaining, limited := remainingBudget(budget, state.ID,
 		catalog.Money(state.RetryReserveMicroUSD), catalog.Money(state.AccountedCostMicroUSD()))
 	_, err := (route.Heuristic{}).Route(route.Input{
-		Candidates:   []route.Candidate{withLiveVision(candidateForTierContext(tier, rank, cat, promptTokens, contextTokens, 0), probes)},
-		Requirements: route.Requirements{NeedsTools: true, NeedsVision: messagesNeedVision(state.Messages)},
-		Budgets:      route.Budgets{MaxCost: remaining, MaxCostSet: limited},
-		Pin:          tier.ID,
+		Candidates: []route.Candidate{withLiveVision(candidateForTierContext(tier, rank, cat, promptTokens, contextTokens, 0), probes)},
+		Requirements: route.Requirements{
+			NeedsTools:        true,
+			NeedsVision:       messagesNeedVision(state.Messages),
+			ApprovedProviders: destinations,
+		},
+		Budgets: route.Budgets{MaxCost: remaining, MaxCostSet: limited},
+		Pin:     tier.ID,
 	})
 	return err
 }
@@ -379,7 +391,7 @@ func checkMoveFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers
 // fallbacks: availability substitution stays inside a tier, but it may have a
 // smaller context window, no vision, or a different price than the configured
 // primary the router originally selected.
-func checkTurnFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers, budget *budgetState, tier config.Tier, rank int, plan turnPlan, opening provider.Message) error {
+func checkTurnFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers, budget *budgetState, destinations []string, tier config.Tier, rank int, plan turnPlan, opening provider.Message) error {
 	state := loop.Session.State()
 	remaining, limited := remainingBudget(budget, state.ID,
 		catalog.Money(state.RetryReserveMicroUSD), catalog.Money(state.AccountedCostMicroUSD()))
@@ -387,8 +399,9 @@ func checkTurnFeasible(loop *agent.Loop, cat *catalog.Catalog, probes *providers
 	_, err := (route.Heuristic{}).Route(route.Input{
 		Candidates: []route.Candidate{withLiveVision(candidateForTierContext(tier, rank, cat, plan.PromptTokens, plan.ContextTokens, 0), probes)},
 		Requirements: route.Requirements{
-			NeedsTools:  true,
-			NeedsVision: messagesNeedVision(messages),
+			NeedsTools:        true,
+			NeedsVision:       messagesNeedVision(messages),
+			ApprovedProviders: destinations,
 		},
 		Budgets: route.Budgets{MaxCost: remaining, MaxCostSet: limited},
 		Pin:     tier.ID,

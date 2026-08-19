@@ -183,11 +183,15 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
-	if !c.RouteAutoOn() {
-		off := false
+	if !c.RouteAutoOn() || len(c.Destinations) > 0 {
+		entry := routingEntry{Destinations: c.Destinations}
+		if !c.RouteAutoOn() {
+			off := false
+			entry.Auto = &off
+		}
 		if err := encode(&buf, struct {
 			Routing routingEntry `toml:"routing"`
-		}{routingEntry{Auto: &off}}); err != nil {
+		}{entry}); err != nil {
 			return nil, err
 		}
 		buf.WriteString("\n")
