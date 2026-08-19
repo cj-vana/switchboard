@@ -157,3 +157,22 @@ func TestReportingDriftLeavesTheStaleCheckArmed(t *testing.T) {
 		t.Error("the edit was allowed after the file moved; the notice disarmed the guarantee")
 	}
 }
+
+// A race arm branches a fresh registry so its reads establish their own
+// provenance. It must also start with nothing to be drifting, or an arm would
+// inherit a claim about files it never read.
+func TestABranchedRegistryTracksNoDrift(t *testing.T) {
+	r, root := driftRegistry(t)
+	path := filepath.Join(root, "shared.txt")
+	write(t, path, "before")
+	readFile(t, r, "shared.txt")
+	write(t, path, "after")
+
+	branch := r.Branch(nil)
+	if drifted := branch.DriftedReads(); len(drifted) != 0 {
+		t.Errorf("a branch inherited drift for a file it never read: %+v", drifted)
+	}
+	if drifted := r.DriftedReads(); len(drifted) != 1 {
+		t.Errorf("the primary lost its own drift: %+v", drifted)
+	}
+}

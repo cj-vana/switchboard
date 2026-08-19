@@ -556,6 +556,15 @@ and the sweep is capped and sorted so a capped run covers the same files each
 time. And a change is reported once until it moves again, because the same
 sentence every round is noise a model learns to skip.
 
+Where it does not reach is decided rather than accidental. Only the TUI sets
+`Loop.Inject` (`cmd/sb/tui.go`), so the REPL has no round-boundary injection at
+all and the drift notice reaches it no more than the advisor or a /watch report
+does. Race arms and delegate subagents branch a fresh registry, whose version
+map starts empty, and neither is given an injection seam: an arm must stay
+byte-identical upstream, and a notice injected into one would be the first
+thing to break that. Both facts are load-bearing for the next person wiring an
+inject.
+
 **A standing rule is narrower than a mode, and weaker than a seen answer.**
 `[[permissions]]` (`internal/config/permissions.go`) fills the rule list the
 engine has always taken and only MCP allow lists ever supplied. It is the

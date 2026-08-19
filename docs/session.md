@@ -279,7 +279,8 @@ it re-reads before composing an edit rather than learning at the refusal. The
 sweep stats what it tracks and hashes only a file whose size or timestamp
 moved, covers at most 128 files, reports a change once until it changes again,
 and names a file too large to re-hash as touched rather than claiming it
-differs. The write and edit stale check is unchanged: a notice is not evidence
+differs. Like advisor advice and watch reports, it reaches the model through
+the TUI's round-boundary seam, so the REPL does not carry it. The write and edit stale check is unchanged: a notice is not evidence
 the model read it, so the guarantee stays where it was.
 
 `/watch <command>` arms a user-selected verifier. It runs after edit rounds and

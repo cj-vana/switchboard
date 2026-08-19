@@ -28,6 +28,7 @@ one. It does not prove that another product lacks an internal mechanism.
 | Terminal workbench | Searchable command palette, revision-aware file and literal search, exact Git diff, and built-in semantic LSP views | Terminal and IDE surfaces divide this work differently; integration breadth varies |
 | Verification | User-armed watch, turn bisect, paired races, a second-rung audit of a turn's claims against its record, and a router evaluation gate | Hooks and test commands are common; no equivalent combined surface found |
 | Command safety | Sandbox off by default; opt-in verified confinement; explicit yolo mode for unconfined host access | Products expose sandbox or approval modes with different guarantees |
+| Standing permissions | Rules in the user's own file, refused when they reach as wide as a mode, yielding to a credential-bearing request, and answerable offline with `sb permissions -- <command>` under a stated scope | Persisted allowlists are common; no comparable dry-run with a stated coverage boundary was found |
 | CLI discovery | Static help before config or extension discovery; generated completion follows the dispatcher's closed grammar | Help and completion depth vary by product and release |
 | Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP with server-initiated elicitation, hooks, and one subagent level with up to four independent calls in an all-delegate batch | The reviewed guides list skill, plugin, provider, and LSP surfaces that Switchboard does not yet match; this review did not rank ecosystems |
 | Computer control | macOS Accessibility tool under the normal permission engine | Hosted or API computer-use surfaces exist; terminal integration varies |
@@ -90,6 +91,13 @@ file. A surviving line can therefore be attributed to a session, turn, tier,
 target, and prompt. Lines created by a shell, formatter, hand edit, or work
 that predates the logs remain unknown. `/recap`, `/find`, `/changes`, and
 `/mistakes` expose other parts of the same record.
+
+Files the model read are watched for change by anything other than its own
+write and edit calls, and the drift is reported at the next round boundary
+rather than at the refusal a later edit would hit. The sweep uses the hashes
+the stale check already keeps, stats before it hashes, is twice bounded, and
+never refreshes what the model was shown, so the refusal it anticipates still
+stands.
 
 `/audit` reads the turn that just finished on a second rung: the closing
 message is the claim, the recorded tool calls with their results and the

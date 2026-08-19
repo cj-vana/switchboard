@@ -88,6 +88,7 @@ verification, and the model ladder in one terminal.
 | Edit against known state | Writes publish atomically. Edit and undo compare the expected file state immediately before publication and refuse a mismatch already present |
 | Verify and recover | `/watch`, `/bisect`, `/undo`, `/fork`, and `/retry` keep test evidence and recovery attached to the session record |
 | Check what a turn claimed | `/audit` reads the finished turn on a second rung and reports where the closing message and the record disagree |
+| Stop re-answering the same prompt | `[[permissions]]` holds standing rules; `/permissions` lists them and `sb permissions -- <command>` says what they answer |
 | Explain the route | `/why`, `/estimate`, `/budget`, `/race`, and `/blame` connect model choice, cost, and surviving code |
 | Continue after a boundary | Bounded, redacted continuity capsules carry recorded todo state and the next action once across restart, fork, retry, or compaction without rewriting the visible conversation |
 
