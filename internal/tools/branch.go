@@ -27,7 +27,7 @@ func (r *Registry) Branch(refuse map[string]string) *Registry {
 		root:       r.root,
 		capability: r.capability,
 		execution:  r.execution,
-		versions:   &fileVersions{seen: map[string]string{}, whole: map[string]string{}},
+		versions:   newFileVersions(),
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 		// No checkpointer: a branch is read-only by policy, and an undo

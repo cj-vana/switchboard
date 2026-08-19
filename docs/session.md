@@ -272,6 +272,16 @@ the exec tool are outside this record.
 
 ### Watch
 
+Files the model read are watched for change by anything other than its own
+write and edit calls: a formatter, a shell command, a branch switch, the user's
+own editor. At the next round boundary the model is told which files moved, so
+it re-reads before composing an edit rather than learning at the refusal. The
+sweep stats what it tracks and hashes only a file whose size or timestamp
+moved, covers at most 128 files, reports a change once until it changes again,
+and names a file too large to re-hash as touched rather than claiming it
+differs. The write and edit stale check is unchanged: a notice is not evidence
+the model read it, so the guarantee stays where it was.
+
 `/watch <command>` arms a user-selected verifier. It runs after edit rounds and
 again at turn end. Only a changed result is reported: a new failure or a
 transition from red to green. The current status remains visible even when the

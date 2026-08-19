@@ -158,7 +158,7 @@ func NewRegistryWithExecution(workspace string, controller *execution.Controller
 		root:       root,
 		capability: controller.Capability(),
 		execution:  controller,
-		versions:   &fileVersions{seen: map[string]string{}, whole: map[string]string{}},
+		versions:   newFileVersions(),
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 	}
@@ -269,6 +269,19 @@ type fileVersions struct {
 	mu   sync.Mutex
 	seen map[string]string
 
+	// stamps is what the file looked like on disk when it was read: size and
+	// modification time, so a drift sweep can rule a file out with a stat
+	// instead of a read. It is a cheap gate and never evidence on its own —
+	// a stamp that differs sends the file to be hashed, and the hash decides.
+	stamps map[string]readStamp
+
+	// reported remembers what drift has already been announced, so the same
+	// change is not reported at every round boundary. Deliberately separate
+	// from seen: seen is what the model was shown and is write and edit's
+	// evidence, and a reporter that refreshed it would disarm the refusal
+	// that catches this at the point it matters most.
+	reported map[string]string
+
 	// whole records the hash of content the model received complete: a full
 	// read, uncapped. It backs the read tool's re-injection skip (§6.7) and
 	// is deliberately narrower than seen — a partial read updates seen for
@@ -277,10 +290,28 @@ type fileVersions struct {
 	whole map[string]string
 }
 
+// newFileVersions is the one place these maps are made, because there are two
+// construction sites and a forgotten map here is a nil-map panic on the first
+// read rather than an obvious mistake at the call.
+func newFileVersions() *fileVersions {
+	return &fileVersions{
+		seen:     map[string]string{},
+		whole:    map[string]string{},
+		stamps:   map[string]readStamp{},
+		reported: map[string]string{},
+	}
+}
+
 func (v *fileVersions) record(path, hash string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.seen[path] = hash
+	delete(v.reported, path)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		v.stamps[path] = readStamp{size: info.Size(), modTime: info.ModTime()}
+	} else {
+		delete(v.stamps, path)
+	}
 }
 
 func (v *fileVersions) get(path string) (string, bool) {
@@ -295,6 +326,8 @@ func (v *fileVersions) forget(path string) {
 	defer v.mu.Unlock()
 	delete(v.seen, path)
 	delete(v.whole, path)
+	delete(v.stamps, path)
+	delete(v.reported, path)
 }
 
 func (v *fileVersions) forgetAll() {
@@ -302,6 +335,8 @@ func (v *fileVersions) forgetAll() {
 	defer v.mu.Unlock()
 	v.seen = map[string]string{}
 	v.whole = map[string]string{}
+	v.stamps = map[string]readStamp{}
+	v.reported = map[string]string{}
 }
 
 func (v *fileVersions) recordWhole(path, hash string) {

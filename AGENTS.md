@@ -539,6 +539,23 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**Read drift is reported, and the refusal it anticipates still stands.**
+`internal/tools/drift.go` sweeps the hashes the registry already keeps for
+write and edit's stale check and says, at the round boundary /watch and the
+advisor use, which read files moved without a write or edit call of the
+model's own. The evidence is entirely what was already there; what is new is
+saying it a round before the refusal does.
+
+Three things keep it honest. It never mutates `seen`: that map is what the
+model was shown and is the stale check's evidence, so the reporter keeps its
+own `reported` map and a refreshed one would disarm the guarantee at the point
+it matters most. It is stat-first and twice bounded, because it runs on the
+loop's goroutine between rounds — a file whose size and mtime match is never
+opened, one over the hash cap is reported as touched rather than as differing,
+and the sweep is capped and sorted so a capped run covers the same files each
+time. And a change is reported once until it moves again, because the same
+sentence every round is noise a model learns to skip.
+
 **A standing rule is narrower than a mode, and weaker than a seen answer.**
 `[[permissions]]` (`internal/config/permissions.go`) fills the rule list the
 engine has always taken and only MCP allow lists ever supplied. It is the
