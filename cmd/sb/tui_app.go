@@ -99,6 +99,10 @@ type tuiApp struct {
 	// loop's goroutine to read at a round boundary. Two goroutines, so a lock;
 	// warned is here rather than in the model because the thing that must not
 	// repeat is the injection, not the render.
+	// rules are the repository's path-scoped instructions, loaded once at
+	// assembly. Nil when the checkout declares none, which is most of them.
+	rules *ruleSet
+
 	pressureMu     sync.Mutex
 	pressureTokens int
 	pressureWindow int

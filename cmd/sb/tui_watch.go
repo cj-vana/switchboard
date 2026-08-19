@@ -156,6 +156,7 @@ func (a *tuiApp) inject() []provider.Message {
 	out = append(out, a.driftRound()...)
 	out = append(out, a.pressureRound()...)
 	out = append(out, a.toolImageRound()...)
+	out = append(out, a.ruleRound()...)
 	for i := range out {
 		out[i].Injected = true
 	}

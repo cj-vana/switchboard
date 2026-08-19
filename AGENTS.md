@@ -539,6 +539,31 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**Project instructions compose, under one budget, general to specific.**
+`internal/agent/instructions.go` reads the user's own file from three roots,
+then every directory from the repository root down to the workspace, one file
+per directory with an override sibling after it. The old reader took the
+workspace root's first hit and sliced it at a byte, which could hand the model
+half a character; truncation now cuts on a line and the budget is spent
+specific-first, because dropping a package's own rules to keep a user's
+defaults is exactly backwards. Whatever did not fit is named.
+
+A whole-line `@path` imports, bounded to two hops with cycles named. A mention
+inside a sentence is prose — a reader that spliced on every `@` would import an
+email address. A repository's import may not resolve outside the workspace, and
+there is no command substitution, which is the /watch refusal again: opening a
+checkout must not execute anything.
+
+`.switchboard/rules/*.md` (`cmd/sb/rules.go`) is the conditional half. A rule
+names paths and is injected at a round boundary the first time the session
+touches one, once each and capped per session. What counts as touching is the
+registry's read set and the recorder's captured mutations, which is the
+absent-not-guessed rule applied here rather than an inference about what the
+turn is for. They are messages and never system blocks, so the frozen zone
+stays byte-identical. The limit is stated rather than glossed: a rule fires
+after the read or write, so it cannot prevent one — that is what hooks and the
+permission engine are for.
+
 **A picture from an external tool rides a message, never a tool result.**
 `internal/tools/toolimages.go` queues what the MCP bridge decoded and
 `cmd/sb/tui_toolimages.go` delivers it at the round boundary as an injected

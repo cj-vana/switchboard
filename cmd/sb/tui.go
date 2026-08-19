@@ -364,6 +364,7 @@ func runTUI(
 	skillList []skills.Skill,
 	onboarded bool,
 	questions *questionRelay,
+	rules *ruleSet,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -383,6 +384,7 @@ func runTUI(
 
 	obs := &tuiObserver{}
 	app := &tuiApp{
+		rules:       rules,
 		loop:        loop,
 		store:       store,
 		config:      cfg,

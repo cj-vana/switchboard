@@ -241,6 +241,11 @@ func run() error {
 	// found the tool is absent, keeping the schemas byte-identical.
 	skillList, skillNotes := addSkills(registry, workspace, pluginSkillRoots...)
 
+	// Path-scoped rules load with the skills, and for the same reason they
+	// need no trust grant: nothing executes at read time, and a rule is a
+	// prompt whose effects pass the permission engine on their own merits.
+	ruleSetForSession, ruleNotes := loadRules(workspace)
+
 	// The trust store is opened before MCP assembly because it is what
 	// decides whether a repository's declared servers may start.
 	trustStore, trustErr := trust.Open()
@@ -282,6 +287,9 @@ func run() error {
 	// this program started and then forgot is this program's fault, and the
 	// exit is the last moment it can still be sure the group is its own.
 	defer registry.StopBackgroundCommands()
+	for _, n := range ruleNotes {
+		mcpEnv.add(mcpNote{"warn", n})
+	}
 	for _, n := range nativePolicyNotes {
 		mcpEnv.add(n)
 	}
@@ -401,7 +409,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, lspServer, lspNote, undoRec, agents, agentNotes, budget, skillList, onboarded, questions)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, lspServer, lspNote, undoRec, agents, agentNotes, budget, skillList, onboarded, questions, ruleSetForSession)
 	}
 
 	// With -output json, stdout carries exactly one JSON line and nothing

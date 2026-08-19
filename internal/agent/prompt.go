@@ -2,8 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -61,39 +59,4 @@ func SystemPrompt(workspace string, mode permission.Mode, capability execution.C
 		blocks = append(blocks, provider.Text{Text: "\n" + inst})
 	}
 	return blocks
-}
-
-// maxInstructionBytes caps what a project file can add to the frozen zone.
-// The prompt is paid for on every cold cache, and a repository that writes a
-// novel into AGENTS.md should not silently triple every request.
-const maxInstructionBytes = 16 << 10
-
-// instructionFiles are consulted in order and the first hit wins. AGENTS.md
-// is the convention this project itself follows; CLAUDE.md is honored because
-// repositories that have one mean it as agent instructions, whoever the agent.
-var instructionFiles = []string{"AGENTS.md", "CLAUDE.md"}
-
-// ProjectInstructions reads the workspace's agent instructions, if any. They
-// go in the frozen zone as their own block: stable for the session, cacheable,
-// and separate from the tool rules so a truncation cannot eat those.
-func ProjectInstructions(workspace string) (string, bool) {
-	for _, name := range instructionFiles {
-		data, err := os.ReadFile(filepath.Join(workspace, name))
-		if err != nil || len(strings.TrimSpace(string(data))) == 0 {
-			continue
-		}
-		text := string(data)
-		truncated := false
-		if len(text) > maxInstructionBytes {
-			text = text[:maxInstructionBytes]
-			truncated = true
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Project instructions from %s (maintained by the project, follow them):\n\n%s", name, text)
-		if truncated {
-			fmt.Fprintf(&b, "\n\n[%s truncated at %d bytes]", name, maxInstructionBytes)
-		}
-		return b.String(), true
-	}
-	return "", false
 }

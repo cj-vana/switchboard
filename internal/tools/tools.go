@@ -132,6 +132,21 @@ func (r *Registry) ForgetVersions(paths []string) {
 // fresh context write files it has never seen.
 func (r *Registry) ForgetAllVersions() { r.versions.forgetAll() }
 
+// ReadPaths lists the files the model has read this session, absolute and
+// sorted. It is the same evidence the stale check and the drift sweep use: a
+// surface asking what the session has touched should not get a second, subtly
+// different answer.
+func (r *Registry) ReadPaths() []string {
+	r.versions.mu.Lock()
+	defer r.versions.mu.Unlock()
+	out := make([]string, 0, len(r.versions.seen))
+	for path := range r.versions.seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // recordUndo is called by mutating tools before they touch a file.
 func (r *Registry) recordUndo(abs string) {
 	if r.checkpoints != nil {

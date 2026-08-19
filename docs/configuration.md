@@ -162,6 +162,49 @@ Start it with `sb -profile review`. `/tiers` reports the active profile. Tier
 changes made through `/models` are saved to that profile, while global settings
 such as theme and budget remain global.
 
+## Project instructions
+
+`AGENTS.md` and `CLAUDE.md` compose rather than winning outright. Switchboard
+reads, in order: the user's own file under `~/.switchboard`, `~/.agents`, and
+`~/.claude`; then each directory from the repository root down to the working
+directory. The last word belongs to the file closest to the work. One file per
+directory is read, `AGENTS.md` first, because a directory holding both means
+them as one set. An uncommitted `AGENTS.override.md` or `CLAUDE.local.md`
+sibling is read after the file it shadows, so a developer can add a local rule
+without editing a checked-in one.
+
+A line that is exactly `@path` is replaced by that file, up to two hops, with
+cycles and unreadable targets named rather than skipped. A mention inside a
+sentence is prose, not an import. A repository's import may not resolve outside
+the workspace. There is no command substitution and there will not be: a
+checkout must not get a command executed by the act of being opened.
+
+Everything shares one 16 KiB budget. When it binds, the most general layer is
+dropped first so the package's own rules survive the repository's, truncation
+cuts on a line boundary and never mid-character, and whatever did not fit is
+named in the prompt.
+
+`.switchboard/rules/*.md` carry instructions that cost nothing until they are
+relevant:
+
+```markdown
+---
+paths: migrations/*, db/schema.sql
+---
+Never edit a migration that has already shipped. Add a new one.
+```
+
+A rule is delivered at a round boundary the first time the session reads or
+writes a path it names, once per session, at most eight per session. What
+counts as touching is the recorded read set and the checkpoint recorder's
+captured mutations, never a guess about what a turn is about. Rules are
+messages and never system blocks, so the frozen zone stays byte-identical.
+
+The limit is worth stating plainly: a rule fires after the model has read or
+written the file, so a rule that should have prevented an edit arrives after
+it. This is for "when you touch these, remember X"; a guard is what hooks and
+the permission engine are for.
+
 ## Standing permission rules
 
 `[[permissions]]` holds the answers you have already given, so the same command
