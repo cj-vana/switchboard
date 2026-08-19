@@ -539,6 +539,18 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A scripted run streams what the loop reported, and nothing else.**
+`-output stream-json` (`cmd/sb/headless_stream.go`) wraps the renderer rather
+than replacing it, so the transcript a person reads keeps going to stderr while
+stdout carries the machine's copy. Every line is one complete JSON object with
+a `type`, written under a lock because tool callbacks are concurrent in a
+parallel-safe batch and two events interleaved mid-line parse as neither. The
+last line is always the `result` object `-output json` already printed, tagged:
+a consumer that wants the outcome reads the last line, and one written against
+`-output json` needs no rewriting. The observer invents no events — it is a
+rendering of the loop's stream, so a vocabulary that grew here without a
+matching observer callback would be reporting something nobody observed.
+
 **The capsule's fields are the model's to write, and it is told when they
 matter.** `continuity.Working` and `todo`'s `objective`, `next_action`, and
 `stop_condition` fill fields the capsule specified, validated, redacted,

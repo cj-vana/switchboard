@@ -30,6 +30,7 @@ one. It does not prove that another product lacks an internal mechanism.
 | Command safety | Sandbox off by default; opt-in verified confinement; explicit yolo mode for unconfined host access | Products expose sandbox or approval modes with different guarantees |
 | Standing permissions | Rules in the user's own file, refused when they reach as wide as a mode, yielding to a credential-bearing request, and answerable offline with `sb permissions -- <command>` under a stated scope | Persisted allowlists are common; no comparable dry-run with a stated coverage boundary was found |
 | CLI discovery | Static help before config or extension discovery; generated completion follows the dispatcher's closed grammar | Help and completion depth vary by product and release |
+| Scripting | `-output json` for one result object, `-output stream-json` for typed events as they happen, with a stable last line and exit codes a script can branch on | Streaming JSON output is common; the coverage and stability of the event vocabulary vary |
 | Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP with server-initiated elicitation, hooks, and one subagent level with up to four independent calls in an all-delegate batch | The reviewed guides list skill, plugin, provider, and LSP surfaces that Switchboard does not yet match; this review did not rank ecosystems |
 | Computer control | macOS Accessibility tool under the normal permission engine | Hosted or API computer-use surfaces exist; terminal integration varies |
 

@@ -113,12 +113,12 @@ func run() error {
 
 	switch opts.output {
 	case "", "text":
-	case "json":
+	case "json", "stream-json":
 		if opts.prompt == "" {
-			return errors.New("-output json reports one completed prompt, so it needs -p")
+			return fmt.Errorf("-output %s reports one completed prompt, so it needs -p", opts.output)
 		}
 	default:
-		return fmt.Errorf("unknown output format %q: text or json", opts.output)
+		return fmt.Errorf("unknown output format %q: text, json, or stream-json", opts.output)
 	}
 
 	ctx := context.Background()
@@ -408,7 +408,10 @@ func run() error {
 	// else; the transcript still renders, on stderr, so a person watching a
 	// scripted run sees the work happen.
 	outDest := os.Stdout
-	if opts.output == "json" {
+	if opts.output == "json" || opts.output == "stream-json" {
+		// stdout belongs to the machine-readable stream; the transcript a
+		// person reads keeps going, on stderr, so a run can be watched and
+		// consumed at once.
 		outDest = os.Stderr
 	}
 	out := newRenderer(outDest)
@@ -434,7 +437,13 @@ func run() error {
 		// the reason rather than reading an answer out of the pipe.
 		questions.set(&terminalQuestioner{in: in, out: out})
 	}
-	loop.SetObserver(out)
+	var observer agent.Observer = out
+	if opts.output == "stream-json" {
+		stream := newStreamObserver(os.Stdout, out)
+		stream.writeStreamInit(sess.ID(), tier.ID, string(tier.Target.ID()), string(mode))
+		observer = stream
+	}
+	loop.SetObserver(observer)
 	subagentForward.set(out)
 
 	r := &repl{
@@ -483,13 +492,21 @@ func run() error {
 			return err
 		}
 		err := r.once(ctx, opts.prompt)
-		if opts.output == "json" {
+		if opts.output == "json" || opts.output == "stream-json" {
 			rep := buildHeadlessReport(loop.Session.State(), cat, r.tier, err)
 			rep.PermissionMode = string(loop.Perms.Mode())
 			rep.Sandbox = string(loop.Perms.Execution().SandboxMode())
 			rep.ExecutionPosture = loop.Perms.Execution().Summary()
 			rep.FullHostAccess = !loop.Perms.Execution().SandboxActive()
-			if wErr := writeHeadlessReport(os.Stdout, rep); wErr != nil {
+			wErr := writeHeadlessReport(os.Stdout, rep)
+			if opts.output == "stream-json" {
+				// The same report, tagged, as the stream's last line: a
+				// consumer reading the stream recognizes the end without
+				// counting, and one reading only the last line gets what
+				// -output json would have given it.
+				wErr = writeStreamResult(os.Stdout, rep)
+			}
+			if wErr != nil {
 				return wErr
 			}
 		}

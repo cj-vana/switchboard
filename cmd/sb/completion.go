@@ -49,7 +49,7 @@ var completionArguments = map[string][]string{
 var completionFlagValues = map[string][]string{
 	"-mode":    {"plan", "default", "acceptEdits", "auto", "yolo", "bypass"},
 	"-sandbox": {"off", "on", "auto"},
-	"-output":  {"text", "json"},
+	"-output":  {"text", "json", "stream-json"},
 	"-think":   {"low", "medium", "high", "max"},
 }
 

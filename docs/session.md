@@ -422,6 +422,21 @@ approvals still fail closed in a headless bypass run.
 goes to stderr. The object contains the result, outcome, final tier and target,
 tokens, and a cost object with separate local, plan, and dollar forms.
 
+`-output stream-json` writes one JSON object per line as the run happens, so a
+script can watch progress instead of waiting for the end and then parsing
+English. Every line is complete and carries a `type`: `init` names the session,
+rung, target, and permission mode before anything runs; `text` and `thinking`
+carry the model's output as it streams; `tool_start` and `tool_end` name the
+tool, its display detail, its effect, whether it failed, and how long it took;
+`notice` carries what the run needed to say; `usage` carries what a call
+consumed. The last line is always `type: "result"` holding exactly the object
+`-output json` prints, so a consumer that only wants the outcome reads the last
+line and one written against `-output json` needs no rewriting. Nothing is
+emitted that the loop did not report.
+
+The exit status is the same either way: 0 for a completed run, 1 for an error,
+2 for a usage mistake, and 130 for an interruption.
+
 `sb -sessions` lists recorded sessions. `-resume` and `-continue` reopen one
 after a script exits or a process crashes.
 
