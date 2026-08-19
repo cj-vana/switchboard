@@ -14,7 +14,7 @@ import (
 // assembly. Help and completion tests pin this list to commandHelp.
 var completionSubcommands = []string{
 	"auth", "update", "doctor", "cost", "find", "stats", "races", "blame",
-	"mistakes", "ladder", "recap", "export", "plugins", "mcp", "completion", "help",
+	"mistakes", "ladder", "recap", "export", "plugins", "mcp", "permissions", "completion", "help",
 }
 
 // completionFlags is every flag the main flag set registers. -h and --help

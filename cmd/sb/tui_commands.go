@@ -75,6 +75,7 @@ func commands() []commandItem {
 		{name: "mcp", usage: "[list|inspect|enable|disable] [server]", desc: "connected servers or native MCP activation", busySafe: true, run: cmdMCP},
 		{name: "plugins", usage: "[list|inspect|install|enable|disable|trust|untrust] [plugin]", desc: "native plugin inventory and Switchboard activation", run: cmdPlugins},
 		{name: "hooks", desc: "commands that run around each tool call", busySafe: true, run: cmdHooks},
+		{name: "permissions", desc: "the standing rules that answer without asking", busySafe: true, run: cmdPermissions},
 		{name: "tasks", usage: "[cancel <id>]", desc: "running and completed delegate tasks; cancel one without stopping the rest", busySafe: true, run: cmdTasks},
 		{name: "agents", desc: "named subagents the model can delegate to", busySafe: true, run: cmdAgents},
 		{name: "skills", desc: "discovered instruction packs, origins, and invocation status", busySafe: true, run: cmdSkills},
@@ -146,7 +147,7 @@ var helpGroups = []struct {
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"files", "search", "diff", "review", "audit", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
 	{"language intelligence", []string{"lsp", "outline", "symbols", "problems", "definition", "references"}},
-	{"safety and reach", []string{"mode", "routing", "destinations", "workflow", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
+	{"safety and reach", []string{"mode", "permissions", "routing", "destinations", "workflow", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
 }
 

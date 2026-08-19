@@ -162,6 +162,59 @@ Start it with `sb -profile review`. `/tiers` reports the active profile. Tier
 changes made through `/models` are saved to that profile, while global settings
 such as theme and budget remain global.
 
+## Standing permission rules
+
+`[[permissions]]` holds the answers you have already given, so the same command
+is not asked about on every run:
+
+```toml
+[[permissions]]
+decision = "allow"
+tool = "exec"
+argv_prefix = ["go", "test"]
+
+[[permissions]]
+decision = "deny"
+tool = "exec"
+argv_prefix = ["rm", "-rf"]
+```
+
+Fields are `decision` (`allow`, `deny`, or `ask`), `tool`, `effect` (`read`,
+`write`, `execute`, `external`), `path`, `argv_prefix`, and `shell`. An empty
+field matches anything. `path` is matched with Go's `path.Match`, so `*` does
+not cross a `/` and there is no `**`; the value it matches is what the tool put
+in the request, which is an absolute path for file tools and a host name for
+`webfetch` and `websearch`.
+
+A deny answers wherever it sits in the list and can never be shadowed. Among
+the rest the first match wins, and these rules are consulted before any `allow`
+list an MCP server declared for itself, so a rule of your own can tighten one.
+Order therefore matters only among non-deny rules.
+
+A rule grants exactly what typing "yes" grants. Where no sandbox is configured,
+a command a rule allows runs on the host with this account's reach, including
+the network. That is the same standing-policy posture as `~/.switchboard/
+hooks.toml`: it is the user speaking, in the user's own file. Two things are
+refused because they are a permission mode wearing a rule's clothes: an `allow`
+that names no tool, path, or argv prefix, and an `allow` whose only constraint
+is `effect` for writes, commands, or external tools. Those are `/mode` yolo,
+acceptEdits, and bypass, which are typed on purpose and visible while they are
+in force. One thing outranks a rule: a command that looks credential-bearing
+comes back to you even when a rule allows it, because no standing rule approves
+one of those unseen, and yolo does not either.
+
+There is deliberately no repository-provided permissions file. A checkout must
+not pre-approve a command by the act of being opened, which is the same reason
+a repository cannot declare a `/watch` verifier. There is also no in-session
+command that writes a rule; rules are edited in the file, where the widening
+they perform is visible before it takes effect.
+
+`/permissions` lists what is loaded. `sb permissions -- <command>` says what
+the rules would answer for that command without starting a session, and
+`-mode <mode>` asks under a different mode. That check sees the config's rules
+only: an MCP server's allow list needs the server running, a session's
+remembered answers do not exist outside a session, and no sandbox is assumed.
+
 ## Slots and persistent settings
 
 Optional model roles are configured under `[slots]`. For example:

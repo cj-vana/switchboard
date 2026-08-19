@@ -327,7 +327,13 @@ func run() error {
 	// manager, and the tracker are all present and never consulted.
 	cache := cacheFor(tier.Target, cat)
 
-	permEngine := permission.NewEngineWithExecution(mode, executionController, mcpRules...)
+	// The user's own file goes first. Among non-deny rules the engine takes the
+	// first match, so a rule the user wrote to tighten a server's tool has to
+	// sit ahead of the allow list that server declared for itself. A deny in
+	// either wins over every allow wherever it sits, so ordering only decides
+	// this one direction.
+	rules := append(append([]permission.Rule(nil), cfg.Permissions...), mcpRules...)
+	permEngine := permission.NewEngineWithExecution(mode, executionController, rules...)
 	loop := &agent.Loop{
 		Provider:    client,
 		Target:      tier.Target,

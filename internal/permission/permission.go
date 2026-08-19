@@ -359,9 +359,24 @@ func (e *Engine) Check(req Request) Outcome {
 	}
 
 	for _, r := range e.rules {
-		if r.Decision != Deny && r.matches(req) {
-			return e.gate(Outcome{Decision: r.Decision, Reason: "matched a rule"}, req, gateNormally)
+		if r.Decision == Deny || !r.matches(req) {
+			continue
 		}
+		// A rule matches requests the user never saw, which is what separates
+		// it from a remembered answer to one exact request. Yolo — the widest
+		// mode there is — still stops for a credential-bearing command, so a
+		// standing rule must not be stronger than yolo. The rule keeps its
+		// force for everything else it matches; this one request comes back to
+		// the human.
+		if r.Decision == Allow {
+			if sensitive, _ := SensitiveRequest(req); sensitive {
+				return e.gate(Outcome{
+					Decision: Ask,
+					Reason:   "a rule allows this, but the command looks credential-bearing, and no standing rule approves one of those unseen",
+				}, req, gateNormally)
+			}
+		}
+		return e.gate(Outcome{Decision: r.Decision, Reason: "matched a rule"}, req, gateNormally)
 	}
 
 	out := e.modeDefault(mode, req)
@@ -1277,6 +1292,11 @@ func (e *Engine) hostIPCShared(req Request) bool {
 func (e *Engine) hostAuthorityShared(req Request) bool {
 	return e.hostLoopbackShared(req) || e.hostIPCShared(req)
 }
+
+// RuleMatches is matches exported for a surface that has to say which rule
+// answered. It repeats no logic: a second implementation would drift from this
+// one and then explain a decision the engine did not make.
+func RuleMatches(rule Rule, req Request) bool { return rule.matches(req) }
 
 func (r Rule) matches(req Request) bool {
 	if r.Tool != "" && r.Tool != req.Tool {

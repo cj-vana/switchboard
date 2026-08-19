@@ -539,6 +539,36 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A standing rule is narrower than a mode, and weaker than a seen answer.**
+`[[permissions]]` (`internal/config/permissions.go`) fills the rule list the
+engine has always taken and only MCP allow lists ever supplied. It is the
+user's own file, so it carries the hooks posture: standing policy, granting
+what a typed yes grants, unconfined where nothing is configured. Two shapes are
+refused at load because they are a mode written as data — an allow naming
+nothing, and an allow whose only constraint is `effect` for write, execute, or
+external. Those exist as modes, which are typed deliberately and visible while
+they hold; a line in a file is neither.
+
+The engine's own order is the thing to keep straight, because it is not "first
+match wins": a matching deny answers first and from anywhere, and only then
+does the first matching non-deny rule answer. So position decides among allows
+and asks and never lets a deny be shadowed. Assembly puts the config's rules
+ahead of `mcpRules` on that strength — a rule the user wrote to tighten a
+server's tool has to outrank the allow list that server declared for itself.
+
+A rule-matched allow yields to a credential-bearing request (`Check`, the
+`SensitiveRequest` branch). A rule matches calls the user never saw, which is
+what separates it from a remembered answer to one exact request, and yolo — the
+widest mode there is — already stops for one of those. A standing rule must not
+be stronger than yolo.
+
+There is no repository-provided permissions file and no command that mints a
+rule mid-session. The first is the /watch refusal applied here: opening a
+checkout must not pre-approve a command. The second is a stated limit rather
+than an oversight — a one-keystroke "always allow" widens by argv prefix, and
+the widening has to be visible before it takes effect, which the file already
+makes it.
+
 **A destination policy is a requirement, not a preference.** `[routing]
 destinations` and /destinations (`cmd/sb/tui_destinations.go`) fill
 `Requirements.ApprovedProviders`, which the filter has always checked before

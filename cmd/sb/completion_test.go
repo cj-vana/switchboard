@@ -474,9 +474,9 @@ func TestFishCompletionUsesTokenAwareRootConditions(t *testing.T) {
 // quoting, and shell grammar cannot drift silently.
 func TestCompletionScriptGoldens(t *testing.T) {
 	goldens := map[string]string{
-		"bash": "f47e4acf80385a5d186aacd06ca7892dad6cc7c1ffee1eec1d47ad7c9b915bbf",
-		"zsh":  "aed92b4d2d52855c57e4fb2f1805723f5fa3f23b4b153b56e86ee25b27ba4e46",
-		"fish": "95d64a35de7be515e2729366d9de6e774fd6b4fd0373050c9cb9e7cd233e2a83",
+		"bash": "ef0c8f05c7a996834601b5522e0d3f6c8c8314b7e7e4cbd1707057a71268fd23",
+		"zsh":  "7ba4fb0fe68273c7e3a64dd72bcc54b28e6b192e78ea8fe10846a3ee58b83f9e",
+		"fish": "e96f397ab9561eb25fefa8c6974e7135a5693c224fada934a9cc80cd8202a484",
 	}
 	for shell, want := range goldens {
 		got := fmt.Sprintf("%x", sha256.Sum256([]byte(completionScript(t, shell))))

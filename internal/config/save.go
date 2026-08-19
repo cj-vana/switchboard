@@ -183,6 +183,22 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
+	// Permissions render before routing because a reader scanning this file for
+	// "what has this thing been told it may do" should meet the answers before
+	// the ladder's own settings.
+	if len(c.Permissions) > 0 {
+		entries := make([]permissionEntry, 0, len(c.Permissions))
+		for _, rule := range c.Permissions {
+			entries = append(entries, permissionEntryFor(rule))
+		}
+		if err := encode(&buf, struct {
+			Permissions []permissionEntry `toml:"permissions"`
+		}{entries}); err != nil {
+			return nil, err
+		}
+		buf.WriteString("\n")
+	}
+
 	if !c.RouteAutoOn() || len(c.Destinations) > 0 {
 		entry := routingEntry{Destinations: c.Destinations}
 		if !c.RouteAutoOn() {

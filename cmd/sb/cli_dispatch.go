@@ -112,6 +112,12 @@ func runCLISubcommand(ctx context.Context, w io.Writer, opts options, args []str
 			return true, err
 		}
 		return true, runMCPCLIContext(ctx, w, workspace, commandArgs)
+	case "permissions":
+		cfg, err := loadCLIConfig(opts.profile)
+		if err != nil {
+			return true, err
+		}
+		return true, runPermissionsCLI(w, cfg, commandArgs)
 	case "auth":
 		cfg, err := loadCLIConfig(opts.profile)
 		if err != nil {

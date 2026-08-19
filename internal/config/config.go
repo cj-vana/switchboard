@@ -21,6 +21,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/credential"
 	"github.com/switchboard-code/switchboard/internal/execution"
+	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
@@ -99,6 +100,12 @@ type Config struct {
 	// still detected and recorded, so /why answers what would have happened.
 	// Read it through RouteAutoOn.
 	RouteAuto *bool
+
+	// Permissions are the standing answers this user has written down. They
+	// are the engine's own rules, and the surface puts them ahead of any rule
+	// a server declared for itself: the user's file outranks a server's
+	// self-description, while a deny in either wins over every allow.
+	Permissions []permission.Rule
 
 	// Destinations names the providers a turn may be routed to. Empty means
 	// no restriction, which is the default and the only value most workspaces
@@ -301,6 +308,10 @@ type file struct {
 	UI        uiEntry                  `toml:"ui"`
 	Limits    limitsEntry              `toml:"limits"`
 	Execution executionEntry           `toml:"execution"`
+
+	// Permissions is a list rather than a table because order decides which
+	// non-deny rule answers first, and a TOML table has no order.
+	Permissions []permissionEntry `toml:"permissions"`
 }
 
 // any accepts both the concise sandbox = true form and the named
@@ -498,6 +509,11 @@ func LoadFile(path string) (*Config, error) {
 	}
 	c.RouteAuto = f.Routing.Auto
 	c.Destinations = f.Routing.Destinations
+	permissions, err := buildPermissionRules(f.Permissions, path)
+	if err != nil {
+		return nil, err
+	}
+	c.Permissions = permissions
 	if f.Compact.AtPercent != 0 {
 		if f.Compact.AtPercent < 50 || f.Compact.AtPercent > 95 {
 			// Below half the window it would compact constantly; above 95 it

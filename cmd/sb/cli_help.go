@@ -30,6 +30,10 @@ var commandHelp = map[string]commandHelpSpec{
 		usage:   "sb doctor",
 		summary: "check providers, credentials, sandboxing, tools, and MCP",
 	},
+	"permissions": {
+		usage:   "sb permissions [-mode <mode>] [-- <command>]",
+		summary: "list the standing permission rules, or ask what they answer for a command",
+	},
 	"cost": {
 		usage:   "sb cost",
 		summary: "show this workspace's recorded spend and counterfactual rung costs",

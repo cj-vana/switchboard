@@ -370,3 +370,66 @@ func TestExternalAllowRuleAndRememberArePerTool(t *testing.T) {
 		t.Errorf("remembered external tool = %s, want Allow across argument changes", got)
 	}
 }
+
+// A rule matches requests the user never saw, which is what separates it from a
+// remembered answer to one exact request. Yolo is the widest mode there is and
+// it still stops for a credential-bearing command, so a standing rule must not
+// outrank it.
+func TestARuleDoesNotApproveASensitiveCommandUnseen(t *testing.T) {
+	engine := NewEngine(ModeDefault, execution.Capability{}, Rule{
+		Decision: Allow, Tool: "exec", ArgvPrefix: []string{"curl"},
+	})
+
+	ordinary := Request{Tool: "exec", Effect: EffectExecute, Argv: []string{"curl", "https://example.com"}}
+	if out := engine.Check(ordinary); out.Decision != Allow {
+		t.Fatalf("the rule did not take effect on an ordinary command: %+v", out)
+	}
+
+	sensitive := ordinary
+	sensitive.Sensitive = true
+	out := engine.Check(sensitive)
+	if out.Decision != Ask {
+		t.Errorf("decision = %s, want ask: a standing rule must not be stronger than yolo", out.Decision)
+	}
+	if !strings.Contains(out.Reason, "credential-bearing") {
+		t.Errorf("reason = %q, which does not say why the rule yielded", out.Reason)
+	}
+}
+
+// A deny is not a rule among rules: it wins over any allow wherever it sits,
+// which is what lets a user tighten a list they did not write.
+func TestADenyOutranksAnEarlierAllow(t *testing.T) {
+	engine := NewEngine(ModeDefault, execution.Capability{},
+		Rule{Decision: Allow, Tool: "exec"},
+		Rule{Decision: Deny, Tool: "exec", ArgvPrefix: []string{"rm"}},
+	)
+
+	if out := engine.Check(Request{Tool: "exec", Effect: EffectExecute, Argv: []string{"ls"}}); out.Decision != Allow {
+		t.Errorf("the allow did not apply to an unrelated command: %+v", out)
+	}
+	out := engine.Check(Request{Tool: "exec", Effect: EffectExecute, Argv: []string{"rm", "-rf", "."}})
+	if out.Decision != Deny {
+		t.Errorf("decision = %s, want deny even though the allow is listed first", out.Decision)
+	}
+}
+
+// Among non-deny rules the first match wins, so whoever is prepended decides.
+// The product puts the user's own file ahead of a server's self-declared allow.
+func TestTheFirstNonDenyRuleWins(t *testing.T) {
+	userFirst := NewEngine(ModeDefault, execution.Capability{},
+		Rule{Decision: Ask, Tool: "mcp__srv__deploy", Effect: EffectExternal},
+		Rule{Decision: Allow, Tool: "mcp__srv__deploy", Effect: EffectExternal},
+	)
+	req := Request{Tool: "mcp__srv__deploy", Effect: EffectExternal}
+	if out := userFirst.Check(req); out.Decision != Ask {
+		t.Errorf("decision = %s, want ask: the rule listed first has to win", out.Decision)
+	}
+
+	serverFirst := NewEngine(ModeDefault, execution.Capability{},
+		Rule{Decision: Allow, Tool: "mcp__srv__deploy", Effect: EffectExternal},
+		Rule{Decision: Ask, Tool: "mcp__srv__deploy", Effect: EffectExternal},
+	)
+	if out := serverFirst.Check(req); out.Decision != Allow {
+		t.Errorf("decision = %s, want allow: order is the whole mechanism", out.Decision)
+	}
+}
