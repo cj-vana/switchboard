@@ -539,6 +539,30 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A refusal the ladder can answer is offered to the surface, once, between
+rounds.** `Loop.Relief` (`internal/agent/agent.go`, `cmd/sb/tui_relief.go`) is
+consulted for exactly two errors: a `ContextWindowError`, which is a fact about
+the request that a roomier rung would not state, and an `AvailabilityError`,
+which is retryable-to-the-last-attempt and therefore a fact about one target at
+one moment. Everything else is the request being wrong, which no rung fixes,
+and is not offered.
+
+The hook is the surface's because the checks that make a destination legitimate
+live where the ladder does; the loop only knows a round refused. It applies the
+binding it is handed rather than returning it, so no window exists in which the
+loop and the surface disagree about what is bound, and it is capped at
+`maxReliefsPerTurn` because a ladder that cannot answer would otherwise be
+walked at a probe and a budget check per rung.
+
+Three constraints are load-bearing. A round that emitted content is never
+relieved: half a streamed message finished by a second target is a turn nobody
+can attribute. A pin refuses relief, because a pin is the user saying which
+rung and answering a refusal by leaving it would overrule that quietly. And the
+two reasons keep different records — an overflow rebind is a move and is
+written as one, an availability substitution is a runtime binding only, since a
+route record would tell every per-rung aggregate the router made a decision it
+never made.
+
 **Read drift is reported, and the refusal it anticipates still stands.**
 `internal/tools/drift.go` sweeps the hashes the registry already keeps for
 write and edit's stale check and says, at the round boundary /watch and the

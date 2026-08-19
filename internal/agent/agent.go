@@ -56,6 +56,45 @@ type ContextWindowError struct {
 	ReservedOutput int
 }
 
+// AvailabilityError marks a call whose retries are spent against an error the
+// target might simply not be able to serve right now: a rate limit, a timeout,
+// a server fault. It is separated from an ordinary provider failure because
+// another target may not share the condition, and only a typed error lets a
+// surface tell "this one is busy" from "this request is wrong" without reading
+// error prose.
+type AvailabilityError struct {
+	Target   provider.RouteTargetID
+	Attempts int
+	Err      error
+}
+
+func (e *AvailabilityError) Error() string {
+	return fmt.Sprintf("target %s did not answer in %d attempts: %v",
+		provider.DisplayRouteTargetID(e.Target), e.Attempts, e.Err)
+}
+
+func (e *AvailabilityError) Unwrap() error { return e.Err }
+
+// ReliefReason says which refusal a surface is being asked to answer. The two
+// are not interchangeable: one is a fact about the request that any target
+// would state, the other is a fact about one target at one moment, and they
+// are recorded differently for exactly that reason.
+type ReliefReason string
+
+const (
+	// ReliefContext is a request the bound target cannot hold. Nothing has
+	// left the process; a roomier rung would take the same bytes.
+	ReliefContext ReliefReason = "context"
+
+	// ReliefAvailability is a target that did not answer. The request is fine.
+	ReliefAvailability ReliefReason = "availability"
+)
+
+// maxReliefsPerTurn bounds how many times one turn may be handed a new
+// binding. Past a couple the ladder is not solving this, and a turn that kept
+// walking down it would spend the budget discovering that slowly.
+const maxReliefsPerTurn = 2
+
 func (e *ContextWindowError) Error() string {
 	return fmt.Sprintf("target %s holds %d tokens, but this call may need up to %d input plus %d reserved output tokens",
 		provider.DisplayRouteTargetID(e.Target), e.Window, e.InputTokens, e.ReservedOutput)
@@ -82,6 +121,17 @@ type Loop struct {
 	System        []provider.Block
 	MaxToolRounds int
 	MaxAttempts   int
+
+	// Relief, when set, is asked for a replacement binding when a round cannot
+	// be issued to the one in hand: a request the target cannot hold, or a
+	// target that did not answer. It returns the binding to use and a note to
+	// render, or an error to give up with.
+	//
+	// It is a surface's job, not the loop's, for the reason routing is: the
+	// checks that make a destination legitimate — probe, capability, context,
+	// budget, the user's own pin — live where the ladder does. The loop only
+	// knows a round refused and that something upstream may be able to answer.
+	Relief func(ctx context.Context, reason ReliefReason, err error) (Binding, string, error)
 
 	// Inject, when set, is drained at the top of every round. What it returns
 	// is appended to the session before the request is built, which is how
@@ -289,6 +339,7 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 	}
 
 	maxRounds := orDefault(l.MaxToolRounds, DefaultMaxToolRounds)
+	reliefs := 0
 	for round := range maxRounds {
 		// The opening round skips injection: anything pending at turn start
 		// is the caller's to fold into the prompt itself, so a request never
@@ -304,6 +355,20 @@ func (l *Loop) TurnMessage(ctx context.Context, opening provider.Message) error 
 		}
 		msg, stop, usage, attempts, promptTokens, servedTarget, err := l.callModel(ctx, observer)
 		if err != nil {
+			// A round that refused for a reason the ladder can answer is
+			// offered to the surface before it becomes the turn's failure.
+			// Only a round that produced nothing qualifies: half a streamed
+			// message finished by a second target is a turn nobody can
+			// attribute, so content on the wire ends the offer.
+			if reason, ok := reliefReasonFor(err); ok && len(msg.Content) == 0 && reliefs < maxReliefsPerTurn {
+				if note, reliefErr := l.relieve(ctx, reason, err); reliefErr == nil {
+					reliefs++
+					if note != "" {
+						observer.Notice("warn", note)
+					}
+					continue
+				}
+			}
 			// Content that did arrive is recorded as an interrupted turn, so the
 			// session shows what happened instead of a gap. Adapters drop
 			// incomplete messages when building the next request, which is what
@@ -471,8 +536,16 @@ func (l *Loop) callModel(ctx context.Context, observer Observer) (provider.Messa
 		if ctx.Err() != nil {
 			return msg, stop, usage, attempt, promptTokens, binding.Target, ctx.Err()
 		}
-		if !retryable(err) || attempt == maxAttempts {
+		if !retryable(err) {
 			return msg, stop, usage, attempt, promptTokens, binding.Target, providerCallError(err)
+		}
+		if attempt == maxAttempts {
+			// Retryable to the last attempt is the shape another target might
+			// not share, so it is typed rather than flattened into the generic
+			// provider failure. It still wraps ErrProviderCall, so every
+			// existing reader of that keeps working.
+			return msg, stop, usage, attempt, promptTokens, binding.Target,
+				providerCallError(&AvailabilityError{Target: binding.Target.ID(), Attempts: attempt, Err: err})
 		}
 
 		// A dropped stream is re-issued from the last committed message rather
@@ -485,6 +558,40 @@ func (l *Loop) callModel(ctx context.Context, observer Observer) (provider.Messa
 		}
 	}
 	return lastMsg, "", provider.Usage{}, maxAttempts, promptTokens, binding.Target, providerCallError(lastErr)
+}
+
+// reliefReasonFor recognizes the two refusals a different target might not
+// make. Everything else is the request being wrong, which no rung fixes.
+func reliefReasonFor(err error) (ReliefReason, bool) {
+	var window *ContextWindowError
+	if errors.As(err, &window) {
+		return ReliefContext, true
+	}
+	var availability *AvailabilityError
+	if errors.As(err, &availability) {
+		return ReliefAvailability, true
+	}
+	return "", false
+}
+
+// relieve asks the surface for a replacement binding and applies it.
+//
+// The binding is applied here rather than by the caller so the loop's next
+// round is issued against it without a window in which the two disagree about
+// which target is bound.
+func (l *Loop) relieve(ctx context.Context, reason ReliefReason, cause error) (string, error) {
+	if l.Relief == nil {
+		return "", errors.New("no relief is configured for this surface")
+	}
+	binding, note, err := l.Relief(ctx, reason, cause)
+	if err != nil {
+		return "", err
+	}
+	if binding.Provider == nil {
+		return "", errors.New("relief returned no provider")
+	}
+	l.Bind(binding)
+	return note, nil
 }
 
 func providerCallError(err error) error {

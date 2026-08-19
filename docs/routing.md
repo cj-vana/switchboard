@@ -66,6 +66,31 @@ Every applied move appears in the transcript. `/why` reports the opening
 decision, rejected candidates, later moves, and the session cost repriced on
 the other tiers.
 
+## When a rung will not take the round
+
+Two refusals end a turn that another rung could finish, and the ladder answers
+both between rounds.
+
+A request the bound target cannot hold is refused before anything leaves the
+process. Instead of ending there, the session looks for a rung whose window
+holds it, widest first, and continues the turn on that rung. An unpriced window
+sorts last, because a window this program does not know the size of is not
+evidence of room. When no rung fits, the refusal stands and compaction remains
+the answer.
+
+A target that spends its retries on rate limits, timeouts, or server faults is
+a fact about one target at one moment. The session substitutes another rung and
+says so in those words. It is recorded as a runtime binding and never as a
+route record: the router chose nothing, and writing one would tell `/why`,
+`/ladder`, and every per-rung total that a decision was made.
+
+Both pass every check a primary binding passes, in the same order: probe,
+capability, context, destination policy, then budget. A pinned session refuses
+relief outright, because a pin is the user saying which rung. A round that has
+already emitted content is never substituted, since half a streamed message
+finished by a second target is a turn nobody can attribute. At most two reliefs
+run per turn.
+
 ## Fallbacks
 
 A tier can list fallback targets. If the primary server is unavailable or the

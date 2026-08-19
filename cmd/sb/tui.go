@@ -435,6 +435,10 @@ func runTUI(
 	// The injection seam is composed once and never swapped: the advisor and
 	// the watch each contribute nothing while off.
 	loop.Inject = app.inject
+	// The ladder answers a round the bound rung will not take: a request it
+	// cannot hold, or a target that did not answer. Both checks a move makes
+	// are made here too, and a pin refuses relief outright.
+	loop.Relief = app.relief
 
 	m.addBanner(sess, resumed)
 	// Startup notes render into the model directly, because the program is
