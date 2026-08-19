@@ -36,6 +36,7 @@ func parseCLIOptions(args []string) (options, []string, error) {
 	flags.StringVar(&opts.workspace, "workspace", "", "workspace root (default: current directory)")
 	flags.StringVar(&opts.profile, "profile", "", "run on a named alternate ladder from [profiles.<name>] in the config")
 	flags.StringVar(&opts.prompt, "p", "", "run a single prompt and exit; piped stdin is attached to it")
+	flags.StringVar(&opts.workflow, "workflow", "", "run a workflow by name and exit, for example -workflow \"survey internal/agent\"")
 	flags.StringVar(&opts.output, "output", "text", "what a -p run prints: text, or json for one machine-readable result line")
 	flags.StringVar(&opts.resume, "resume", "", "resume a session by id")
 	flags.BoolVar(&opts.cont, "continue", false, "resume the most recent session for this workspace")

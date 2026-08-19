@@ -22,7 +22,7 @@ var completionSubcommands = []string{
 var completionFlags = []string{
 	"-model", "-tier", "-host", "-mode", "-sandbox", "-think", "-workspace", "-p",
 	"-output", "-resume", "-continue", "-sessions", "-tiers", "-repl",
-	"-version", "-allow-secrets", "-profile",
+	"-version", "-allow-secrets", "-profile", "-workflow",
 }
 
 // completionActions covers subcommands with a second command word. Selector
@@ -58,6 +58,7 @@ var completionFlagValues = map[string][]string{
 // -sandbox=off|on|auto.
 var completionValueFlags = []string{
 	"-model", "-tier", "-host", "-mode", "-think", "-workspace", "-p", "-output", "-resume", "-profile",
+	"-workflow",
 }
 
 func runCompletionCLI(w io.Writer, shell string) error {

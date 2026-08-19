@@ -59,6 +59,7 @@ type options struct {
 	think     string
 	workspace string
 	prompt    string
+	workflow  string
 	output    string
 	resume    string
 	profile   string
@@ -441,6 +442,15 @@ func run() error {
 	startupNotes, droppedStartupNotes := mcpEnv.attachCounted(nil)
 	r.startupNotes = aggregateStartupNotes(startupNotes, droppedStartupNotes)
 	writeStartupNoteReport(out, r.startupNotes)
+
+	// A workflow is the one thing on this surface that is not a prompt: its
+	// stages were decided when the file was written, so nothing here is asked
+	// of a model. It runs after assembly for the same reason the TUI's does,
+	// because it needs the ladder, the permission engine, and the budget the
+	// session was built with.
+	if opts.workflow != "" {
+		return runHeadlessWorkflow(ctx, out, opts.workflow)
+	}
 
 	if opts.prompt != "" {
 		// The gate has no one to ask on this surface, so a key-shaped string
