@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/catalog"
+	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/credential"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	"github.com/switchboard-code/switchboard/internal/provider/anthropic"
 	"github.com/switchboard-code/switchboard/internal/provider/kimi"
 	"github.com/switchboard-code/switchboard/internal/provider/ollama"
 	"github.com/switchboard-code/switchboard/internal/provider/openai"
+	"github.com/switchboard-code/switchboard/internal/provider/openaicompat"
 )
 
 // armsFor builds the ladder, lowest rung first. The baselines are its ends.
@@ -29,6 +31,42 @@ import (
 //	money  a paid ladder, where §7.1's cost condition means what it says
 //	plan   a plan-metered ladder, where every rung bills zero and the cost
 //	       condition is degenerate, so only the solve-rate half is measured
+//
+// compatArm builds the arm for a configured OpenAI-compatible endpoint. It
+// reads the same [providers."openaicompat/generic"] base_url a session reads,
+// so measuring a deployment does not mean describing it twice.
+func compatArm(t *testing.T) Arm {
+	t.Helper()
+	model := os.Getenv("SB_EVAL_MODEL")
+	if model == "" {
+		t.Skip("set SB_EVAL_MODEL to the model id the compatible endpoint serves")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("reading the configuration: %v", err)
+	}
+	settings := cfg.ProviderForTarget(openaicompat.Name, "generic")
+	if settings.BaseURL == "" {
+		t.Skip(`no [providers."openaicompat/generic"] base_url is configured`)
+	}
+	opts := []openaicompat.Option{openaicompat.WithBaseURL(settings.BaseURL)}
+	// A local server that wants no key is the ordinary case, so a missing
+	// credential is not a reason to skip: the server decides.
+	if secret, err := credential.Chain(cfg.AuthFor(openaicompat.Name)).Get(
+		context.Background(), credential.Ref{Provider: openaicompat.Name, Account: "generic"}); err == nil {
+		opts = append(opts, openaicompat.WithAPIKey(secret.Expose()))
+	}
+	client, err := openaicompat.New("generic", opts...)
+	if err != nil {
+		t.Fatalf("assembling the compatible endpoint: %v", err)
+	}
+	return Arm{
+		Name:     "pin-compat",
+		Target:   provider.RouteTarget{Provider: openaicompat.Name, Surface: "generic", ModelID: model},
+		Provider: client,
+	}
+}
+
 func armsFor(t *testing.T) []Arm {
 	t.Helper()
 
@@ -90,6 +128,13 @@ func armsFor(t *testing.T) []Arm {
 				Target:   ollama.Target("qwen3.8:27b-mlx"),
 				Provider: ollama.New(),
 			}}
+		case "openaicompat/generic":
+			// The deployment this harness could not measure. A compatible
+			// endpoint is the shape a local ladder actually takes now, and
+			// its address and model are the user's rather than anything the
+			// harness could name, so both come from the configuration the
+			// session itself reads.
+			return []Arm{compatArm(t)}
 		default:
 			t.Skipf("SB_EVAL_PIN=%q names no candidate this harness knows", ref)
 			return nil
