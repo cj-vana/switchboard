@@ -134,7 +134,12 @@ func closeMCPClients(clients []*mcp.Client) {
 // connectMCP loads the user's servers and, when the workspace is trusted,
 // the repository's, connects them, and registers every bridged tool. The
 // returned rules carry the config's allow lists into the permission engine.
-func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry *tools.Registry, additional ...mcp.Spec) (*mcpState, []permission.Rule, error) {
+//
+// questions is nil on a surface with no user. It is passed to every client
+// rather than consulted here, because what it decides is what each client
+// declares at initialize: the elicitation capability is a promise to answer,
+// and only a surface with someone to ask may make it.
+func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry *tools.Registry, questions *questionRelay, additional ...mcp.Spec) (*mcpState, []permission.Rule, error) {
 	state := &mcpState{}
 
 	var specs []mcp.Spec
@@ -217,7 +222,11 @@ func connectMCP(ctx context.Context, workspace string, ts *trust.Store, registry
 			defer wg.Done()
 			connectCtx, cancel := mcpAssemblyConnectContext(ctx, spec)
 			defer cancel()
-			c, err := mcp.Connect(connectCtx, spec, logf)
+			var opts []mcp.Option
+			if questions != nil {
+				opts = append(opts, mcp.WithQuestioner(questions))
+			}
+			c, err := mcp.Connect(connectCtx, spec, logf, opts...)
 			if err != nil {
 				connectErrors[i] = err
 				logf("error", fmt.Sprintf("mcp server %s did not connect: %v", spec.Name, err))

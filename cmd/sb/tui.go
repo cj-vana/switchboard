@@ -363,6 +363,7 @@ func runTUI(
 	budget *budgetState,
 	skillList []skills.Skill,
 	onboarded bool,
+	questions *questionRelay,
 ) error {
 	// Background detection uses COLORFGBG rather than an OSC query: querying
 	// the terminal races Bubble Tea for stdin and, on a terminal that does not
@@ -427,7 +428,10 @@ func runTUI(
 	app.watcher.setPaused(!cfg.RouteAutoOn())
 	loop.SetObserver(app.watcher)
 	loop.Asker = &tuiAsker{p: p}
-	loop.Tools.SetQuestioner(&tuiQuestioner{p: p})
+	// The relay was installed as the registry's questioner before the servers
+	// connected; this is the moment it gets something to relay to, because a
+	// dialog needs the running program.
+	questions.set(&tuiQuestioner{p: p})
 	// The injection seam is composed once and never swapped: the advisor and
 	// the watch each contribute nothing while off.
 	loop.Inject = app.inject

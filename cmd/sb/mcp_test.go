@@ -124,7 +124,7 @@ func connectConfiguredMCP(t *testing.T, config string) (*tools.Registry, *mcpSta
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	state, rules, err := connectMCP(ctx, workspace, nil, registry)
+	state, rules, err := connectMCP(ctx, workspace, nil, registry, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ required = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, rules, err := connectMCP(context.Background(), workspace, nil, registry)
+	state, rules, err := connectMCP(context.Background(), workspace, nil, registry, nil)
 	if err == nil || !strings.Contains(err.Error(), "required mcp server required did not connect") {
 		t.Fatalf("required startup error = %v", err)
 	}
@@ -349,7 +349,7 @@ startup_timeout_seconds = -1
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, rules, err := connectMCP(context.Background(), workspace, nil, registry)
+	state, rules, err := connectMCP(context.Background(), workspace, nil, registry, nil)
 	if err == nil || !strings.Contains(err.Error(), "applicable MCP configuration is invalid") {
 		t.Fatalf("malformed applicable config error = %v", err)
 	}
@@ -377,7 +377,7 @@ command = "/definitely/missing/switchboard-mcp-server"
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, rules, err := connectMCP(context.Background(), workspace, nil, registry)
+	state, rules, err := connectMCP(context.Background(), workspace, nil, registry, nil)
 	if err != nil {
 		t.Fatalf("optional startup failure became fatal: %v", err)
 	}

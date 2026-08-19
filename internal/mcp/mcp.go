@@ -24,6 +24,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
 const (
@@ -329,6 +331,12 @@ type Client struct {
 	dead    error // set once the read loop exits; sticky
 	closing bool
 
+	// questioner is the surface's user channel, set at assembly by a surface
+	// that has one. Its presence is what declares the elicitation capability
+	// and what lets a server's question reach a person; nil is the closed
+	// state every unattended surface starts in.
+	questioner tools.Questioner
+
 	serverName    string
 	serverVersion string
 	protocol      string
@@ -357,6 +365,11 @@ type rpcResponse struct {
 type serverReply struct {
 	id     json.RawMessage
 	method string
+
+	// params rides along because a request this client answers with more than
+	// an empty object needs its contents, and the receive loop is the only
+	// place they exist.
+	params json.RawMessage
 }
 
 // RPCError is a JSON-RPC error returned by an MCP peer. Data stays typed raw
@@ -457,12 +470,24 @@ type implementation struct {
 	Version string `json:"version"`
 }
 
+// Option configures a client at construction. Options are applied before the
+// read loop starts, so nothing a server sends can race one into place.
+type Option func(*Client)
+
+// WithQuestioner grants the elicitation role by supplying the channel it
+// resolves against. A client built without one declares no elicitation
+// capability and declines the method, which is what every unattended surface
+// gets by doing nothing.
+func WithQuestioner(q tools.Questioner) Option {
+	return func(c *Client) { c.questioner = q }
+}
+
 // Connect starts (or reaches) the server, negotiates the modern or legacy
 // protocol era, and lists its tools. A successful modern stdio probe becomes
 // the live session. Only legacy fallback replaces the probe process: old
 // servers are allowed to exit on pre-initialize traffic, and that exit must
 // not poison the real session's read loop or sticky failure state.
-func Connect(ctx context.Context, spec Spec, logf func(level, text string)) (*Client, error) {
+func Connect(ctx context.Context, spec Spec, logf func(level, text string), opts ...Option) (*Client, error) {
 	if err := spec.validate(); err != nil {
 		return nil, err
 	}
@@ -479,14 +504,14 @@ func Connect(ctx context.Context, spec Spec, logf func(level, text string)) (*Cl
 	}
 
 	if spec.Command != "" {
-		return connectStdio(ctx, spec, logf)
+		return connectStdio(ctx, spec, logf, opts...)
 	}
 
 	tr, err := startHTTP(spec)
 	if err != nil {
 		return nil, err
 	}
-	c := newClient(spec, tr, logf)
+	c := newClient(spec, tr, logf, opts...)
 	decision, err := c.probeModern(ctx, transportHTTP)
 	if err != nil {
 		c.Close()
@@ -495,7 +520,7 @@ func Connect(ctx context.Context, spec Spec, logf func(level, text string)) (*Cl
 	return finishConnect(ctx, c, decision)
 }
 
-func newClient(spec Spec, tr transport, logf func(level, text string)) *Client {
+func newClient(spec Spec, tr transport, logf func(level, text string), opts ...Option) *Client {
 	if logf == nil {
 		logf = func(string, string) {}
 	}
@@ -523,16 +548,19 @@ func newClient(spec Spec, tr transport, logf func(level, text string)) *Client {
 		cancel:      cancel,
 		pending:     map[int64]chan rpcResponse{},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
 	go c.readLoop()
 	return c
 }
 
-func connectStdio(ctx context.Context, spec Spec, logf func(level, text string)) (*Client, error) {
+func connectStdio(ctx context.Context, spec Spec, logf func(level, text string), opts ...Option) (*Client, error) {
 	tr, err := startStdio(spec)
 	if err != nil {
 		return nil, err
 	}
-	probe := newClient(spec, tr, logf)
+	probe := newClient(spec, tr, logf, opts...)
 	probeCtx, cancel := context.WithTimeout(ctx, modernProbeTimeout)
 	decision, probeErr := probe.probeModern(probeCtx, transportStdio)
 	cancel()
@@ -566,7 +594,7 @@ func connectStdio(ctx context.Context, spec Spec, logf func(level, text string))
 	if err != nil {
 		return nil, err
 	}
-	return finishConnect(ctx, newClient(spec, legacyTransport, logf), decision)
+	return finishConnect(ctx, newClient(spec, legacyTransport, logf, opts...), decision)
 }
 
 func finishConnect(ctx context.Context, c *Client, decision negotiation) (*Client, error) {
@@ -725,9 +753,16 @@ func (c *Client) initialize(ctx context.Context) error {
 }
 
 func (c *Client) initializeLegacy(ctx context.Context, requested string) error {
+	// A capability is a promise to answer. Elicitation is declared only when a
+	// surface supplied the channel that answers it, because a server told this
+	// client can ask will ask, and an unattended session has no one to hear it.
+	capabilities := map[string]any{}
+	if c.questioner != nil {
+		capabilities["elicitation"] = map[string]any{}
+	}
 	params, _ := json.Marshal(map[string]any{
 		"protocolVersion": requested,
-		"capabilities":    map[string]any{},
+		"capabilities":    capabilities,
 		"clientInfo":      map[string]any{"name": "switchboard", "version": "dev"},
 	})
 	raw, secrets, _, err := c.callVersionWithSecrets(ctx, "", "initialize", params)
@@ -1104,7 +1139,7 @@ func (c *Client) readLoop() {
 				c.logf("warn", fmt.Sprintf("mcp %s sent a request with an invalid JSON-RPC id; ignoring", c.spec.Name))
 				continue
 			}
-			if err := c.enqueueAnswer(msg.ID, msg.Method); err != nil {
+			if err := c.enqueueAnswer(msg.ID, msg.Method, msg.Params); err != nil {
 				c.failAndClose(fmt.Errorf("mcp server %s: cannot queue server-request response: %w", c.spec.Name, err))
 				return
 			}
@@ -1170,7 +1205,7 @@ func (c *Client) failRequest(id int64, err error) {
 // fixed queue prevents an unbounded peer-controlled backlog; each worker send
 // has its own deadline so a hung legacy HTTP response POST cannot stop client
 // response dispatch.
-func (c *Client) enqueueAnswer(id json.RawMessage, method string) error {
+func (c *Client) enqueueAnswer(id json.RawMessage, method string, params json.RawMessage) error {
 	if len(id) > maxServerReplyID {
 		return fmt.Errorf("server-request id exceeds %d bytes", maxServerReplyID)
 	}
@@ -1181,7 +1216,11 @@ func (c *Client) enqueueAnswer(id json.RawMessage, method string) error {
 	if err != nil {
 		return err
 	}
-	reply := serverReply{id: append(json.RawMessage(nil), id...), method: method}
+	reply := serverReply{
+		id:     append(json.RawMessage(nil), id...),
+		method: method,
+		params: append(json.RawMessage(nil), params...),
+	}
 	select {
 	case queue <- reply:
 		return nil
@@ -1238,32 +1277,68 @@ func (c *Client) answerLoop(lifetime context.Context, queue <-chan serverReply, 
 	}
 }
 
-// sendAnswer replies to a server-initiated request. Ping gets its empty
-// result; everything else — sampling, roots, elicitation — is declined with
-// method-not-found, because each would put this client in a role the user
-// never granted it (a sampling request is the server spending the user's
-// model budget).
+// sendAnswer replies to a server-initiated request.
+//
+// Ping gets its empty result. Elicitation is answered when a surface granted
+// the role, because a question is interaction rather than an effect and the
+// answer channel is a person who can refuse in person (elicit.go). Everything
+// else — sampling and roots above all — is declined with method-not-found,
+// because each would put this client in a role the user never granted it: a
+// sampling request is the server spending the user's model budget.
+//
+// A schema this client will not answer is an invalid-params error rather than
+// method-not-found. The distinction is what a server can act on: the method is
+// served, this particular request is not, and a server told otherwise would
+// stop asking altogether.
 func (c *Client) sendAnswer(lifetime context.Context, timeout time.Duration, reply serverReply) error {
 	type errBody struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
+	ctx, cancel := context.WithTimeout(lifetime, timeout)
+	defer cancel()
+
 	var msg []byte
-	if reply.method == "ping" {
+	switch {
+	case reply.method == "ping":
 		msg, _ = json.Marshal(struct {
 			JSONRPC string          `json:"jsonrpc"`
 			ID      json.RawMessage `json:"id"`
 			Result  map[string]any  `json:"result"`
 		}{"2.0", reply.id, map[string]any{}})
-	} else {
+
+	case reply.method == "elicitation/create" && c.questioner != nil:
+		// The dialog blocks on a person, so it gets the client's lifetime
+		// rather than the send deadline: a five-second timer on a question is
+		// a question nobody can answer.
+		result, err := c.answerElicitation(lifetime, reply.params)
+		if err != nil {
+			var unsupported *unsupportedElicit
+			detail := "switchboard cannot answer this elicitation request"
+			if errors.As(err, &unsupported) {
+				detail = unsupported.reason
+			}
+			c.logf("warn", fmt.Sprintf("mcp %s: declining elicitation/create: %s", c.spec.Name, detail))
+			msg, _ = json.Marshal(struct {
+				JSONRPC string          `json:"jsonrpc"`
+				ID      json.RawMessage `json:"id"`
+				Error   errBody         `json:"error"`
+			}{"2.0", reply.id, errBody{-32602, detail}})
+			break
+		}
+		msg, _ = json.Marshal(struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Result  elicitResult    `json:"result"`
+		}{"2.0", reply.id, result})
+
+	default:
 		msg, _ = json.Marshal(struct {
 			JSONRPC string          `json:"jsonrpc"`
 			ID      json.RawMessage `json:"id"`
 			Error   errBody         `json:"error"`
 		}{"2.0", reply.id, errBody{-32601, "switchboard does not serve " + reply.method}})
 	}
-	ctx, cancel := context.WithTimeout(lifetime, timeout)
-	defer cancel()
 	return c.transport.Send(ctx, msg)
 }
 

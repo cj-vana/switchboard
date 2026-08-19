@@ -245,6 +245,18 @@ func run() error {
 	// decides whether a repository's declared servers may start.
 	trustStore, trustErr := trust.Open()
 
+	// Whether anyone can answer a question is settled here, before the servers
+	// connect, because the elicitation capability is declared at initialize
+	// and a client that advertised it with no user attached would be promising
+	// an answer it cannot produce. Piped -p is the surface with no one to ask,
+	// the same condition that leaves the asker unset further down; every other
+	// surface gets a relay now and fills it when its dialog exists.
+	var questions *questionRelay
+	if opts.prompt == "" || isTerminal(os.Stdin) {
+		questions = &questionRelay{}
+		registry.SetQuestioner(questions)
+	}
+
 	// Native definitions are discovered read-only, then independently gated by
 	// Switchboard activation, managed policy, runtime feature support, and
 	// executable trust. Plugin MCP gets the same gates plus the plugin's exact
@@ -261,7 +273,7 @@ func run() error {
 		return err
 	}
 	additionalMCP := append(nativeSpecs, pluginSpecs...)
-	mcpEnv, mcpRules, err := connectMCP(ctx, workspace, trustStore, registry, additionalMCP...)
+	mcpEnv, mcpRules, err := connectMCP(ctx, workspace, trustStore, registry, questions, additionalMCP...)
 	if err != nil {
 		return err
 	}
@@ -379,7 +391,7 @@ func run() error {
 	// -p prompt keeps the plain renderer either way.
 	if !opts.repl && opts.prompt == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		updateCheck := cfg.UpdateCheck && os.Getenv("SB_NO_UPDATE_CHECK") == ""
-		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, lspServer, lspNote, undoRec, agents, agentNotes, budget, skillList, onboarded)
+		return runTUI(loop, store, cfg, cat, capability, workspace, tier, reg, sticky, routeDec, sess, resumed, updateCheck, trustStore, trustErr, mcpEnv, lspServer, lspNote, undoRec, agents, agentNotes, budget, skillList, onboarded, questions)
 	}
 
 	// With -output json, stdout carries exactly one JSON line and nothing
@@ -408,9 +420,9 @@ func run() error {
 		loop.Asker = &terminalAsker{in: in, out: out}
 		// The ask tool follows the asker: a surface that can answer a
 		// permission prompt can answer a question, and the piped run that
-		// left the asker unset leaves this unset too, so the tool refuses
-		// with the reason rather than reading an answer out of the pipe.
-		registry.SetQuestioner(&terminalQuestioner{in: in, out: out})
+		// left the asker unset built no relay above, so the tool refuses with
+		// the reason rather than reading an answer out of the pipe.
+		questions.set(&terminalQuestioner{in: in, out: out})
 	}
 	loop.SetObserver(out)
 	subagentForward.set(out)

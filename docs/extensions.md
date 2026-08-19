@@ -319,8 +319,18 @@ legacy version, the documented stdio probe boundary, or an unrecognized HTTP
 server failures, cancellation, and recognized modern protocol errors do not.
 Tool listing follows pagination. Cancellation reaches the active transport.
 Where the transport permits a client response, server-initiated `ping` is
-answered; sampling, roots, elicitation, and other ungranted client roles are
-refused. Modern HTTP response POSTs are rejected explicitly. A mid-session
+answered, and `elicitation/create` is answered on a surface that has a user.
+The elicitation capability is declared at initialize only when one does, so a
+headless run, a delegate subagent, and a race branch each leave the method
+unserved rather than accepting a question nobody can hear. The dialog is the
+`ask` tool's, and names the server that wrote the question. One request asks at
+most four properties, in the order the schema wrote them, of type `string`
+(free text, or a closed set of at most twelve `enum` values), `boolean`,
+`number`, or `integer`; a schema outside that is refused as invalid params
+rather than as an unserved method, because the method is served and this
+request is not. A typed answer passes the credential scan and redacts before it
+leaves. Declining and cancelling are reported as themselves. Sampling, roots,
+and other ungranted client roles remain refused. Modern HTTP response POSTs are rejected explicitly. A mid-session
 tool-list change is reported and takes effect only on the next Switchboard run.
 
 MCP tools remain external effects. A server process is not inside the command

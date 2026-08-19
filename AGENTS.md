@@ -539,6 +539,27 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A question is a granted role, not an assumed one.** `elicitation/create`
+(`internal/mcp/elicit.go`) is answered because a question is interaction rather
+than an effect — `ask`'s own framing — and the answer channel is a person who
+can refuse in person. Sampling and roots stay declined for the reason they
+always were: each hands the server something nobody offered, and a sampling
+request spends the user's model budget. What grants the role is the surface
+supplying the questioner, and that same presence is what declares the
+capability at initialize, because a capability is a promise to answer and an
+unattended session cannot keep it. The relay in `cmd/sb/questionrelay.go`
+exists only because the two moments differ: MCP declares during assembly and
+the TUI's dialog needs a running program. A relay nobody filled refuses.
+
+Two things cross from a server trusted with neither. The question is text on
+the user's screen, so the dialog names the server and caps the prose; a
+question that looked like Switchboard's own would be the whole attack. And the
+answer travels to an unconfined process, so it passes `credential.ScanPrompt`
+and redacts unconditionally — the same posture as an injected report, applied
+where the consequence is larger. A schema this client will not answer is
+invalid params, never method-not-found: the method is served and this request
+is not, and a server told otherwise stops asking.
+
 **A hook that hangs has answered.** A pre_tool hook blocks the call on
 non-zero exit and on timeout both, because a gate that fails open the moment
 it hangs is not a gate. Hooks run unconfined and unprompted — they are the
