@@ -18,6 +18,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/credential"
 	"github.com/switchboard-code/switchboard/internal/execution"
 	"github.com/switchboard-code/switchboard/internal/permission"
+	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
 	"github.com/switchboard-code/switchboard/internal/session"
@@ -48,6 +49,18 @@ type repl struct {
 	budget       *budgetState
 	caches       *cacheSet
 	startupNotes startupNoteReport
+
+	// store creates the replacement session a compaction seeds. The REPL
+	// could not compact at all without it, which is why a long scripted run
+	// used to end at the provider's refusal rather than at a handoff.
+	store *session.Store
+
+	// callTokens is the size of the last request the provider actually saw.
+	// Auto-compaction reads it at turn end for the same reason the TUI does:
+	// it is the honest measure of occupancy, and a mid-turn estimate is known
+	// to run low.
+	callTokens int
+	ctxWindow  int
 }
 
 // moveTo rebinds the loop after the escalation policy changed the primary.
@@ -317,7 +330,31 @@ func (r *repl) turnPreparedMessage(ctx context.Context, opening provider.Message
 	r.out.endTurn()
 	r.recordRoute(opening.AuthoredText(), startedOn, before, usageWindow, started, err)
 	r.route = nil
+
+	// Turn end is where occupancy is known and where a session may be
+	// replaced without cutting a turn in half.
+	r.refreshCtxWindow()
+	r.noteOccupancy()
+	if err == nil {
+		r.autoCompactIfFull(ctx)
+	}
 	return err
+}
+
+// noteOccupancy reads the last request's size from the session's own record,
+// falling back to the local estimator when the provider reported nothing —
+// the same fallback the TUI makes, and for the same reason: occupancy stuck at
+// zero reads as an empty window and turns auto-compaction off silently.
+func (r *repl) noteOccupancy() {
+	state := r.loop.Session.State()
+	r.callTokens = state.Usage.InputTokens + state.Usage.CacheReadTokens + state.Usage.CacheWriteTokens
+	if r.callTokens == 0 {
+		r.callTokens = prefix.RequestTokens(provider.Request{
+			System:   r.loop.System,
+			Tools:    r.loop.Tools.Definitions(),
+			Messages: state.Messages,
+		})
+	}
 }
 
 // acceptTurnResolution is the commit boundary between a live route probe and
@@ -511,8 +548,12 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		r.out.line("  /cost                                     tokens and cost for this session")
 		r.out.line("  /session                                  session id, target, and message count")
 		r.out.line("  /sandbox [off|on|auto]                    show or change command confinement")
+		r.out.line("  /compact [instructions]                   summarize this session into a fresh one")
 		r.out.line("  /doctor extensions                       every startup extension diagnostic")
 		r.out.line("  /exit                                     leave")
+
+	case "compact":
+		r.compact(ctx, rest)
 
 	case "tier":
 		if rest == "" {

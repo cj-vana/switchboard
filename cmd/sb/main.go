@@ -427,6 +427,7 @@ func run() error {
 		providers:  reg,
 		budget:     budget,
 		caches:     newCacheSet(tier.Target, loop.Cache),
+		store:      store,
 	}
 	r.route = routeDec
 	r.sticky = sticky
