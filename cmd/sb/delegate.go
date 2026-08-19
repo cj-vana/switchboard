@@ -48,6 +48,34 @@ func (d *delegateForward) get() agent.Observer {
 var subagentForward = &delegateForward{}
 var subagentTasks = delegate.NewTaskManager(delegate.DefaultMaxParallel)
 
+// subagentRunner is the assembled errand runner, stashed here for /workflow.
+// registerDelegate builds the Config thirty lines before main decides which
+// surface to open, so the Config literal cannot close over anything the TUI
+// owns and the runner has to be reachable rather than passed.
+var subagentRunner = &delegateRunnerHolder{}
+
+// subagentWorkflows are the definitions found at assembly, discovered once
+// for the same frozen-zone reason agents are: a file added mid-process is
+// picked up by the next run.
+var subagentWorkflows []delegate.Workflow
+
+type delegateRunnerHolder struct {
+	mu sync.Mutex
+	r  *delegate.Runner
+}
+
+func (h *delegateRunnerHolder) set(r *delegate.Runner) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.r = r
+}
+
+func (h *delegateRunnerHolder) get() *delegate.Runner {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.r
+}
+
 // delegateLedgerTracker records successful primary-ledger settlements per
 // sub-session. A shared primary-cost baseline cannot attribute overlapping
 // delegates: one task's charge would look like another task's settlement.
@@ -151,7 +179,7 @@ func registerDelegate(
 		}
 	}
 
-	tool, err := delegate.New(delegate.Config{
+	config := delegate.Config{
 		Tiers:  cfg.Tiers,
 		Agents: agents,
 		Tasks:  subagentTasks,
@@ -257,9 +285,22 @@ func registerDelegate(
 			return ledger.reconcile(primary.Session, sess)
 		},
 		Forward: subagentForward.get,
-	})
+	}
+
+	tool, err := delegate.New(config)
 	if err != nil {
 		return nil, agentNotes, err
 	}
+	// The same assembled Config drives /workflow, so a workflow's subagents
+	// are the delegate tool's subagents in every respect that matters: the
+	// same ladder, the same permission engine, the same budget ceiling, the
+	// same sub-session store.
+	config.Tasks = subagentTasks
+	subagentRunner.set(delegate.NewRunner(config))
+
+	workflows, workflowNotes := delegate.LoadWorkflows(workspace)
+	subagentWorkflows = workflows
+	agentNotes = append(agentNotes, workflowNotes...)
+
 	return agents, agentNotes, registry.AddExternal(tool)
 }

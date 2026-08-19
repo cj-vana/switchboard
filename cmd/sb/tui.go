@@ -714,6 +714,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case lspEditorDoneMsg:
 		return m, m.onLSPEditorDone(msg)
 
+	case workflowDoneMsg:
+		return m, m.onWorkflowDone(msg)
+
 	case textPromptMsg:
 		m.dlg = newTextDialog(msg)
 		return m, nil

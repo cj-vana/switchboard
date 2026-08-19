@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/switchboard-code/switchboard/internal/agent"
-	"github.com/switchboard-code/switchboard/internal/catalog"
 	"github.com/switchboard-code/switchboard/internal/config"
 	"github.com/switchboard-code/switchboard/internal/permission"
 	"github.com/switchboard-code/switchboard/internal/provider"
@@ -111,12 +110,14 @@ func New(c Config) (tools.Tool, error) {
 	if manager == nil {
 		manager = NewTaskManager(DefaultMaxParallel)
 	}
-	return &delegateTool{c: c, tasks: manager}, nil
+	c.Tasks = manager
+	return &delegateTool{c: c, tasks: manager, runner: NewRunner(c)}, nil
 }
 
 type delegateTool struct {
-	c     Config
-	tasks *TaskManager
+	c      Config
+	tasks  *TaskManager
+	runner *Runner
 }
 
 func (t *delegateTool) Name() string { return "delegate" }
@@ -197,45 +198,14 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return tools.Plan{}, fmt.Errorf("delegate: %w", err)
 	}
-	if strings.TrimSpace(in.Task) == "" {
-		return tools.Plan{}, fmt.Errorf("delegate: task is required")
+	// Resolution lives on the runner, because a workflow starts subagents too
+	// and the rules for which agent and which rung must not fork.
+	spec, named, err := t.runner.Resolve(RunSpec{Task: in.Task, Tier: in.Tier, AgentName: in.Agent})
+	if err != nil {
+		return tools.Plan{}, fmt.Errorf("delegate: %w", err)
 	}
-	var named *Agent
-	if in.Agent != "" {
-		for i := range t.c.Agents {
-			if t.c.Agents[i].Name == in.Agent {
-				named = &t.c.Agents[i]
-				break
-			}
-		}
-		if named == nil {
-			return tools.Plan{}, fmt.Errorf("delegate: no agent %q is defined", in.Agent)
-		}
-	}
-	// An explicit tier wins over the agent's default, which wins over the
-	// ladder's bottom: the caller saying "run it on t3" is the more specific
-	// intent, whoever the agent is.
-	if in.Tier == "" && named != nil {
-		in.Tier = named.Tier
-	}
-	if in.Tier == "" {
-		in.Tier = t.c.defaultTier()
-	}
-	found := false
-	for _, tier := range t.c.Tiers {
-		if tier.ID == in.Tier {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return tools.Plan{}, fmt.Errorf("delegate: no tier %q in the ladder", in.Tier)
-	}
-	parentSessionID := ""
-	if t.c.ParentSession != nil {
-		parentSessionID = t.c.ParentSession()
-	}
-	task := t.tasks.Reserve("", in.Task, in.Tier, parentSessionID)
+	in.Tier = spec.Tier
+	task := t.runner.Reserve(spec)
 
 	// Spawning is free and touches nothing; every call the subagent then
 	// makes goes through the shared permission engine on its own merits, so
@@ -255,103 +225,9 @@ func (t *delegateTool) Plan(input json.RawMessage) (tools.Plan, error) {
 			Detail: fmt.Sprintf("[%s] %s → %s", task.Label(), who, summary),
 		},
 		Run: func(ctx context.Context) (tools.Result, error) {
-			return t.tasks.Execute(ctx, task, func(taskCtx context.Context, handle *TaskHandle) (tools.Result, error) {
-				return t.run(taskCtx, in, named, task, handle)
-			})
+			return t.runner.Run(ctx, spec, named, task)
 		},
 	}, nil
-}
-
-func (t *delegateTool) run(ctx context.Context, in delegateInput, named *Agent, task TaskRef, handle *TaskHandle) (result tools.Result, retErr error) {
-	tier, client, note, err := t.c.Probe(ctx, in.Tier)
-	if err != nil {
-		return tools.Result{Content: fmt.Sprintf("tier %s cannot be served: %v", in.Tier, err), IsError: true}, nil
-	}
-	handle.RecordTier(tier.ID)
-
-	sess, err := t.c.NewSession(tier.Target.ID())
-	if err != nil {
-		return tools.Result{Content: fmt.Sprintf("could not record a delegate session: %v", err), IsError: true}, nil
-	}
-	defer sess.Close()
-	handle.AttachSession(sess.ID())
-	// NewSession also opens the task's budget ledger. Always reconcile and
-	// close that entry, including assembly failures and cancellation before the
-	// first provider call, or a failed errand would leak accounting state.
-	defer func() {
-		state := sess.State()
-		handle.RecordUsage(state.Calls, state.CostMicroUSD)
-		if t.c.Finish != nil {
-			if err := t.c.Finish(sess); err != nil {
-				result = tools.Result{Content: fmt.Sprintf("the subagent's budget accounting could not be recorded: %v", err), IsError: true}
-				retErr = nil
-			}
-		}
-	}()
-
-	var parent agent.Observer = agent.NopObserver{}
-	if t.c.Forward != nil {
-		if fwd := t.c.Forward(); fwd != nil {
-			parent = fwd
-		}
-	}
-	// Every delegate keeps this observer, even when no surface forwards its
-	// rails. TurnUsage is the durable per-call seam that keeps /tasks live;
-	// the final snapshot below remains the backstop for failures before that
-	// callback or during budget settlement.
-	obs := &forwarding{parent: parent, task: task, handle: handle}
-	// The substitution is visible before the errand's content goes out, and
-	// the errand's own log records it (§5.4).
-	if note != "" {
-		obs.Notice("warn", note)
-		if err := sess.AppendNote("warn", note); err != nil {
-			return tools.Result{Content: fmt.Sprintf("could not record the fallback note: %v", err), IsError: true}, nil
-		}
-	}
-
-	loop, err := t.c.NewLoop(tier, client, sess, obs, named, task)
-	if err != nil {
-		return tools.Result{Content: fmt.Sprintf("could not assemble the subagent: %v", err), IsError: true}, nil
-	}
-	// Guidance queued while this runs is taken up at the loop's own round
-	// boundaries. Nothing else can deliver it: a model mid-call has no seam
-	// for a message, and a tool result is not the place to put one.
-	loop.Inject = handle.injectSteering
-
-	started := time.Now()
-	turnErr := loop.Turn(ctx, in.Task)
-	state := sess.State()
-	answer := finalText(state)
-
-	who := "on " + tier.ID
-	if named != nil {
-		who = named.Name + " on " + tier.ID
-	}
-	spent := ""
-	if state.CostMicroUSD > 0 {
-		spent = ", " + catalog.Money(state.CostMicroUSD).String()
-	}
-	trailer := fmt.Sprintf("[delegate %s: %d model calls, %s%s]",
-		who, state.Calls, time.Since(started).Round(time.Second), spent)
-	trailer = strings.TrimSuffix(trailer, "]") + "; task " + task.Label() + "]"
-
-	switch {
-	case ctx.Err() != nil:
-		return tools.Result{}, ctx.Err()
-	case turnErr != nil && answer == "":
-		return tools.Result{Content: fmt.Sprintf("the subagent failed: %v\n%s%s",
-			turnErr, handle.activityReport(), trailer), IsError: true}, nil
-	case turnErr != nil:
-		// A partial answer with a named failure beats discarding the work.
-		handle.RecordFailure("subagent stopped early: " + turnErr.Error())
-		return tools.Result{Content: fmt.Sprintf("%s\n\n[the subagent stopped early: %v]\n%s%s",
-			answer, turnErr, handle.activityReport(), trailer)}, nil
-	case answer == "":
-		return tools.Result{Content: "the subagent finished without a final answer\n" +
-			handle.activityReport() + trailer, IsError: true}, nil
-	default:
-		return tools.Result{Content: answer + "\n\n" + trailer}, nil
-	}
 }
 
 // finalText is the last complete assistant message's text, which the
