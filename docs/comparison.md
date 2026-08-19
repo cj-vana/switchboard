@@ -1,6 +1,6 @@
 # Product comparison
 
-This comparison is dated 2026-08-18. It separates repository-backed
+This comparison is dated 2026-08-19. It separates repository-backed
 Switchboard behavior, measured results, and external product reports.
 Competitor behavior changes quickly, so external claims should be rechecked
 before use in a release announcement.
@@ -26,10 +26,10 @@ one. It does not prove that another product lacks an internal mechanism.
 | Cache state | Per-target modeled warmth with observed provider accounting | Cache discounts may be documented without a live routing belief |
 | Session branching | Append-only logs with fork, named pins, retry, recap, and line provenance | Resume and checkpoint features vary by product |
 | Terminal workbench | Searchable command palette, revision-aware file and literal search, exact Git diff, and built-in semantic LSP views | Terminal and IDE surfaces divide this work differently; integration breadth varies |
-| Verification | User-armed watch, turn bisect, paired races, and a router evaluation gate | Hooks and test commands are common; no equivalent combined surface found |
+| Verification | User-armed watch, turn bisect, paired races, a second-rung audit of a turn's claims against its record, and a router evaluation gate | Hooks and test commands are common; no equivalent combined surface found |
 | Command safety | Sandbox off by default; opt-in verified confinement; explicit yolo mode for unconfined host access | Products expose sandbox or approval modes with different guarantees |
 | CLI discovery | Static help before config or extension discovery; generated completion follows the dispatcher's closed grammar | Help and completion depth vary by product and release |
-| Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP, hooks, and one subagent level with up to four independent calls in an all-delegate batch | The reviewed guides list skill, plugin, provider, and LSP surfaces that Switchboard does not yet match; this review did not rank ecosystems |
+| Extensions | Compatible native skills, local plugins, direct and trusted plugin MCP with server-initiated elicitation, hooks, and one subagent level with up to four independent calls in an all-delegate batch | The reviewed guides list skill, plugin, provider, and LSP surfaces that Switchboard does not yet match; this review did not rank ecosystems |
 | Computer control | macOS Accessibility tool under the normal permission engine | Hosted or API computer-use surfaces exist; terminal integration varies |
 
 ## Routing, cost, and cache
@@ -90,6 +90,15 @@ file. A surviving line can therefore be attributed to a session, turn, tier,
 target, and prompt. Lines created by a shell, formatter, hand edit, or work
 that predates the logs remain unknown. `/recap`, `/find`, `/changes`, and
 `/mistakes` expose other parts of the same record.
+
+`/audit` reads the turn that just finished on a second rung: the closing
+message is the claim, the recorded tool calls with their results and the
+checkpoint captures are the evidence, and a finding is where the two disagree.
+It reads the record and not the code, takes no turn number because the message
+log and the recorder number turns separately, and states its scope every time,
+including that a shell command's side effects are outside the recorder and so
+make a claim unchecked rather than wrong. With no `[slots] auditor` bound it
+runs on the rung that made the claims and says so.
 
 `/watch <command>` runs a user-selected verifier after edit rounds and reports
 only changed results. A new mid-turn failure can contribute routing evidence.
@@ -205,7 +214,11 @@ Switchboard currently supports four language-server families, one subagent
 level, and computer control only on macOS. Its plugin installer copies exact
 local sources and does not fetch from a marketplace. Advanced native MCP
 authentication, transport, and approval features remain disabled unless the
-runtime can enforce them. The router remains deterministic until the
+runtime can enforce them. Of the client roles an MCP server can invoke,
+elicitation is answered on a surface that has a user; sampling and roots stay
+refused. Image and other non-text content in an MCP tool result is still
+reported as omitted, because the canonical tool result carries text and
+widening it needs a captured response from each adapter first. The router remains deterministic until the
 evaluation gate passes.
 
 ## Reproduce it

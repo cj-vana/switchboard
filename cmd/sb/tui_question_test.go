@@ -180,3 +180,25 @@ func TestParseQuestionPicks(t *testing.T) {
 		}
 	}
 }
+
+// An MCP server may elicit at any moment, including while a permission prompt
+// is on screen. Replacing that dialog would strand the answer the loop is
+// blocked on, so the question is refused instead — and refused is not the same
+// fact as the user declining.
+func TestAQuestionArrivingOverAnOpenDialogIsRefusedRatherThanShown(t *testing.T) {
+	m := testModel(t)
+	m.dlg = &pickerDialog{title: "already open", items: []pickerItem{{id: "a", label: "a"}}}
+
+	respond := make(chan tools.Answer, 1)
+	m.Update(questionMsg{q: tools.Question{Question: "may I?"}, respond: respond})
+
+	if _, ok := m.dlg.(*questionDialog); ok {
+		t.Fatal("the open dialog was replaced by the question")
+	}
+	if _, shown := <-respond; shown {
+		t.Error("an answer was produced for a question nobody was shown")
+	}
+	if m.pendingQuestion != nil {
+		t.Error("a question nobody saw was recorded as pending")
+	}
+}

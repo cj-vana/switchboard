@@ -165,10 +165,15 @@ Optional model roles are configured under `[slots]`. For example:
 advisor = "t2"
 summarizer = "t3"
 approver = "t1"
+auditor = "t3"
 ```
 
 The advisor watches for stuck-agent signals. The summarizer handles manual and
-automatic compaction regardless of the active tier. In `auto` permission mode,
+automatic compaction regardless of the active tier. The auditor reads `/audit`:
+the turn that just finished, its recorded tool calls and checkpoint captures,
+and the closing message that claims what was done. Without the slot the audit
+runs on the tier that made the claims and says so, because a model checking its
+own work is the weakest reading of it. In `auto` permission mode,
 `approver` selects the tier or direct target that reviews eligible commands,
 but only while verified command confinement is active. Without the slot,
 Switchboard tries the ladder from its lowest tier. With confinement off or

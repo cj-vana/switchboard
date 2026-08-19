@@ -87,6 +87,7 @@ verification, and the model ladder in one terminal.
 | Review code changes | `/diff` shows staged, unstaged, and untracked work plus a bounded omitted-path inventory; `/review [turn]` shows one turn's recorded mutations |
 | Edit against known state | Writes publish atomically. Edit and undo compare the expected file state immediately before publication and refuse a mismatch already present |
 | Verify and recover | `/watch`, `/bisect`, `/undo`, `/fork`, and `/retry` keep test evidence and recovery attached to the session record |
+| Check what a turn claimed | `/audit` reads the finished turn on a second rung and reports where the closing message and the record disagree |
 | Explain the route | `/why`, `/estimate`, `/budget`, `/race`, and `/blame` connect model choice, cost, and surviving code |
 | Continue after a boundary | Bounded, redacted continuity capsules carry recorded todo state and the next action once across restart, fork, retry, or compaction without rewriting the visible conversation |
 

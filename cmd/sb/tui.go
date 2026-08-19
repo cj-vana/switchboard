@@ -668,6 +668,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case questionMsg:
+		if m.dlg != nil {
+			// Something already owns the input zone. The ask tool cannot
+			// overlap itself, but an MCP server may elicit at any moment, and
+			// replacing a permission prompt with a question would strand the
+			// answer the loop is blocked on. Closing the channel says nobody
+			// could be asked, which is the truth and is not the same as the
+			// user declining.
+			close(msg.respond)
+			return m, nil
+		}
 		m.pendingQuestion = msg.respond
 		m.dlg = newQuestionDialog(msg.q, msg.respond)
 		m.ring()

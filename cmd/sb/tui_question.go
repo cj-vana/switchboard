@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -28,7 +29,13 @@ func (a *tuiQuestioner) AskUser(ctx context.Context, q tools.Question) (tools.An
 	respond := make(chan tools.Answer, 1)
 	a.p.Send(questionMsg{q: q, respond: respond})
 	select {
-	case ans := <-respond:
+	case ans, shown := <-respond:
+		if !shown {
+			// The channel closed without an answer: the surface had another
+			// prompt open and could not show this one. Saying so beats
+			// reporting a decline nobody made.
+			return tools.Answer{}, errors.New("another prompt is already open, so the question could not be shown")
+		}
 		return ans, nil
 	case <-ctx.Done():
 		return tools.Answer{}, ctx.Err()

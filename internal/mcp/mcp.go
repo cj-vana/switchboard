@@ -1295,9 +1295,10 @@ func (c *Client) sendAnswer(lifetime context.Context, timeout time.Duration, rep
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
-	ctx, cancel := context.WithTimeout(lifetime, timeout)
-	defer cancel()
-
+	// The send deadline is taken after the answer exists, not before. An
+	// elicitation blocks on a person, and a five-second timer started here
+	// would expire while the dialog was still open: the reply would be
+	// composed correctly and then fail to send, every time, for every human.
 	var msg []byte
 	switch {
 	case reply.method == "ping":
@@ -1308,9 +1309,9 @@ func (c *Client) sendAnswer(lifetime context.Context, timeout time.Duration, rep
 		}{"2.0", reply.id, map[string]any{}})
 
 	case reply.method == "elicitation/create" && c.questioner != nil:
-		// The dialog blocks on a person, so it gets the client's lifetime
-		// rather than the send deadline: a five-second timer on a question is
-		// a question nobody can answer.
+		// The dialog gets the client's lifetime. It ends when the connection
+		// does and not before, because the only honest deadline on a question
+		// is how long the session lasts.
 		result, err := c.answerElicitation(lifetime, reply.params)
 		if err != nil {
 			var unsupported *unsupportedElicit
@@ -1339,6 +1340,9 @@ func (c *Client) sendAnswer(lifetime context.Context, timeout time.Duration, rep
 			Error   errBody         `json:"error"`
 		}{"2.0", reply.id, errBody{-32601, "switchboard does not serve " + reply.method}})
 	}
+
+	ctx, cancel := context.WithTimeout(lifetime, timeout)
+	defer cancel()
 	return c.transport.Send(ctx, msg)
 }
 

@@ -29,7 +29,12 @@ func newElicitTransport() *elicitTransport {
 	}
 }
 
-func (t *elicitTransport) Send(_ context.Context, msg []byte) error {
+// Send honors the context because a real transport does, and because the
+// deadline on the reply is exactly what this file has to be able to catch.
+func (t *elicitTransport) Send(ctx context.Context, msg []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	t.sent <- append([]byte(nil), msg...)
 	return nil
 }
@@ -48,16 +53,21 @@ func (t *elicitTransport) Close() error {
 	return nil
 }
 
-// scriptedQuestioner answers in order and records what it was shown.
+// scriptedQuestioner answers in order and records what it was shown. delay
+// stands in for a person reading the question.
 type scriptedQuestioner struct {
 	answers []tools.Answer
 	err     error
+	delay   time.Duration
 
 	mu    sync.Mutex
 	asked []tools.Question
 }
 
 func (q *scriptedQuestioner) AskUser(_ context.Context, question tools.Question) (tools.Answer, error) {
+	if q.delay > 0 {
+		time.Sleep(q.delay)
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.asked = append(q.asked, question)
@@ -101,6 +111,38 @@ func elicitReply(t *testing.T, questioner tools.Questioner, params string) map[s
 	case <-time.After(5 * time.Second):
 		t.Fatal("the client never answered elicitation/create")
 		return nil
+	}
+}
+
+// The reply deadline bounds the send, not the thinking. A timer started before
+// the dialog opened would expire while a person read the question, and the
+// answer would be composed correctly and then never sent — for every human,
+// every time, silently.
+func TestAPersonMayTakeLongerThanTheReplyDeadline(t *testing.T) {
+	tr := newElicitTransport()
+	q := &scriptedQuestioner{answers: []tools.Answer{{Picked: []string{"yes"}}}, delay: 300 * time.Millisecond}
+	c := newClient(Spec{Name: "patient"}, tr, nil, WithQuestioner(q))
+	c.answerTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { _ = c.Close() })
+
+	tr.incoming <- []byte(`{"jsonrpc":"2.0","id":"q1","method":"elicitation/create","params":` +
+		`{"message":"ok?","requestedSchema":{"type":"object","properties":{"confirm":{"type":"boolean"}}}}}`)
+
+	select {
+	case raw := <-tr.sent:
+		var reply map[string]any
+		if err := json.Unmarshal(raw, &reply); err != nil {
+			t.Fatalf("reply is not JSON: %s", raw)
+		}
+		if _, isError := reply["error"]; isError {
+			t.Fatalf("a slow answer became an error: %s", raw)
+		}
+		content, _ := resultOf(t, reply)["content"].(map[string]any)
+		if content["confirm"] != true {
+			t.Errorf("content = %v, want the answer the person gave", content)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the answer never reached the transport")
 	}
 }
 
