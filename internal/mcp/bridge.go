@@ -73,7 +73,14 @@ type bridgedTool struct {
 	client *Client
 	info   ToolInfo
 	name   string
+
+	// registry is set when the tool is registered, and is where a returned
+	// picture goes. Nil means nobody is collecting: the images are dropped
+	// and the result says so, which is the closed state.
+	registry *tools.Registry
 }
+
+func (t *bridgedTool) setImageSink(r *tools.Registry) { t.registry = r }
 
 func (t *bridgedTool) Name() string { return t.name }
 
@@ -122,7 +129,17 @@ func (t *bridgedTool) Plan(input json.RawMessage) (tools.Plan, error) {
 				}
 				return tools.Result{Content: err.Error(), IsError: true}, nil
 			}
-			return tools.Result{Content: res.Content, IsError: res.IsError}, nil
+			// The pictures go to the registry, which decides whether the
+			// bound rung can see one and returns the sentence saying what
+			// happened. A dropped image the model is not told about is a
+			// model reasoning about a screenshot it never saw.
+			content := res.Content
+			if t.registry != nil {
+				content += t.registry.AcceptToolImages(res.Images)
+			} else if len(res.Images) > 0 {
+				content += fmt.Sprintf("\n\n[%d image blocks were returned and there is nowhere to deliver them.]", len(res.Images))
+			}
+			return tools.Result{Content: content, IsError: res.IsError}, nil
 		},
 	}, nil
 }

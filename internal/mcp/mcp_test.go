@@ -391,7 +391,13 @@ func TestCallFlattensContentAndPassesErrors(t *testing.T) {
 	c, _ := connectFake(t, echoTool, func(name string, args json.RawMessage) string {
 		switch name {
 		case "mixed":
+			// "..." is not base64, which is the shape of a server claiming a
+			// picture and not sending one.
 			return `{"content":[{"type":"text","text":"hello "},{"type":"image","data":"..."},{"type":"text","text":"world"}]}`
+		case "screenshot":
+			return `{"content":[{"type":"text","text":"captured"},{"type":"image","mimeType":"image/png","data":"aGVsbG8="}]}`
+		case "audio":
+			return `{"content":[{"type":"audio","data":"aGVsbG8="}]}`
 		case "failing":
 			return `{"content":[{"type":"text","text":"it broke"}],"isError":true}`
 		}
@@ -403,8 +409,37 @@ func TestCallFlattensContentAndPassesErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Content != "hello [image content omitted]world" || res.IsError {
+	if res.Content != "hello [image content the server sent could not be decoded]world" || res.IsError {
 		t.Errorf("mixed call = %+v", res)
+	}
+	if len(res.Images) != 0 {
+		t.Errorf("an undecodable block became an image: %+v", res.Images)
+	}
+
+	// The case the flattening was losing: a screenshot is the answer to the
+	// call that asked for one, and it comes out of the client rather than
+	// becoming a note where the picture was.
+	res, err = c.Call(ctx, "screenshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Images) != 1 {
+		t.Fatalf("screenshot call = %+v, want the image carried out", res)
+	}
+	if res.Images[0].MediaType != "image/png" || string(res.Images[0].Data) != "hello" {
+		t.Errorf("image = %+v, want the decoded bytes and its media type", res.Images[0])
+	}
+	if res.Content != "captured" {
+		t.Errorf("content = %q, want the text without a placeholder for the picture", res.Content)
+	}
+
+	// Everything else still says what it was rather than being guessed at.
+	res, err = c.Call(ctx, "audio", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "[audio content omitted]" {
+		t.Errorf("audio call = %+v, want the block named", res)
 	}
 
 	res, err = c.Call(ctx, "failing", nil)

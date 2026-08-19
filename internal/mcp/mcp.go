@@ -16,6 +16,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/switchboard-code/switchboard/internal/provider"
 	"github.com/switchboard-code/switchboard/internal/tools"
 )
 
@@ -285,6 +287,11 @@ type ToolInfo struct {
 type Result struct {
 	Content string
 	IsError bool
+
+	// Images are the picture blocks the server returned. They are carried out
+	// rather than flattened into Content because a screenshot is the answer to
+	// the call that asked for one, and "[image content omitted]" is not.
+	Images []provider.Image
 
 	// RPCError retains the peer's typed code and data when a protocol-level
 	// tool refusal is intentionally returned as a model-correctable result.
@@ -944,6 +951,12 @@ func (c *Client) Call(ctx context.Context, tool string, args json.RawMessage) (R
 		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
+			// Data is base64 on the wire for an image or audio block, and
+			// mimeType names what it is. Both are decoded here rather than
+			// passed along as text, because a caller handed base64 has to
+			// guess whether it is a picture or a paragraph.
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
 		} `json:"content"`
 		IsError bool `json:"isError"`
 	}
@@ -955,12 +968,24 @@ func (c *Client) Call(ctx context.Context, tool string, args json.RawMessage) (R
 	}
 
 	var b strings.Builder
+	var images []provider.Image
 	for _, block := range res.Content {
-		if block.Type == "text" {
+		switch {
+		case block.Type == "text":
 			b.WriteString(block.Text)
-			continue
+		case block.Type == "image" && block.Data != "":
+			data, decodeErr := base64.StdEncoding.DecodeString(block.Data)
+			if decodeErr != nil || len(data) == 0 {
+				// A block that says image and is not one is named rather than
+				// guessed at: handing the model undecodable bytes as a picture
+				// is worse than telling it the server sent something broken.
+				fmt.Fprintf(&b, "[image content the server sent could not be decoded]")
+				continue
+			}
+			images = append(images, provider.Image{MediaType: block.MimeType, Data: data})
+		default:
+			fmt.Fprintf(&b, "[%s content omitted]", block.Type)
 		}
-		fmt.Fprintf(&b, "[%s content omitted]", block.Type)
 	}
 	// Tool output is model-visible and commonly echoed into logs or persisted
 	// transcripts. A server must not be able to exfiltrate a credential that
@@ -970,7 +995,7 @@ func (c *Client) Call(ctx context.Context, tool string, args json.RawMessage) (R
 		redactionValues = secrets
 	}
 	content := redactSecrets(b.String(), redactionValues)
-	return Result{Content: content, IsError: res.IsError}, nil
+	return Result{Content: content, IsError: res.IsError, Images: images}, nil
 }
 
 func validateResultType(method, resultType string, secrets []string) error {

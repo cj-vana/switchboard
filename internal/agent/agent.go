@@ -238,6 +238,10 @@ func (l *Loop) BindSession(sess *session.Session) error {
 	// binding can prove that relationship, so every bind drops it. Branch also
 	// starts empty to close the pre-ToolResult interval.
 	l.Tools.ForgetAllVersions()
+	// Pictures waiting for a round boundary answered a question this session
+	// never asked, and delivering them into it would be evidence from a
+	// context that is gone.
+	l.Tools.ForgetToolImages()
 	if err := l.Tools.RestoreTodos(items); err != nil {
 		return fmt.Errorf("bind session: restore todos: %w", err)
 	}

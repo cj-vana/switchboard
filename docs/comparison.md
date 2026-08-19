@@ -225,9 +225,10 @@ local sources and does not fetch from a marketplace. Advanced native MCP
 authentication, transport, and approval features remain disabled unless the
 runtime can enforce them. Of the client roles an MCP server can invoke,
 elicitation is answered on a surface that has a user; sampling and roots stay
-refused. Image and other non-text content in an MCP tool result is still
-reported as omitted, because the canonical tool result carries text and
-widening it needs a captured response from each adapter first. The router remains deterministic until the
+refused. An image in an MCP tool result reaches a
+target that reads images, delivered as a round-boundary message rather than
+inside the tool result, so no adapter mapping or wire format is involved; audio
+and other non-text blocks are still named and omitted. The router remains deterministic until the
 evaluation gate passes.
 
 ## Reproduce it

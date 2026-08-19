@@ -333,6 +333,19 @@ leaves. Declining and cancelling are reported as themselves. Sampling, roots,
 and other ungranted client roles remain refused. Modern HTTP response POSTs are rejected explicitly. A mid-session
 tool-list change is reported and takes effect only on the next Switchboard run.
 
+An image block in a tool result reaches the model. The client decodes it and
+the bridge queues it, and it is delivered at the next round boundary as an
+injected user-role message rather than inside the tool result: every adapter
+already maps an image inside a message and none has a captured mapping for one
+inside a tool result, so this adds no adapter code and touches no wire format.
+Delivery is gated on the bound target's recorded vision support, read live
+because a move can change it, and a target the catalog does not price counts as
+cannot. When an image is not delivered the result says how many and why rather
+than omitting it silently. At most four images and four MiB ride out of one
+call, and the result names the cap that bit. A block that claims to be an image
+and does not decode is reported as such rather than handed over as bytes.
+Audio and every other non-text block is still named and omitted.
+
 MCP tools remain external effects. A server process is not inside the command
 sandbox, so neither `bypass` nor `yolo` auto-approves its tools. An `allow`
 entry is joined to the raw server and tool identity and becomes a permission

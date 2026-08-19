@@ -539,6 +539,24 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A picture from an external tool rides a message, never a tool result.**
+`internal/tools/toolimages.go` queues what the MCP bridge decoded and
+`cmd/sb/tui_toolimages.go` delivers it at the round boundary as an injected
+user-role message. The delivery shape is the constraint, not a convenience:
+every adapter already maps `provider.Image` inside a message and none has a
+captured mapping for an image inside a `tool_result`, so carrying it in the
+result would mean mapping a wire format nobody has run. This way adds no
+adapter code and no capture.
+
+The gate reads the live binding rather than a launch-time value, because an
+escalation or a relief substitution changes which rung is looking. A target the
+catalog does not price counts as cannot see, since sending on that guess earns
+a provider refusal mid-turn. Nothing is dropped silently: the tool result says
+how many did not travel and why, because a model told nothing is a model
+reasoning about a screenshot it never saw. Count and bytes are capped per call
+and the result names the cap that bit, and a session swap drops what is
+undelivered — those pictures answered a question the new session never asked.
+
 **A scripted run streams what the loop reported, and nothing else.**
 `-output stream-json` (`cmd/sb/headless_stream.go`) wraps the renderer rather
 than replacing it, so the transcript a person reads keeps going to stderr while

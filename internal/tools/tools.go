@@ -86,6 +86,11 @@ type Registry struct {
 	// and edit mutate it. Set at assembly; nil means no undo.
 	checkpoints Checkpointer
 
+	// images queues what an external tool returned as a picture, for delivery
+	// at a round boundary. A branch shares it for the reason it shares the
+	// process set: the pictures answer a question this session asked.
+	images *toolImages
+
 	// background owns the commands exec started and left running. It is the
 	// session's, set at assembly, and stopped when the session ends: a set
 	// that outlived its session would be a handle to processes nobody is left
@@ -167,6 +172,7 @@ func NewRegistryWithExecution(workspace string, controller *execution.Controller
 		execution:  controller,
 		versions:   newFileVersions(),
 		background: execution.NewBackgroundSet(),
+		images:     &toolImages{},
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 	}
@@ -210,6 +216,13 @@ func (r *Registry) add(t Tool) {
 func (r *Registry) AddExternal(t Tool) error {
 	if _, exists := r.tools[t.Name()]; exists {
 		return fmt.Errorf("tool %s is already registered", t.Name())
+	}
+	// A tool that returns pictures needs somewhere to put them, and the
+	// registry is the thing that knows whether the bound rung can see one.
+	// Wiring it here rather than at construction keeps the bridge from having
+	// to be handed a registry it does not otherwise need.
+	if sink, ok := t.(interface{ setImageSink(*Registry) }); ok {
+		sink.setImageSink(r)
 	}
 	r.add(t)
 	return nil

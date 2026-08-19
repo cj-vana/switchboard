@@ -439,6 +439,9 @@ func runTUI(
 	// cannot hold, or a target that did not answer. Both checks a move makes
 	// are made here too, and a pin refuses relief outright.
 	loop.Relief = app.relief
+	// An external tool's pictures are queued only when the bound rung can see
+	// one, and the check reads the live binding because a move changes it.
+	loop.Tools.SetVision(app.targetReadsImages)
 
 	m.addBanner(sess, resumed)
 	// Startup notes render into the model directly, because the program is
