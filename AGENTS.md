@@ -539,6 +539,25 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**A process this program started and forgot is this program's fault.**
+`internal/execution/background.go` reuses `Run`'s body rather than
+reimplementing it, so the confinement is applied by the same code and fails
+closed the same way, the whole process group is signalled rather than the
+direct child, and output lands in the same bounded capture. What is new is a
+lifetime, and a lifetime is what leaks, so three bounds hold it: a one-hour
+ceiling, a cap on how many run at once, and `StopAll` deferred at session
+assembly, which is the last moment the program can still be sure the group is
+its own to signal.
+
+`proc` is a separate tool because "what has it printed, is it still running,
+stop it" are questions about a process rather than requests to run one. It
+carries `EffectExecute` although it starts nothing: a stop signals a group and
+a read returns what a running process wrote, and pricing that as a read would
+have the engine describing a posture the user does not have. A registry holding
+`exec` without `proc` refuses `background` outright, because starting what you
+cannot stop is a leak with extra steps, and `Branch` shares the set rather than
+copying it — a process started under a branch is still this program's to stop.
+
 **A refusal the ladder can answer is offered to the surface, once, between
 rounds.** `Loop.Relief` (`internal/agent/agent.go`, `cmd/sb/tui_relief.go`) is
 consulted for exactly two errors: a `ContextWindowError`, which is a fact about

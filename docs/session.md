@@ -368,6 +368,24 @@ Accessibility API. Its permission model and tested limits are in
 MCP, hooks, skills, plugins, custom commands, and delegation are documented in
 [Native extension compatibility](extensions.md).
 
+### Background commands
+
+`exec` with `background: true` starts a command and returns a handle instead of
+waiting, which is the only way to run a dev server, a watch build, or a
+migration that outlasts a turn. The `proc` tool then lists what this session
+started, reads what one has printed without consuming it, and stops one along
+with everything it started.
+
+The bounds are the point. A background command is killed at a one-hour ceiling
+and when the session ends, because a process Switchboard started and forgot is
+Switchboard's fault. At most eight run at once. Output goes to the same bounded
+capture a foreground command uses, and a read returns the tail. Confinement is
+applied by the same code that applies it to a foreground command and fails
+closed the same way. `proc` carries the execute effect even though it starts
+nothing, because a stop signals a process group and a read returns what a
+running process wrote. A restricted agent granted `exec` without `proc` is
+refused `background` rather than handed a process it has no verb for.
+
 ## Scripting
 
 `sb -p "prompt"` runs one turn and exits. Piped stdin becomes an attachment:

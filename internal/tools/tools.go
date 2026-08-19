@@ -86,6 +86,13 @@ type Registry struct {
 	// and edit mutate it. Set at assembly; nil means no undo.
 	checkpoints Checkpointer
 
+	// background owns the commands exec started and left running. It is the
+	// session's, set at assembly, and stopped when the session ends: a set
+	// that outlived its session would be a handle to processes nobody is left
+	// to reap. A branch and a subagent share the primary's, because a process
+	// started under one is still this program's to stop.
+	background *execution.BackgroundSet
+
 	// questioner, when non-nil, is the surface the ask tool resolves
 	// questions against. Set at assembly, only by surfaces with a user
 	// attached; nil means the tool refuses with the reason.
@@ -159,6 +166,7 @@ func NewRegistryWithExecution(workspace string, controller *execution.Controller
 		capability: controller.Capability(),
 		execution:  controller,
 		versions:   newFileVersions(),
+		background: execution.NewBackgroundSet(),
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 	}
@@ -166,6 +174,7 @@ func NewRegistryWithExecution(workspace string, controller *execution.Controller
 	r.add(&writeTool{r})
 	r.add(&editTool{r})
 	r.add(&execTool{r})
+	r.add(&procTool{r})
 	r.add(&globTool{r})
 	r.add(&grepTool{r})
 	r.add(&todoTool{r})
@@ -178,6 +187,15 @@ func NewRegistryWithExecution(workspace string, controller *execution.Controller
 
 // Execution returns the controller shared with branches and delegates.
 func (r *Registry) Execution() *execution.Controller { return r.execution }
+
+// StopBackgroundCommands ends everything exec left running and refuses more.
+// The surface calls it on the way out: that is the last moment this program
+// can be sure those processes are still its own to signal.
+func (r *Registry) StopBackgroundCommands() {
+	if r.background != nil {
+		r.background.StopAll()
+	}
+}
 
 func (r *Registry) add(t Tool) {
 	r.tools[t.Name()] = t
@@ -201,7 +219,7 @@ func (r *Registry) AddExternal(t Tool) error {
 // validate a configured tool grant — a named agent's — without building a
 // registry; the test tying it to NewRegistry is what keeps the two honest.
 func CoreNames() []string {
-	return []string{"ask", "edit", "exec", "glob", "grep", "read", "todo", "webfetch", "websearch", "write"}
+	return []string{"ask", "edit", "exec", "glob", "grep", "proc", "read", "todo", "webfetch", "websearch", "write"}
 }
 
 // Restrict narrows the registry to the named tools. Session assembly only,

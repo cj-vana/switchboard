@@ -278,6 +278,10 @@ func run() error {
 		return err
 	}
 	defer mcpEnv.Close()
+	// Whatever exec left running goes with the session. A background process
+	// this program started and then forgot is this program's fault, and the
+	// exit is the last moment it can still be sure the group is its own.
+	defer registry.StopBackgroundCommands()
 	for _, n := range nativePolicyNotes {
 		mcpEnv.add(n)
 	}

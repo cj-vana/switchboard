@@ -41,7 +41,8 @@ func (t *execTool) Schema() json.RawMessage {
     },
     "script": {"type": "string", "description": "One /bin/sh script, used instead of command when you need a pipe, glob, redirection, or variable: \"grep -r foo . | head -20\"."},
 	"network": {"type": "boolean", "description": "Request internet access when a sandbox is active. With the default sandbox-off posture, approved commands already have the host's full network reach regardless of this hint."},
-    "timeout_seconds": {"type": "integer", "description": "Wall-clock limit. Defaults to 120."}
+    "timeout_seconds": {"type": "integer", "description": "Wall-clock limit. Defaults to 120. Ignored when background is true."},
+    "background": {"type": "boolean", "description": "Start the command and return immediately with a handle instead of waiting. For a server, a watch build, or anything meant to keep running while you work. Read its output and stop it with the proc tool."}
   }
 }`)
 }
@@ -52,6 +53,7 @@ type execInput struct {
 	Shell          bool     `json:"shell"`
 	Network        bool     `json:"network"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
+	Background     bool     `json:"background"`
 }
 
 func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
@@ -110,6 +112,9 @@ func (t *execTool) Plan(input json.RawMessage) (Plan, error) {
 				return errorf("exec: %v", err)
 			}
 			defer release()
+			if in.Background {
+				return t.startBackground(runArgv, shell, runPolicy)
+			}
 			res, err := execution.Run(ctx, execution.Command{
 				Argv:    runArgv,
 				Shell:   shell,

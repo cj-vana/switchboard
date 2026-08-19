@@ -28,6 +28,10 @@ func (r *Registry) Branch(refuse map[string]string) *Registry {
 		capability: r.capability,
 		execution:  r.execution,
 		versions:   newFileVersions(),
+		// A process started under a branch is still this program's to stop, so
+		// the set is shared rather than copied. The branch's own refuse map is
+		// what keeps a read-only arm from starting one.
+		background: r.background,
 		todos:      &todoState{},
 		tools:      map[string]Tool{},
 		// No checkpointer: a branch is read-only by policy, and an undo
