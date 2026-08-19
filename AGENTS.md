@@ -276,12 +276,25 @@ busy-safe, because the expectation reads the hash of the last planned
 request and that field is the loop goroutine's to write during a turn.
 
 **A capability claim gets tested against the target, not against its docs.**
-Everything the Anthropic adapter asserts was confirmed with a live request
-first: that this model rejects `adaptive` thinking and takes a token budget,
+What the Anthropic adapter asserts was confirmed with a live request first:
+that `claude-haiku-4-5` rejects `adaptive` thinking and takes a token budget,
 that the one-hour cache TTL needs no beta header and bills to its own bucket,
 that replaying a thinking block without its signature is refused while dropping
 the block is accepted, and that a tool result is a user message because there is
 no tool role. Each of those contradicted a reasonable guess.
+
+**A claim earned against one model is a claim about that model.** The sentence
+above used to say "this model" and the adapter applied it to every Anthropic
+target, which is how one live result became a rule for models that invert it:
+the current Opus and Sonnet models refuse `budget_tokens` with a 400 and take
+the effort word on `output_config` instead. The catalog had said so all along —
+its entries name the dialect and offer `xhigh`, an effort the budget shape has
+no number for — so the two disagreed and the adapter won, silently, on the
+targets nobody had run. `adaptiveThinking` in `internal/provider/anthropic` is
+now the list, a model absent from it keeps the budget shape because that is the
+survivable direction for a wrong guess, and the two dialects are pinned by
+offline tests over the bytes the adapter builds. Adding a model to that map is
+adding a capability claim: it needs the live case beside it, not a docs page.
 
 **Wire formats get captured before they get mapped.** Both adapters were
 written against a recorded response from a running server, checked into

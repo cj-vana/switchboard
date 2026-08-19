@@ -15,7 +15,7 @@
 # therefore high until the introductory period ends. Over-estimating is the
 # safe direction for a budget, which enforces against worst-reasonable cost.
 
-revision = "2026-08-13"
+revision = "2026-08-19"
 
 # --------------------------------------------------------------------------
 # Local models.
@@ -208,12 +208,58 @@ source_urls = ["https://api.kimi.com/coding/v1/models"]
 # --------------------------------------------------------------------------
 # Anthropic, first-party API.
 #
-# No adapter binds these yet; they are here so the pricing and cache mechanics
-# the router needs are data rather than something to invent later. The
-# minimum cacheable prefix is the field most worth reading twice: it is not
+# The minimum cacheable prefix is the field most worth reading twice: it is not
 # monotonic across generations, so a 3,000-token prefix caches on Opus 5 and
 # silently does not on Haiku 4.5, with no error in either direction.
+#
+# The reasoning field is the second. It is not decoration here: these four take
+# the adaptive thinking shape and Haiku 4.5 takes a token budget, and a request
+# built in the wrong dialect is refused with a 400 rather than degraded. The
+# adapter keeps that split in its own adaptiveThinking map because it does not
+# read this file; the two have to be changed together, and the offline tests in
+# internal/provider/anthropic are what say so out loud.
 # --------------------------------------------------------------------------
+
+[[model]]
+provider = "anthropic"
+surface = "first-party"
+provider_model_id = "claude-fable-5"
+display_name = "Claude Fable 5"
+context_window = 1000000
+max_output = 128000
+tools = "parallel"
+strict_schema = true
+vision = true
+# Always, not adaptive: thinking cannot be turned off on this target. Asking for
+# it disabled is refused rather than honored, so a rung that wants no thinking
+# wants a different model.
+reasoning = "always"
+effort_levels = ["low", "medium", "high", "xhigh", "max"]
+structured_out = true
+verified_at = 2026-08-19T00:00:00Z
+source_urls = [
+  "https://platform.claude.com/docs/en/about-claude/models/overview",
+  "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+]
+
+  [[model.pricing]]
+  effective_at = 2026-08-19T00:00:00Z
+  input_per_mtok = "10.00"
+  output_per_mtok = "50.00"
+  cache_read_per_mtok = "1.00"
+  cache_write_per_mtok = { "5m" = "12.50", "1h" = "20.00" }
+
+  # 512, the same floor as Opus 5 and half of Opus 4.8's. The non-monotonicity
+  # the section header warns about runs in both directions.
+  [model.cache]
+  modes = ["explicit"]
+  default_mode = "explicit"
+  min_tokens = 512
+  ttls = ["5m", "1h"]
+  max_breakpoints = 4
+  lookback_blocks = 20
+  routing_key_support = false
+  usage_accounting = "separate"
 
 [[model]]
 provider = "anthropic"

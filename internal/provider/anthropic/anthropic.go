@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -258,7 +259,7 @@ func (c *Client) buildRequest(target provider.RouteTarget, req provider.Request,
 	}
 	tools := toolsToWire(req.Tools)
 
-	thinking, err := thinkingFor(target)
+	thinking, outputConfig, err := thinkingFor(target)
 	if err != nil {
 		return nil, err
 	}
@@ -290,14 +291,15 @@ func (c *Client) buildRequest(target provider.RouteTarget, req provider.Request,
 
 	if stream {
 		return json.Marshal(messagesRequest{
-			Model:       target.ModelID,
-			MaxTokens:   maxTokens,
-			Stream:      true,
-			System:      system,
-			Tools:       tools,
-			Messages:    messages,
-			Thinking:    thinking,
-			Temperature: temperature,
+			Model:        target.ModelID,
+			MaxTokens:    maxTokens,
+			Stream:       true,
+			System:       system,
+			Tools:        tools,
+			Messages:     messages,
+			Thinking:     thinking,
+			OutputConfig: outputConfig,
+			Temperature:  temperature,
 		})
 	}
 	// The counting endpoint rejects max_tokens and stream, so it takes the same
@@ -311,12 +313,13 @@ func (c *Client) buildRequest(target provider.RouteTarget, req provider.Request,
 	})
 }
 
-// effortBudgets maps the ladder's effort names onto thinking budgets.
+// effortBudgets maps the ladder's effort names onto thinking budgets, for the
+// models that take a budget.
 //
-// This target takes a token budget rather than an effort word: "adaptive" is
-// rejected outright, which was confirmed against the live API. The mapping is
-// therefore this adapter's policy and is named as such, not presented as
-// something the provider defines.
+// The mapping is this adapter's policy and is named as such, not something the
+// provider defines. It was confirmed live against claude-haiku-4-5, which
+// rejects the word "adaptive" outright, and it is also the shape Moonshot's
+// Kimi Code endpoint accepts through this adapter.
 var effortBudgets = map[string]int{
 	"low":    1024,
 	"medium": 4096,
@@ -324,23 +327,66 @@ var effortBudgets = map[string]int{
 	"max":    32768,
 }
 
-func thinkingFor(target provider.RouteTarget) (*wireThinking, error) {
+// adaptiveThinking are the models that refuse a budget.
+//
+// On these, thinking is configured by the word "adaptive" and the effort rides
+// output_config; sending budget_tokens is a 400, which is the exact inverse of
+// what claude-haiku-4-5 does. One adapter therefore cannot hold one dialect,
+// and the catalog already knew: its entries for these four say adaptive and
+// offer xhigh, an effort the budget shape has no number for.
+//
+// A model absent from this map keeps the budget shape. That is the direction a
+// wrong guess is survivable in — it is the shape this adapter has run against,
+// and a new model defaulting to adaptive would break every target that works
+// today. Verified against the model documentation on 2026-08-19; live_test.go
+// carries the case that earns the claim against a real server.
+var adaptiveThinking = map[string]bool{
+	"claude-fable-5":  true,
+	"claude-opus-5":   true,
+	"claude-opus-4-8": true,
+	"claude-sonnet-5": true,
+}
+
+// adaptiveEfforts are the words output_config accepts on those models. xhigh
+// sits between high and max and exists only in this dialect.
+var adaptiveEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// thinkingFor maps the ladder's effort onto the shape the model accepts,
+// returning the thinking block and the output configuration that carries the
+// effort word when the model wants one there.
+func thinkingFor(target provider.RouteTarget) (*wireThinking, *wireOutputConfig, error) {
 	r := target.Params.Reasoning
 	if r == nil || !r.Enabled {
-		return nil, nil
+		return nil, nil, nil
+	}
+	if adaptiveThinking[target.ModelID] {
+		thinking := &wireThinking{Type: "adaptive"}
+		if r.Effort == "" {
+			// The server has its own default. Naming one here would freeze a
+			// choice the provider is free to move.
+			return thinking, nil, nil
+		}
+		if !slices.Contains(adaptiveEfforts, r.Effort) {
+			return nil, nil, &provider.CapabilityError{
+				Target:     target.ID(),
+				Capability: "reasoning effort " + r.Effort,
+				Detail:     "known efforts are low, medium, high, xhigh, and max",
+			}
+		}
+		return thinking, &wireOutputConfig{Effort: r.Effort}, nil
 	}
 	if r.Effort == "" {
-		return &wireThinking{Type: "enabled", BudgetTokens: effortBudgets["medium"]}, nil
+		return &wireThinking{Type: "enabled", BudgetTokens: effortBudgets["medium"]}, nil, nil
 	}
 	budget, ok := effortBudgets[r.Effort]
 	if !ok {
-		return nil, &provider.CapabilityError{
+		return nil, nil, &provider.CapabilityError{
 			Target:     target.ID(),
 			Capability: "reasoning effort " + r.Effort,
 			Detail:     "known efforts are low, medium, high, and max",
 		}
 	}
-	return &wireThinking{Type: "enabled", BudgetTokens: budget}, nil
+	return &wireThinking{Type: "enabled", BudgetTokens: budget}, nil, nil
 }
 
 func messagesToWire(target provider.RouteTarget, msgs []provider.Message) ([]wireMessage, error) {

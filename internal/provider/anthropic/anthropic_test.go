@@ -444,6 +444,98 @@ func TestThinkingBudgetAndCeiling(t *testing.T) {
 	}
 }
 
+// The current Opus and Sonnet models invert what claude-haiku-4-5 does: a
+// budget is a 400 and the effort is a word on output_config. The adapter's
+// catalog already offered xhigh on these targets while the budget dialect had
+// no number for it, so this is the request that used to be unsendable.
+func TestAdaptiveModelsTakeAnEffortWordAndNoBudget(t *testing.T) {
+	for _, model := range []string{"claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"} {
+		target := Target(model)
+		target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "xhigh"}
+
+		body, err := New().buildRequest(target, provider.Request{
+			Messages: []provider.Message{provider.UserText("hi")},
+		}, true)
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+
+		var decoded struct {
+			Thinking struct {
+				Type string `json:"type"`
+			} `json:"thinking"`
+			OutputConfig struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		}
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		if decoded.Thinking.Type != "adaptive" {
+			t.Errorf("%s: thinking type = %q, want adaptive", model, decoded.Thinking.Type)
+		}
+		if decoded.OutputConfig.Effort != "xhigh" {
+			t.Errorf("%s: output_config effort = %q, want xhigh", model, decoded.OutputConfig.Effort)
+		}
+		// omitempty is what keeps the budget out, so assert the bytes rather
+		// than the decode: a zero budget renders as a present field the server
+		// refuses, and a struct comparison would not notice.
+		if strings.Contains(string(body), "budget_tokens") {
+			t.Errorf("%s: the request carries a budget this model rejects: %s", model, body)
+		}
+	}
+}
+
+// Without an effort there is nothing to say, and naming a default here would
+// freeze a choice the server is free to move.
+func TestAdaptiveModelWithoutEffortSendsNoOutputConfig(t *testing.T) {
+	target := Target("claude-opus-5")
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true}
+
+	body, err := New().buildRequest(target, provider.Request{
+		Messages: []provider.Message{provider.UserText("hi")},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "output_config") {
+		t.Errorf("an unasked-for effort reached the wire: %s", body)
+	}
+}
+
+// A model this adapter has no adaptive evidence for keeps the budget shape,
+// which is the direction a wrong guess survives in.
+func TestUnlistedModelsKeepTheBudgetShape(t *testing.T) {
+	target := Target("kimi-k2-thinking")
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+
+	body, err := New().buildRequest(target, provider.Request{
+		Messages: []provider.Message{provider.UserText("hi")},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"budget_tokens"`) {
+		t.Errorf("the budget shape did not survive for an unlisted model: %s", body)
+	}
+}
+
+// xhigh exists only in the adaptive dialect, so the budget shape has to refuse
+// it by name rather than silently pick a neighbouring number.
+func TestXHighIsRefusedOnTheBudgetShape(t *testing.T) {
+	target := Target("claude-haiku-4-5")
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "xhigh"}
+
+	_, err := New().buildRequest(target, provider.Request{
+		Messages: []provider.Message{provider.UserText("hi")},
+	}, true)
+
+	var capErr *provider.CapabilityError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("err = %v, want a CapabilityError", err)
+	}
+}
+
 func TestUnknownEffortIsRefused(t *testing.T) {
 	target := Target("claude-haiku-4-5")
 	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "ludicrous"}

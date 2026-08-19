@@ -18,8 +18,14 @@ type messagesRequest struct {
 	Tools     []wireTool    `json:"tools,omitempty"`
 	Messages  []wireMessage `json:"messages"`
 
-	Thinking    *wireThinking `json:"thinking,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
+	Thinking *wireThinking `json:"thinking,omitempty"`
+
+	// OutputConfig carries the effort word on the models that take one there.
+	// The budget dialect has no use for it, and an empty struct would be a
+	// field the server has to interpret, so it is omitted rather than zeroed.
+	OutputConfig *wireOutputConfig `json:"output_config,omitempty"`
+
+	Temperature *float64 `json:"temperature,omitempty"`
 }
 
 // countRequest is the same document without the fields that only make sense for
@@ -40,10 +46,15 @@ type countResponse struct {
 type wireThinking struct {
 	Type string `json:"type"`
 
-	// BudgetTokens is required by the "enabled" shape. The newer "adaptive"
-	// shape takes no budget and is rejected outright by this model, which is
-	// why the adapter asks the target rather than assuming a house style.
+	// BudgetTokens is required by the "enabled" shape and refused by the
+	// "adaptive" one. Which shape a model takes is not a house style the
+	// adapter may pick: claude-haiku-4-5 rejects "adaptive" and the current
+	// Opus and Sonnet models reject a budget, so thinkingFor asks the model.
 	BudgetTokens int `json:"budget_tokens,omitempty"`
+}
+
+type wireOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type wireMessage struct {

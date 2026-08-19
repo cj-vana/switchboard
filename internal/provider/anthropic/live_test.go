@@ -14,6 +14,12 @@ import (
 
 const liveModel = "claude-haiku-4-5"
 
+// liveAdaptiveModel is the cheapest target in adaptiveThinking. The dialect
+// split is the point: liveModel refuses "adaptive" and this one refuses a
+// budget, so a single request shape cannot satisfy both and only a live call
+// settles which is which.
+const liveAdaptiveModel = "claude-sonnet-5"
+
 // requireLive keeps the default `go test ./...` run offline and unbilled. The
 // recorded fixtures cover the mapping; these exist to catch the API changing
 // underneath them, and to hold the claims the catalog makes about this target
@@ -109,6 +115,30 @@ func TestLiveTokenCountMatchesWhatIsBilled(t *testing.T) {
 	if est.InputTokens != billed {
 		t.Errorf("counted %d and was billed %d; the counting endpoint and the "+
 			"generation endpoint disagree about the same request", est.InputTokens, billed)
+	}
+}
+
+// The claim adaptiveThinking makes is that these models take the word and
+// refuse the budget. The offline tests pin the bytes the adapter builds; only
+// this one shows the server accepts them, and it is the test that would fail
+// first if a model were added to that map on a guess.
+func TestLiveAdaptiveModelAcceptsAnEffortWord(t *testing.T) {
+	c := requireLive(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	if !adaptiveThinking[liveAdaptiveModel] {
+		t.Fatalf("%s is not in adaptiveThinking, so this test measures the wrong dialect", liveAdaptiveModel)
+	}
+
+	target := Target(liveAdaptiveModel)
+	target.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "xhigh"}
+
+	usage := liveUsage(ctx, t, c, target, provider.Request{
+		Messages: []provider.Message{provider.UserText("Reply with the single word OK.")},
+	})
+	if usage.InputTokens == 0 {
+		t.Errorf("the call reported no input tokens: %+v", usage)
 	}
 }
 

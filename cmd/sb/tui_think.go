@@ -5,27 +5,45 @@ package main
 // that should survive a restart is made in /models, where effort is part of
 // the rung — and it is visible twice the moment it lands: the machine target
 // identity changes and the readable status label names the reasoning effort.
+//
+// The words on offer are the running target's own, read from the catalog the
+// way /models reads them. A fixed list here would be a second opinion about
+// what a target accepts, and it was wrong: xhigh is priced on the current Opus
+// and Sonnet models and /models will bind it, while this command refused to
+// type it. Where the catalog knows nothing — a local model, an unpriced
+// endpoint — the four words below stand in, because a picker with no items is
+// worse than a conservative one.
 
 import (
+	"slices"
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/switchboard-code/switchboard/internal/provider"
 )
 
-var thinkLevels = []pickerItem{
-	{id: "default", label: "default", desc: "let the provider decide"},
-	{id: "low", label: "low"},
-	{id: "medium", label: "medium"},
-	{id: "high", label: "high"},
-	{id: "max", label: "max"},
+var fallbackThinkLevels = []string{"low", "medium", "high", "max"}
+
+// thinkLevelsFor names what this target will take. The catalog's answer wins
+// when it has one; ok reports whether it did, so the caller can say which list
+// the user is looking at rather than presenting a guess as a fact.
+func (m *tuiModel) thinkLevelsFor(target provider.RouteTarget) (levels []string, fromCatalog bool) {
+	if info, _, ok := m.app.catalog.Lookup(target); ok && len(info.EffortLevels) > 0 {
+		return info.EffortLevels, true
+	}
+	return fallbackThinkLevels, false
 }
 
 func cmdThink(m *tuiModel, args string) tea.Cmd {
 	if args != "" {
 		return m.applyThink(args)
 	}
-	items := make([]pickerItem, len(thinkLevels))
-	copy(items, thinkLevels)
+	levels, _ := m.thinkLevelsFor(m.app.tier.Target)
+	items := []pickerItem{{id: "default", label: "default", desc: "let the provider decide"}}
+	for _, level := range levels {
+		items = append(items, pickerItem{id: level, label: level})
+	}
 	current := effortOf(m.app.tier.Target)
 	for i := range items {
 		items[i].current = items[i].id == current || (current == "" && items[i].id == "default")
@@ -39,12 +57,21 @@ func cmdThink(m *tuiModel, args string) tea.Cmd {
 }
 
 func (m *tuiModel) applyThink(level string) tea.Cmd {
-	switch level {
-	case "default", "off":
+	levels, fromCatalog := m.thinkLevelsFor(m.app.tier.Target)
+	switch {
+	case level == "default" || level == "off":
 		level = ""
-	case "low", "medium", "high", "max":
+	case slices.Contains(levels, level):
 	default:
-		return noticeCmd("error", "effort is low, medium, high, max, or default")
+		known := strings.Join(levels, ", ")
+		if fromCatalog {
+			return noticeCmd("error", m.app.tier.Target.Display()+" takes "+known+", or default")
+		}
+		// Nothing priced this target, so the list is this command's floor
+		// rather than the target's answer. Say which it is: a rejection that
+		// reads as the model's word would send the user looking in the wrong
+		// place for a word the model may well accept.
+		return noticeCmd("error", "no effort levels are recorded for "+m.app.tier.Target.Display()+"; this command takes "+known+", or default")
 	}
 
 	tier := m.app.tier
