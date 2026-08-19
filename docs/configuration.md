@@ -141,10 +141,11 @@ The `model` value identifies a provider and model. A tier may also set a
 reasoning `effort`, serving `surface`, and ordered `fallback` targets. See
 [Routing and the model ladder](routing.md) for selection and fallback rules.
 
-`[routing] destinations = ["ollama"]` limits every turn in the workspace to the
-named providers. It is a hard requirement checked before cost, so a target it
-excludes is reported as policy rather than price. `/destinations` reads and
-writes it.
+`[routing] destinations = ["ollama"]` limits the workspace to the named
+providers. It is a hard requirement checked before cost, so a target it
+excludes is reported as policy rather than price, and it covers every path to a
+provider: routed turns, pins, moves, retries, resume, the model slots, race
+arms, and the rung a delegate call names. `/destinations` reads and writes it.
 
 ## Profiles
 

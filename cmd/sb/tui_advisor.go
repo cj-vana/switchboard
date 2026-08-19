@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -95,25 +96,36 @@ func cmdAdvisor(m *tuiModel, args string) tea.Cmd {
 // primary, or the top rung when the primary is already there.
 func advisorTier(app *tuiApp) (config.Tier, error) {
 	if ref, ok := app.config.Slots["advisor"]; ok {
-		if t, found := app.config.Tier(ref); found {
-			return t, nil
+		resolved, found := app.config.Tier(ref)
+		if !found {
+			target, err := config.ParseTarget(ref, "", "")
+			if err != nil {
+				return config.Tier{}, err
+			}
+			resolved = config.Tier{ID: "-advisor", Label: "advisor", Target: target}
 		}
-		target, err := config.ParseTarget(ref, "", "")
-		if err != nil {
-			return config.Tier{}, err
+		if err := destinationAllowed(app.config, resolved.Target); err != nil {
+			return config.Tier{}, fmt.Errorf("the advisor slot cannot run: %w", err)
 		}
-		return config.Tier{ID: "-advisor", Label: "advisor", Target: target}, nil
+		return resolved, nil
 	}
 
+	// The default picks a rung off the ladder directly rather than through
+	// the router, so the destination policy has to be applied here too.
 	tiers := app.config.Tiers
 	rank := app.rankOf(app.tier)
-	if rank < 0 || len(tiers) == 0 {
-		return app.tier, nil
+	chosen := app.tier
+	switch {
+	case rank < 0 || len(tiers) == 0:
+	case rank+1 < len(tiers):
+		chosen = tiers[rank+1]
+	default:
+		chosen = tiers[rank]
 	}
-	if rank+1 < len(tiers) {
-		return tiers[rank+1], nil
+	if err := destinationAllowed(app.config, chosen.Target); err != nil {
+		return config.Tier{}, fmt.Errorf("the advisor has no approved rung: %w", err)
 	}
-	return tiers[rank], nil
+	return chosen, nil
 }
 
 func describeAdvisorChoice(app *tuiApp) string {

@@ -115,3 +115,57 @@ func TestDestinationsSurviveASaveAndLoad(t *testing.T) {
 		t.Fatalf("Destinations = %v, want both providers to survive the round trip", reloaded.Destinations)
 	}
 }
+
+// The router filters candidates, and a candidate is what a user turn is routed
+// among. Every other path to a provider resolves a rung directly, and the one
+// that matters most is delegate, where the model picks the rung: a policy the
+// router enforced on turns alone would be a policy a tool call walks around.
+func TestDestinationPolicyCoversDirectlyResolvedRungs(t *testing.T) {
+	cfg := &config.Config{
+		Tiers:        []config.Tier{tierOn("t1", "ollama", "local:7b"), tierOn("t2", "anthropic", "claude-opus-5")},
+		Destinations: []string{"ollama"},
+	}
+
+	if err := destinationAllowed(cfg, cfg.Tiers[0].Target); err != nil {
+		t.Errorf("an approved provider was refused: %v", err)
+	}
+	err := destinationAllowed(cfg, cfg.Tiers[1].Target)
+	if err == nil {
+		t.Fatal("an unapproved provider was allowed through a direct resolution")
+	}
+	if !strings.Contains(err.Error(), "not an approved destination") {
+		t.Errorf("refusal = %q, want the router's own words", err)
+	}
+	// The refusal has to name where the policy is read, or it is a dead end.
+	if !strings.Contains(err.Error(), "/destinations") {
+		t.Errorf("refusal = %q, which does not say where the list lives", err)
+	}
+}
+
+// An unrestricted workspace must behave exactly as it did before the policy
+// existed, on every one of those paths.
+func TestNoPolicyAllowsEveryDirectlyResolvedRung(t *testing.T) {
+	cfg := &config.Config{Tiers: []config.Tier{tierOn("t1", "anthropic", "claude-opus-5")}}
+	if err := destinationAllowed(cfg, cfg.Tiers[0].Target); err != nil {
+		t.Errorf("an unrestricted workspace refused a rung: %v", err)
+	}
+	if err := destinationAllowed(nil, cfg.Tiers[0].Target); err != nil {
+		t.Errorf("a nil config refused a rung: %v", err)
+	}
+}
+
+// The slot resolvers are the surface a user meets, and a slot pointing outside
+// the policy has to say which slot rather than failing anonymously.
+func TestASlotOutsideThePolicyNamesItself(t *testing.T) {
+	m := destinationsModel(t, tierOn("t1", "ollama", "local:7b"), tierOn("t2", "anthropic", "claude-opus-5"))
+	m.app.config.Slots = map[string]string{"auditor": "t2"}
+	m.app.config.Destinations = []string{"ollama"}
+
+	_, _, err := slotTier(m.app, "auditor")
+	if err == nil {
+		t.Fatal("a slot bound outside the policy resolved anyway")
+	}
+	if !strings.Contains(err.Error(), "auditor") {
+		t.Errorf("error = %q, which does not name the slot", err)
+	}
+}

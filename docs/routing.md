@@ -32,7 +32,14 @@ providers, and `/destinations any` removes the restriction. It is a hard
 requirement rather than a preference: the filter checks it before economics, so
 an excluded target is reported as policy and never as a price, and the same
 check runs on the opening route, on a mid-turn move, on a `/tN` pin, on a
-retry, and on resume. The setting persists as `[routing] destinations` and is
+retry, and on resume. It also runs wherever a rung is resolved without the
+router: the `summarizer`, `auditor`, `advisor`, and `approver` slots, both arms
+of a `/race`, and the rung a `delegate` call names. That last one is the reason
+the rest exist — the rung in a delegate call is the model's choice, so a policy
+enforced only on user turns would be a policy a tool call walks around. A
+directly resolved rung outside the policy is refused and says which slot or
+call it was, never quietly substituted, because each of those callers named a
+rung on purpose. The setting persists as `[routing] destinations` and is
 refused when it would leave no configured rung reachable. The unit is a
 provider name rather than a metering class, because where a server runs is not
 something a target identity states: an OpenAI-compatible endpoint may be a

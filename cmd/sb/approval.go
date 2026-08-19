@@ -60,6 +60,10 @@ func (r *lazyCommandReviewer) get(ctx context.Context) (*approval.ModelReviewer,
 	}
 	var failures []string
 	for _, candidate := range candidates {
+		if err := destinationAllowed(r.config, candidate.Target); err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
 		probed, client, probeErr := r.providers.probeTier(ctx, candidate)
 		if probeErr != nil {
 			failures = append(failures, candidate.ID+": "+probeErr.Error())

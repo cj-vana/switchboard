@@ -121,14 +121,21 @@ func slotTier(app *tuiApp, slot string) (config.Tier, bool, error) {
 	if !bound {
 		return app.tier, false, nil
 	}
-	if t, found := app.config.Tier(ref); found {
-		return t, true, nil
+	resolved, found := app.config.Tier(ref)
+	if !found {
+		target, err := config.ParseTarget(ref, "", "")
+		if err != nil {
+			return config.Tier{}, true, fmt.Errorf("the [slots] %s entry does not parse: %w", slot, err)
+		}
+		resolved = config.Tier{ID: "-" + slot, Label: slot, Target: target}
 	}
-	target, err := config.ParseTarget(ref, "", "")
-	if err != nil {
-		return config.Tier{}, true, fmt.Errorf("the [slots] %s entry does not parse: %w", slot, err)
+	// A slot resolves a rung directly rather than through the router, so the
+	// workspace's destination policy is applied here or the slot is the way
+	// around it.
+	if err := destinationAllowed(app.config, resolved.Target); err != nil {
+		return config.Tier{}, true, fmt.Errorf("the %s slot cannot run: %w", slot, err)
 	}
-	return config.Tier{ID: "-" + slot, Label: slot, Target: target}, true, nil
+	return resolved, true, nil
 }
 
 type auditReportMsg struct {

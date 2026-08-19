@@ -191,6 +191,13 @@ func registerDelegate(
 			if !ok {
 				return config.Tier{}, nil, "", fmt.Errorf("no tier %s", tierID)
 			}
+			// The rung here is the model's choice, which makes this the one
+			// destination check that governs egress the user did not initiate.
+			// A policy the router enforces on turns and not on delegate calls
+			// would be a policy a tool call walks around.
+			if err := destinationAllowed(cfg, tier.Target); err != nil {
+				return config.Tier{}, nil, "", err
+			}
 			return reg.probeTierFallback(ctx, tier)
 		},
 		NewSession: func(target provider.RouteTargetID) (*session.Session, error) {

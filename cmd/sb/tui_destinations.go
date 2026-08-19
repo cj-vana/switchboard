@@ -27,12 +27,41 @@ package main
 // its job, and the moment to say so is when it is typed.
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/switchboard-code/switchboard/internal/config"
+	"github.com/switchboard-code/switchboard/internal/provider"
 )
+
+// destinationAllowed is the same policy applied where the router is not.
+//
+// The router filters candidates, and a candidate is what a user turn is routed
+// among. Everything else that reaches a provider resolves a rung directly: the
+// summarizer, auditor, advisor, and approver slots, the two arms of a race,
+// and — the one that matters most — the rung a delegate call names, which the
+// model chooses. A policy that governed only the turn would leave the model
+// able to send the workspace somewhere the user forbade by naming a rung in a
+// tool call, and that is not a narrower rule, it is the same rule with the
+// interesting case cut out.
+//
+// It is a refusal rather than a substitution. These callers each named a rung
+// on purpose, and quietly running the work somewhere else would answer a
+// question nobody asked.
+func destinationAllowed(cfg *config.Config, target provider.RouteTarget) error {
+	if cfg == nil || len(cfg.Destinations) == 0 {
+		return nil
+	}
+	if slices.Contains(cfg.Destinations, target.Provider) {
+		return nil
+	}
+	return fmt.Errorf("%s is not an approved destination for this workspace; /destinations lists %s",
+		target.Display(), strings.Join(cfg.Destinations, ", "))
+}
 
 const destinationsUsage = "/destinations lists the providers this workspace may reach; " +
 	"/destinations ollama anthropic restricts it to those; /destinations any removes the restriction"
@@ -81,7 +110,7 @@ func (m *tuiModel) setDestinations(providers []string) tea.Cmd {
 		return noticeCmd("", "destinations: any provider on the ladder; routing is governed by capability, context, and budget alone")
 	}
 	return noticeCmd("", "destinations: "+strings.Join(providers, ", ")+
-		" only. Every other target is excluded before cost is considered, on the opening route, on a move, on a pin, and on resume; /why names the exclusion.")
+		" only. Every other target is excluded before cost is considered, and a rung resolved outside the router — a slot, a race arm, a delegate call — is refused by name; /why reports the exclusion as policy rather than price.")
 }
 
 func (m *tuiModel) destinationsStanding() string {

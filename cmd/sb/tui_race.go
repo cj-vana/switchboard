@@ -221,6 +221,15 @@ func (m *tuiModel) onRaceProbe(msg raceProbeMsg) tea.Cmd {
 		return abort("error", "both rungs resolve to "+msg.a.Target.Display()+"; a race against the same target measures nothing")
 	}
 
+	// Both arms resolve their rungs from the ladder directly rather than
+	// through the router, so the destination policy is applied here or a race
+	// is the way around it.
+	for _, tier := range []config.Tier{msg.a, msg.b} {
+		if err := destinationAllowed(m.app.config, tier.Target); err != nil {
+			return abort("error", "this race cannot run: "+err.Error())
+		}
+	}
+
 	m.addUser(msg.prompt)
 	expanded, images := m.expandMentions(msg.prompt)
 	prompt := m.adviceContext(m.shellContext(expanded))

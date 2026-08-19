@@ -546,7 +546,14 @@ economics and which nothing outside the tests ever set. It has to be filled at
 every seam or it is a rule with a hole: the opening route, a mid-turn move, a
 /tN pin, a retry, and resume all pass the same list, which is why the three
 `check*Feasible` functions take it explicitly rather than reading it from
-somewhere convenient. A preference here would be a policy the escalation
+somewhere convenient. The router filters candidates, and a candidate is what a
+user turn is routed among; every other path to a provider resolves a rung
+directly and gets the same check through `destinationAllowed` — the four slots,
+both race arms, and the rung a delegate call names. That last is the one that
+decides whether this is a policy at all, because the rung there is the model's
+choice, and a rule enforced only on turns is a rule a tool call walks around.
+A directly resolved rung outside the policy is refused and names itself rather
+than being substituted, since each of those callers named a rung on purpose. A preference here would be a policy the escalation
 detector could talk its way past on a bad turn.
 
 The unit is a provider name. "Local only" is a conclusion about where a server
