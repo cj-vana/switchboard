@@ -29,16 +29,28 @@ type Detector struct {
 	// Tools fail routinely, so one is not news.
 	ErrorSpikeAt int
 
+	// EmptyRunAt is how many consecutive successful-but-empty results count
+	// as a run. One is not news for the same reason one failure is not: a
+	// search that matches nothing has answered the question it was asked.
+	EmptyRunAt int
+
 	calls         map[string]int
 	failures      map[string]bool
 	errors        int
 	spiked        bool
+	emptyRun      int
+	emptyReported bool
 	repeated      map[string]bool
 	uncertain     bool
 	assistantTail string
 }
 
 const DefaultErrorSpikeAt = 3
+
+// DefaultEmptyRunAt is deliberately longer than the error spike. A failure is
+// unambiguous; an empty result is usually a fact about the workspace rather
+// than about the model, so it takes more of them in a row to mean something.
+const DefaultEmptyRunAt = 4
 
 func NewDetector() *Detector {
 	return &Detector{
@@ -55,6 +67,13 @@ func (d *Detector) spikeAt() int {
 	return DefaultErrorSpikeAt
 }
 
+func (d *Detector) emptyRunAt() int {
+	if d.EmptyRunAt > 0 {
+		return d.EmptyRunAt
+	}
+	return DefaultEmptyRunAt
+}
+
 // Reset clears per-turn state. Signatures do not survive a turn, because §8.3
 // counts consecutive failures within one, and carrying them across would
 // escalate a fresh turn for something already dealt with.
@@ -66,6 +85,8 @@ func (d *Detector) Reset() {
 	d.repeated = map[string]bool{}
 	d.errors = 0
 	d.spiked = false
+	d.emptyRun = 0
+	d.emptyReported = false
 	d.uncertain = false
 	d.assistantTail = ""
 }
@@ -107,11 +128,25 @@ func canonicalInput(input []byte) string {
 func (d *Detector) ToolResult(name, argv, output string, failed bool) []Signal {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !failed {
-		return nil
-	}
 
 	var signals []Signal
+
+	if !failed {
+		// A successful call is not nothing to measure. Until now this
+		// returned here, so no success could move any state, and a turn whose
+		// every search came back empty produced exactly as much evidence as a
+		// turn that was going well.
+		if strings.TrimSpace(output) == "" {
+			d.emptyRun++
+			if d.emptyRun >= d.emptyRunAt() && !d.emptyReported {
+				d.emptyReported = true
+				signals = append(signals, EmptyResultRun)
+			}
+		} else {
+			d.emptyRun = 0
+		}
+		return signals
+	}
 
 	d.errors++
 	if d.errors >= d.spikeAt() && !d.spiked {

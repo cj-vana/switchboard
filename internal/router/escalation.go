@@ -41,6 +41,14 @@ const (
 	// own, because a model hedging is not evidence it is stuck.
 	UncertaintyLanguage Signal = "the model sounded unsure"
 
+	// EmptyResultRun is a run of tool calls that succeeded and returned
+	// nothing. Every other signal here is a lagging one: it reports something
+	// that has already gone wrong, and a turn can spend its whole budget
+	// without tripping any of them, because searching the wrong place
+	// succeeds every time. This is what that looks like while it is still
+	// happening.
+	EmptyResultRun Signal = "tool calls are succeeding and returning nothing"
+
 	// PlanningComplete means the remaining work is mechanical.
 	PlanningComplete Signal = "planning finished and the rest is mechanical"
 
@@ -108,6 +116,12 @@ var weights = map[Signal]float64{
 
 	PlanningComplete: 1.0,
 	ScopeReduced:     1.0,
+
+	// Half, despite naming its own repetition, because an empty result is
+	// often the correct answer: a grep that matches nothing has done its job
+	// and said so. It is evidence that wants corroboration, not a move on its
+	// own, which is the same posture §8.3 takes toward hedging.
+	EmptyResultRun: 0.5,
 }
 
 // weakWeight and weakCap keep hedging from ever escalating by itself.

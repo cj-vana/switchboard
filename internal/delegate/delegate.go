@@ -408,7 +408,11 @@ func (f *forwarding) ToolEnd(call provider.ToolUse, req permission.Request, res 
 	if res.IsError {
 		verdict = "failed"
 	}
-	f.note(fmt.Sprintf("%s %s %s", call.Name, verdict, describeCall(req)))
+	// The duration is kept, not dropped. A verdict is a lagging measure: it
+	// changes only once something has already gone wrong, while the time a
+	// call took moves earlier and is sitting right here in the arguments.
+	f.note(fmt.Sprintf("%s %s %s %s", call.Name, verdict,
+		took.Round(time.Millisecond), describeCall(req)))
 	call.ID = f.task.ID + "/" + call.ID
 	req = attributeRequest(f.task, req)
 	f.parent.ToolEnd(call, req, res, took)

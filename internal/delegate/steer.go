@@ -111,7 +111,7 @@ func (h *TaskHandle) RecordActivity(what string) {
 
 const (
 	maxActivityLines = 6
-	maxActivityBytes = 160
+	maxActivityBytes = 200
 )
 
 // activityReport is what the subagent did, for the delegating agent to read
