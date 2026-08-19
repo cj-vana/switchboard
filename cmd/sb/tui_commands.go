@@ -51,6 +51,7 @@ func commands() []commandItem {
 		{name: "race", usage: "[tier [tier]] <prompt>", desc: "one prompt on two rungs at once; bare form races the next rung up", run: cmdRace},
 		{name: "races", usage: "[all]", desc: "every paired verdict collected, tallied by pair; all spans workspaces", busySafe: true, run: cmdRaces},
 		{name: "advisor", usage: "[on|off|status]", desc: "a second model that watches and advises", busySafe: true, run: cmdAdvisor},
+		{name: "audit", desc: "check the last turn's claims against what the record says it did", run: cmdAudit},
 		{name: "routing", usage: "[on|off|status]", desc: "whether the policy may move the primary on its own signals", busySafe: true, run: cmdRouting},
 		{name: "workflow", usage: "[list|show <name>|run <name> [args]]", desc: "run a multi-stage subagent script from a file", run: cmdWorkflow},
 		{name: "mode", usage: "[plan|default|acceptEdits|auto|yolo|bypass]", desc: "show or change the permission mode", run: cmdMode},
@@ -142,7 +143,7 @@ var helpGroups = []struct {
 }{
 	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
-	{"files and work", []string{"files", "search", "diff", "review", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
+	{"files and work", []string{"files", "search", "diff", "review", "audit", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
 	{"language intelligence", []string{"lsp", "outline", "symbols", "problems", "definition", "references"}},
 	{"safety and reach", []string{"mode", "routing", "workflow", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
 	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},

@@ -45,20 +45,7 @@ func cmdCompact(m *tuiModel, args string) tea.Cmd {
 // not depend on which rung happens to be active, and a session riding a
 // small local model is exactly when that matters. Absent a binding, the
 // current tier does its own summarizing, which is what it always did.
-func summarizerFor(app *tuiApp) (config.Tier, bool, error) {
-	ref, bound := app.config.Slots["summarizer"]
-	if !bound {
-		return app.tier, false, nil
-	}
-	if t, found := app.config.Tier(ref); found {
-		return t, true, nil
-	}
-	target, err := config.ParseTarget(ref, "", "")
-	if err != nil {
-		return config.Tier{}, true, fmt.Errorf("the [slots] summarizer entry does not parse: %w", err)
-	}
-	return config.Tier{ID: "-summarizer", Label: "summarizer", Target: target}, true, nil
-}
+func summarizerFor(app *tuiApp) (config.Tier, bool, error) { return slotTier(app, "summarizer") }
 
 // compactCmd is the compaction itself; auto marks the threshold-triggered
 // path, whose failure handling differs in one place: a summarizer slot that

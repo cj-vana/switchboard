@@ -539,6 +539,33 @@ Codex files, a missing auth file, or a manifest namespace as proof that the
 effective stack or plugin policy is unrestricted. `docs/extensions.md` is the
 public matrix.
 
+**An audit reads the record, never the code.** /audit (`cmd/sb/tui_audit.go`)
+is the system prompt's oldest unenforced rule given a check: say what you did,
+and do not describe a change you have not made. The closing message is the
+claim; the recorded tool calls with their results and the checkpoint recorder's
+captures are the evidence; a finding is where the two disagree. It does not
+review the work, because a reviewer that also reviewed the code would bury the
+one thing this is for, and it does not read the workspace as it stands, because
+the workspace has moved on and the turn has not.
+
+It takes no turn number, and that is the constraint the file exists to hold.
+The message log and the recorder are two ledgers with two numberings that
+/fork, /undo, and /clear move independently; the recorder's open scope and the
+last message that opened a turn are the one pair certainly the same turn.
+Lining up any other pair by index would be a guess.
+
+The auditor is a slot, the summarizer's mechanism as a fourth named role,
+because a model checking its own claims is the weakest reading of them. With
+none bound the audit runs on the rung that made the claims and says so rather
+than reporting agreement it has no standing to report. The record's edges ride
+with the evidence in the same words the user gets: the recorder does not see
+what a shell command wrote, captures over the memory bound are named rather
+than half-covered, and each makes a claim unchecked rather than false. The
+packet is machine-composed and leaves for a target the turn may never have
+reached, so it redacts unconditionally. Nothing it produces is appended to the
+session or injected: the finding is the user's, and the prefix stays
+append-only.
+
 **A question is a granted role, not an assumed one.** `elicitation/create`
 (`internal/mcp/elicit.go`) is answered because a question is interaction rather
 than an effect — `ask`'s own framing — and the answer channel is a person who

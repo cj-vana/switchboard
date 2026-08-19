@@ -627,6 +627,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addNotice(msg.level, msg.text)
 		return m, nil
 
+	case auditReportMsg:
+		return m, m.onAuditReport(msg)
+
 	case watchReportMsg:
 		m.onWatchReport(msg)
 		return m, nil

@@ -358,7 +358,8 @@ func beginMeteredCall(bs *budgetState, cat *catalog.Catalog, sess *session.Sessi
 		return nil, fmt.Errorf("model call has no durable budget ledger")
 	}
 	switch purpose {
-	case session.UsagePurposeCompact, session.UsagePurposeLearn, session.UsagePurposeAdvisor, session.UsagePurposeApproval:
+	case session.UsagePurposeCompact, session.UsagePurposeLearn, session.UsagePurposeAdvisor,
+		session.UsagePurposeApproval, session.UsagePurposeAudit:
 	default:
 		return nil, fmt.Errorf("one-shot model call needs an explicit background purpose")
 	}

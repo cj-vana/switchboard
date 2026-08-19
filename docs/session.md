@@ -203,6 +203,23 @@ selects a retained mutation turn, one-based and oldest first. The view covers
 agent `write` and `edit` calls only, not shell commands, hooks, MCP tools, or
 manual changes. `/diff` remains the repository-wide view against `HEAD`.
 
+`/audit` puts the turn that just finished in front of a second model: the
+closing message is the claim, the recorded tool calls with their results and
+the recorder's captures are the evidence, and a finding is a place the two
+disagree. It reads the record and not the code, so it does not review the work
+or suggest changes. It takes no turn number — the message log and the
+checkpoint recorder number turns separately, and the turn that just finished is
+the one pair certainly the same in both. A turn that called no tools and
+changed no files is reported as having nothing to check. The report states its
+scope every time: how many calls and captures it read, that a shell command's
+side effects are outside the recorder and so make a claim unchecked rather than
+wrong, any paths that exceeded the capture bound, and any credential-shaped
+strings redacted from the evidence before it was sent. `[slots] auditor`
+assigns the rung that reads it; with none bound the audit runs on the rung that
+made the claims and says so, because a model checking itself is the weakest
+reading of its own work. Nothing it produces is appended to the session or
+injected into the conversation.
+
 Before current bytes appear, Switchboard rechecks existence, mode, size,
 digest, the target identity, and the captured parent and ancestor identities.
 A stale, unsafe, or redirected path is refused without disclosing its current

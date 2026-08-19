@@ -378,6 +378,7 @@ const (
 	UsagePurposeCompact  = "compact"
 	UsagePurposeLearn    = "learn"
 	UsagePurposeAdvisor  = "advisor"
+	UsagePurposeAudit    = "audit"
 	UsagePurposeApproval = "approval"
 	UsagePurposeUnknown  = "unattributed"
 )
