@@ -1,4 +1,4 @@
-# Switchboard
+# <img src="docs/assets/logo.svg" alt="Switchboard logo" width="28" valign="middle"> Switchboard
 
 Switchboard is a terminal coding agent that routes each user turn across an
 ordered ladder of model targets. Deterministic request signals choose the

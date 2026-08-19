@@ -3,29 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Switchboard: Model-Ladder Terminal Coding Workbench</title>
-<meta name="description" content="A terminal coding workbench that routes each turn across your model ladder, searches and reviews the workspace, and keeps the receipts on cost and code.">
+<title>Switchboard — Terminal Coding Agent with a Model Ladder</title>
+<meta name="description" content="Free, open-source terminal coding agent that routes every turn to the cheapest model that can do the work — local, API, or subscription — and shows its reasoning. macOS & Linux, MIT.">
 <link rel="canonical" href="https://switchboard-code.dev/">
 <meta name="robots" content="index, follow">
-<meta name="theme-color" content="#101114">
+<meta name="theme-color" content="#e9e9e5">
 <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Switchboard">
-<meta property="og:title" content="Switchboard: a terminal coding workbench where the model is a slot">
-<meta property="og:description" content="Route each turn across your model ladder, search and review the workspace, and keep the receipts on cost and code.">
+<meta property="og:title" content="Switchboard — the model is a slot, not a decision you make once">
+<meta property="og:description" content="A terminal coding agent that routes every turn to the cheapest model that can do the work, climbs only on evidence, and keeps the receipts. Free and open source.">
 <meta property="og:url" content="https://switchboard-code.dev/">
 <meta property="og:image" content="https://switchboard-code.dev/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Switchboard model ladder and patch-panel illustration">
+<meta property="og:image:alt" content="Switchboard: a routing schematic patching one turn to the cheapest suitable model rung">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Switchboard: a terminal coding workbench where the model is a slot">
-<meta name="twitter:description" content="Route each turn across your model ladder, search and review the workspace, and keep the receipts on cost and code.">
+<meta name="twitter:title" content="Switchboard — the model is a slot, not a decision you make once">
+<meta name="twitter:description" content="A terminal coding agent that routes every turn to the cheapest model that can do the work, climbs only on evidence, and keeps the receipts. Free and open source.">
 <meta name="twitter:image" content="https://switchboard-code.dev/assets/og.png">
-<meta name="twitter:image:alt" content="Switchboard model ladder and patch-panel illustration">
+<meta name="twitter:image:alt" content="Switchboard: a routing schematic patching one turn to the cheapest suitable model rung">
 
 <script type="application/ld+json">
 {
@@ -35,21 +35,33 @@
   "softwareVersion": "1.2.0",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux",
-  "description": "A terminal coding workbench that routes each turn across a model ladder, searches and reviews the workspace, and records the cost.",
+  "description": "A terminal coding agent that routes each turn across a user-defined ladder of models — local, API, or subscription — choosing the cheapest rung that can do the work, and records every decision, dollar, and diff for review.",
   "url": "https://switchboard-code.dev/",
   "codeRepository": "https://github.com/switchboard-code/switchboard",
   "license": "https://opensource.org/license/mit",
   "programmingLanguage": "Go",
+  "featureList": [
+    "Per-turn routing across a user-defined model ladder",
+    "Local, API, and subscription models in one session",
+    "Hard dollar budget checked before every route and call",
+    "Append-only session record with cost, provenance, and audit commands",
+    "Optional verified macOS Seatbelt or Linux bubblewrap confinement",
+    "Skills, MCP servers, plugins, hooks, and language servers"
+  ],
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "author": { "@type": "Person", "url": "https://github.com/cj-vana" }
 }
 </script>
 <style>
   :root {
-    --paper: #f2f3f0;
-    --ink: #1a1c1e;
-    --ink-2: #4c5256;
-    --rule: #c9cdc8;
+    /* The schematic ground: cool draughting-paper grey, ink, hairlines. */
+    --paper: #e9e9e5;
+    --card: #f4f4f1;
+    --ink: #131416;
+    --ink-2: #54595d;
+    --ink-3: #8b9094;
+    --rule: #cfcfc9;
+    --grid: #dbdbd4;
     /* The heat ramp, light-theme values, from cmd/sb/tui_theme.go. */
     --t1: #008787;
     --t2: #005faf;
@@ -57,25 +69,16 @@
     --t4: #af5f00;
     --t5: #af8700;
     --t6: #d7005f;
-    --link-hover: #754000;
-    /* The same ramp darkened-theme side up, for dark surfaces. */
-    --t1d: #5fafaf;
-    --t2d: #5f87d7;
-    --t3d: #af5fd7;
-    --t4d: #d7875f;
-    --t5d: #d7af5f;
-    --t6d: #ff5f87;
-    /* The hero borrows the terminal's own ground (see docs/tui.svg). */
-    --hero-bg: #101114;
-    --hero-panel: #1a1c1f;
-    --hero-dim: #9aa3a8;
-    --hero-rule: #2e3134;
+    /* The terminal plate borrows the TUI's own ground (see docs/tui.svg). */
+    --term-bg: #101114;
+    --term-panel: #1a1c1f;
+    --term-dim: #9aa3a8;
+    --term-rule: #2e3134;
     --sans: "Avenir Next", "Helvetica Neue", Arial, sans-serif;
     --mono: "SFMono-Regular", Menlo, Consolas, monospace;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
-
   html { font-size: 16px; }
 
   body {
@@ -83,29 +86,26 @@
     color: var(--ink);
     font-family: var(--sans);
     font-size: 1rem;
-    line-height: 1.625;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
   }
 
-  ::selection { background: var(--t2); color: #fff; }
+  ::selection { background: var(--t1); color: #fff; }
 
   .sheet {
-    max-width: 1180px;
+    max-width: 1220px;
     margin: 0 auto;
-    padding: 0 clamp(1.25rem, 6vw, 4rem);
+    padding: 0 clamp(1.25rem, 5vw, 3.5rem);
   }
 
   .mono {
     font-family: var(--mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.09em;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
   }
 
-  code {
-    font-family: var(--mono);
-    font-size: 0.875em;
-  }
+  code { font-family: var(--mono); font-size: 0.875em; }
 
   a {
     color: var(--ink);
@@ -114,141 +114,203 @@
     text-underline-offset: 0.18em;
     transition: color 120ms ease;
   }
-  a:hover { color: var(--link-hover); }
+  a:hover { color: var(--t4); }
 
-  a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
-    outline: 2px solid var(--t2d);
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--t2);
     outline-offset: 3px;
   }
 
   .sr-only {
     position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    a { transition: none; }
-  }
-
   /* ---------- the heat ramp: the product's own color system ---------- */
 
-  .strip {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-  }
+  .strip { display: grid; grid-template-columns: repeat(6, 1fr); }
   .strip i:nth-child(1) { background: var(--t1); }
   .strip i:nth-child(2) { background: var(--t2); }
   .strip i:nth-child(3) { background: var(--t3); }
   .strip i:nth-child(4) { background: var(--t4); }
   .strip i:nth-child(5) { background: var(--t5); }
   .strip i:nth-child(6) { background: var(--t6); }
-  .strip.on-dark i:nth-child(1) { background: var(--t1d); }
-  .strip.on-dark i:nth-child(2) { background: var(--t2d); }
-  .strip.on-dark i:nth-child(3) { background: var(--t3d); }
-  .strip.on-dark i:nth-child(4) { background: var(--t4d); }
-  .strip.on-dark i:nth-child(5) { background: var(--t5d); }
-  .strip.on-dark i:nth-child(6) { background: var(--t6d); }
+
+  /* ---------- nav plate ---------- */
+
+  .navplate {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    margin-top: 1.1rem;
+    padding: 0.55rem 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .brand img { display: block; }
+  .navplate nav {
+    display: flex;
+    gap: 1.4rem;
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+  .navplate nav a {
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 0.875rem;
+  }
+  .navplate nav a:hover { color: var(--ink); }
+  .navpill {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 0.5rem 0.95rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    transition: background 120ms ease;
+  }
+  .navpill:hover { background: var(--t1); color: #fff; }
 
   /* ---------- hero ---------- */
 
-  .hero {
-    background: var(--hero-bg);
-    color: var(--paper);
-  }
-  .hero .sheet { padding-top: 2rem; }
-
-  .hero-top {
+  .hero-meta {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
-    gap: 1.25rem;
-    border-top: 2px solid var(--paper);
-    border-bottom: 1px solid var(--hero-rule);
-    padding: 0.55rem 0;
-    color: var(--hero-dim);
+    gap: 1rem 2rem;
+    flex-wrap: wrap;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule);
+    padding: 2.75rem 0 0.65rem;
   }
-  .hero-fields { display: flex; flex: 1 1 auto; min-width: 0; justify-content: flex-end; gap: 0.45rem 1.5rem; flex-wrap: wrap; }
-  .hero-fields > span { white-space: nowrap; }
-  .hero-fields .v { color: var(--paper); }
-  .hero-brand { display: flex; flex: 0 0 auto; align-items: center; gap: 0.6rem; white-space: nowrap; }
-  .hero-brand img { display: block; }
-  .hero a { color: var(--paper); }
-  .hero a:hover { color: var(--t4d); }
 
-  .hero h1 {
-    font-size: clamp(2.2rem, 9.5vw, 8.75rem);
+  h1 {
+    font-size: clamp(2.9rem, 9.2vw, 8.25rem);
     font-weight: 700;
-    letter-spacing: -0.035em;
-    line-height: 1.02;
+    letter-spacing: -0.04em;
+    line-height: 0.96;
     text-transform: uppercase;
-    padding: 3.5rem 0 1.75rem;
+    padding: 2.5rem 0 2rem;
   }
-
-  .hero .pitch {
-    font-size: clamp(1.35rem, 2.8vw, 2.1rem);
+  h1 .k {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.75rem;
     font-weight: 500;
-    letter-spacing: -0.02em;
-    line-height: 1.3;
-    max-width: 27em;
-    padding-bottom: 1.25rem;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+    padding-bottom: 1.4rem;
   }
-  .hero .pitch em {
-    font-style: normal;
-    box-shadow: inset 0 -0.42em 0 rgba(95, 175, 175, 0.35); /* unslop-ignore: the rung-1 teal, kept translucent so it reads as a highlighter, not a fill */
-  }
-
-  .hero .sub {
-    color: var(--hero-dim);
-    max-width: 37em;
-    padding-bottom: 2.75rem;
-  }
+  h1 .dot { color: var(--t1); }
 
   .hero-grid {
     display: grid;
-    grid-template-columns: 1.05fr 0.95fr;
-    gap: clamp(2rem, 5vw, 4.5rem);
-    align-items: center;
-    padding-bottom: 3rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: clamp(2rem, 4vw, 4rem);
+    align-items: start;
+    padding-bottom: 3.25rem;
   }
-  .hero-grid .sub { padding-bottom: 0; }
 
-  .hero-art {
-    border: 1px solid var(--hero-rule);
-    background: var(--hero-panel);
+  .pitch {
+    font-size: clamp(1.25rem, 2.1vw, 1.55rem);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    line-height: 1.38;
+    max-width: 30em;
   }
-  .hero-art .strip { height: 4px; }
-  .hero-art img { display: block; width: 100%; height: auto; }
-  .hero-art figcaption {
-    color: var(--hero-dim);
+  .pitch + p { margin-top: 1.1rem; }
+  .hero-sub { color: var(--ink-2); max-width: 36em; }
+  .hero-sub code { white-space: nowrap; }
+
+  .hero-ctas { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-top: 1.75rem; }
+  .cta {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border: 1px solid var(--ink);
+    padding: 0.75rem 1.35rem;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .cta:hover { background: var(--ink); color: var(--paper); }
+  .cta.solid { background: var(--ink); color: var(--paper); }
+  .cta.solid:hover { background: var(--t1); border-color: var(--t1); color: #fff; }
+
+  /* ---------- the routing schematic ---------- */
+
+  .schematic {
+    border: 1px solid var(--ink);
+    background: var(--card);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 3.5rem;
+  }
+  .schematic .strip { height: 4px; }
+  .schematic-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--rule);
+    color: var(--ink-3);
+  }
+  .schematic-body { overflow-x: auto; }
+  .schematic svg { display: block; width: 100%; min-width: 720px; height: auto; }
+  .schematic figcaption {
+    border-top: 1px solid var(--rule);
     padding: 0.6rem 1rem 0.7rem;
+    color: var(--ink-2);
   }
 
-  /* The install plate: a slab of terminal on the page. Wide enough that the
-     one-liner plus the copy button never clip; narrower screens scroll it. */
-  .term {
-    background: var(--hero-panel);
-    border: 1px solid var(--hero-rule);
-    max-width: 60em;
+  .route-live {
+    stroke-dasharray: 7 7;
+    animation: patch 1.2s linear infinite;
   }
-  .term .strip { height: 4px; }
+  @keyframes patch { to { stroke-dashoffset: -14; } }
+  @media (prefers-reduced-motion: reduce) {
+    .route-live { animation: none; }
+    a, .cta, .navpill, .copy { transition: none; }
+  }
+
+  /* ---------- terminal plate ---------- */
+
+  .term {
+    background: var(--term-panel);
+    border: 1px solid var(--term-rule);
+    border-radius: 8px;
+    position: relative;
+    max-width: 62em;
+  }
+  .term .strip { height: 4px; border-radius: 8px 8px 0 0; overflow: hidden; }
   .term-cmd {
     font-family: var(--mono);
     font-size: 0.875rem;
     line-height: 1.6;
-    color: var(--paper);
-    padding: 1rem 5.5rem 1rem 1.25rem; /* right padding reserves room for the copy button */
+    color: #eceeef;
+    padding: 1rem 5.5rem 1rem 1.25rem;
     overflow-x: auto;
     white-space: nowrap;
   }
-  .term-cmd .prompt { color: var(--t1d); user-select: none; }
-  .term { position: relative; }
+  .term-cmd .prompt { color: #5fafaf; user-select: none; }
   .copy {
     position: absolute;
     top: 4px;
@@ -258,420 +320,539 @@
     font-size: 0.6875rem;
     letter-spacing: 0.09em;
     text-transform: uppercase;
-    color: var(--hero-dim);
-    background: var(--hero-panel);
-    border: 1px solid var(--hero-rule);
+    color: var(--term-dim);
+    background: var(--term-panel);
+    border: 1px solid var(--term-rule);
+    border-radius: 6px;
     padding: 0.3rem 0.7rem;
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease;
   }
-  .copy:hover { color: var(--paper); border-color: var(--paper); }
-  .copy.done { color: var(--t1d); border-color: var(--t1d); }
-  .term-note {
-    color: var(--hero-dim);
-    padding: 1rem 0 2rem;
-  }
-
-  .hero-ramp { padding-top: 0.5rem; }
-  .hero-ramp .strip { height: 14px; }
-  .ramp-labels {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    padding: 0.6rem 0 0.9rem;
-    color: var(--hero-dim);
-  }
+  .copy:hover { color: #eceeef; border-color: #eceeef; }
+  .copy.done { color: #5fafaf; border-color: #5fafaf; }
+  .term-note { color: var(--ink-2); padding-top: 0.85rem; }
 
   /* ---------- sections ---------- */
 
   section {
-    display: grid;
-    grid-template-columns: 11ch minmax(0, 1fr);
-    gap: clamp(1.5rem, 4vw, 4rem);
-    padding: 3.5rem 0;
-    border-bottom: 1px solid var(--rule);
+    padding: 4rem 0;
+    border-top: 1px solid var(--rule);
+  }
+  .sec-label {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    color: var(--ink-3);
+    margin-bottom: 1.5rem;
+  }
+  .sec-label .n {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    color: var(--ink);
+    border: 1px solid var(--ink);
+    border-radius: 999px;
+    padding: 0.25rem 0.6rem;
   }
 
-  .sec-no { color: var(--ink-2); }
-  .sec-no .n {
-    display: block;
+  h2 {
+    font-size: clamp(1.9rem, 4.4vw, 3.4rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+    text-transform: uppercase;
+    max-width: 18em;
+    margin-bottom: 1.25rem;
+  }
+  h2 code { text-transform: none; }
+
+  .lede { font-size: 1.125rem; max-width: 38em; }
+  .lede + .lede { margin-top: 1rem; }
+  .ink2 { color: var(--ink-2); }
+
+  /* ---------- the bill ---------- */
+
+  .bill {
+    margin-top: 2.5rem;
+    border-top: 1px solid var(--ink);
+  }
+  .bill-head, .bill-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) 10ch minmax(0, 1.6fr);
+    gap: 1.5rem;
+    align-items: baseline;
+    padding: 1rem 0;
+  }
+  .bill-head {
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--ink);
+    padding: 0.55rem 0;
+  }
+  .bill-row { border-bottom: 1px solid var(--rule); }
+  .bill-row .tool { font-weight: 650; letter-spacing: -0.01em; font-size: 1.05rem; }
+  .bill-row .solved { font-family: var(--mono); font-size: 0.95rem; }
+  .bill-row .cost { font-family: var(--mono); font-size: 1.05rem; font-weight: 600; }
+  .bill-row .cost small { display: block; font-weight: 400; font-size: 0.72rem; letter-spacing: 0.06em; color: var(--ink-2); text-transform: uppercase; }
+  .bill-row.win { background: var(--card); border-left: 4px solid var(--t1); padding-left: 1rem; margin-left: -1rem; }
+  .bill-row.win .cost { color: var(--t1); font-size: 1.6rem; letter-spacing: -0.02em; }
+  .bill-note { color: var(--ink-2); max-width: 46em; margin-top: 1.5rem; }
+
+  /* ---------- three steps ---------- */
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(1.5rem, 3vw, 3rem);
+    margin-top: 2.5rem;
+  }
+  .step { border-top: 2px solid var(--ink); padding-top: 1.1rem; }
+  .step .no {
     font-family: var(--mono);
     font-size: 2rem;
     font-weight: 600;
     letter-spacing: -0.02em;
     line-height: 1;
-    color: var(--ink);
-    margin-bottom: 0.5rem;
   }
-
-  h2 {
-    font-size: clamp(1.5rem, 2.6vw, 1.9rem);
-    font-weight: 600;
+  .step.s1 .no { color: var(--t1); }
+  .step.s2 .no { color: var(--t3); }
+  .step.s3 .no { color: var(--t6); }
+  .step h3 {
+    font-size: 1.15rem;
+    font-weight: 650;
     letter-spacing: -0.015em;
-    line-height: 1.25;
-    margin-bottom: 1.1rem;
+    margin: 0.7rem 0 0.55rem;
   }
+  .step p { color: var(--ink-2); font-size: 0.9375rem; }
+  .step p code { color: var(--ink); }
 
-  .body-col { max-width: 41em; }
-  /* The install section runs wider so the one-liner and copy button fit. */
-  #install .body-col { max-width: 56em; }
-  .body-col p + p { margin-top: 1rem; }
-  .body-col p + .rung-table,
-  .body-col p + .cmd-index,
-  .body-col p + .term { margin-top: 1.75rem; }
-  .rung-table + p, .cmd-index + p, .term + p { margin-top: 1.75rem; }
+  /* ---------- receipts: ask the record ---------- */
 
-  /* On paper the terminal plate keeps its own dark ground. */
-  section .term { max-width: none; }
-  section .term-cmd { color: var(--paper); }
-  section .term-note { color: var(--ink-2); padding: 0; }
-
-  /* ---------- the ladder as a table ---------- */
-
-  .rung-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.9375rem;
-  }
-  .rung-table th {
-    font-family: var(--mono);
-    font-size: 0.6875rem;
-    font-weight: 500;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--ink-2);
-    text-align: left;
-    padding: 0.4rem 1rem 0.4rem 0;
-    border-bottom: 1px solid var(--ink);
-  }
-  .rung-table td {
-    padding: 0.6rem 1rem 0.6rem 0;
-    border-bottom: 1px solid var(--rule);
-    vertical-align: baseline;
-  }
-  .rung-table .rung {
-    font-family: var(--mono);
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .rung-table .chip {
-    display: inline-block;
-    width: 0.85em;
-    height: 0.85em;
-    margin-right: 0.55em;
-  }
-  .rung-table .target { font-family: var(--mono); font-size: 0.8125rem; }
-  .rung-table .note { color: var(--ink-2); font-size: 0.875rem; }
-
-  /* ---------- figure column for the measured claims ---------- */
-
-  .figure-row {
+  .asks { border-top: 1px solid var(--ink); margin-top: 2.5rem; }
+  .ask {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-    column-gap: 2.25rem;
-    row-gap: 0.25rem;
-    padding: 1.4rem 0;
-    border-bottom: 1px solid var(--rule);
-    align-items: baseline;
-  }
-  .figure-row:first-child { padding-top: 0.25rem; }
-  .figure-row:last-child { border-bottom: 0; padding-bottom: 0; }
-  .figure-row .fig {
-    font-family: var(--mono);
-    font-size: 1.6rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-  }
-  .figure-row p { max-width: 35em; }
-
-  /* ---------- the command index ---------- */
-
-  .cmd-index { border-top: 1px solid var(--ink); }
-  .cmd-row {
-    display: grid;
-    grid-template-columns: 25ch minmax(0, 1fr);
-    gap: 2rem;
-    padding: 0.9rem 0;
-    border-bottom: 1px solid var(--rule);
-    align-items: baseline;
-  }
-  .cmd-row .cmd {
-    font-family: var(--mono);
-    font-size: 0.9375rem;
-    font-weight: 600;
-    white-space: nowrap;
-    transition: color 120ms ease;
-  }
-  .cmd-row:hover .cmd { color: var(--link-hover); }
-  .cmd-row p { color: var(--ink-2); max-width: 37em; }
-
-  /* ---------- plate (the product, mid-session) ---------- */
-
-  .plate-figure { padding: 3.5rem 0; border-bottom: 1px solid var(--rule); }
-  .plate-figure img {
-    display: block;
-    width: 100%;
-    max-width: 900px;
-    height: auto;
-    margin: 0 auto;
-    border: 1px solid var(--ink);
-  }
-  .plate-figure figcaption {
-    max-width: 900px;
-    margin: 0.9rem auto 0;
-    color: var(--ink-2);
-    display: flex;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.4fr) max-content;
     gap: 1.5rem;
     align-items: baseline;
+    padding: 1.05rem 0;
+    border-bottom: 1px solid var(--rule);
   }
-
-  /* ---------- call-to-action links ---------- */
-
-  .cta-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 2rem; }
-  .cta {
+  .ask .q { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.015em; }
+  .ask .a { color: var(--ink-2); font-size: 0.9375rem; }
+  .ask .c {
     font-family: var(--mono);
     font-size: 0.8125rem;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    text-decoration: none;
+    font-weight: 600;
     border: 1px solid var(--ink);
-    padding: 0.7rem 1.3rem;
-    transition: background 120ms ease, color 120ms ease;
+    border-radius: 6px;
+    padding: 0.3rem 0.65rem;
+    white-space: nowrap;
+    background: var(--card);
   }
-  .cta:hover { background: var(--ink); color: var(--paper); }
-  @media (prefers-reduced-motion: reduce) {
-    .cta, .cmd-row .cmd { transition: none; }
+
+  /* ---------- workbench plate ---------- */
+
+  .bench {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: clamp(2rem, 4vw, 4rem);
+    align-items: center;
+    margin-top: 2.5rem;
   }
+  .bench figure { border: 1px solid var(--ink); border-radius: 8px; overflow: hidden; background: var(--term-bg); }
+  .bench figure img { display: block; width: 100%; height: auto; }
+  .bench figcaption { color: var(--term-dim); padding: 0.6rem 1rem 0.7rem; }
+  .bench-list { list-style: none; margin-top: 1.5rem; }
+  .bench-list li {
+    padding: 0.55rem 0 0.55rem 1.4rem;
+    position: relative;
+    color: var(--ink-2);
+  }
+  .bench-list li::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0.95em;
+    width: 0.7em; height: 2px;
+    background: var(--t1);
+  }
+  .bench-list li b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- safety grid ---------- */
+
+  .guards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 2.5rem;
+  }
+  .guard { background: var(--card); padding: 1.5rem 1.5rem 1.35rem; }
+  .guard .mono { color: var(--t4); display: block; margin-bottom: 0.6rem; }
+  .guard h3 { font-size: 1.05rem; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 0.45rem; }
+  .guard p { color: var(--ink-2); font-size: 0.9375rem; }
+
+  /* ---------- install ---------- */
+
+  .install {
+    background: var(--term-bg);
+    color: #eceeef;
+    border-top: 1px solid var(--ink);
+    padding: 4.5rem 0 4rem;
+  }
+  .install h2 { color: #eceeef; }
+  .install .sec-label { color: var(--term-dim); }
+  .install .sec-label .n { color: #eceeef; border-color: #eceeef; }
+  .install .lede { color: var(--term-dim); max-width: 40em; }
+  .install .lede code { color: #eceeef; }
+  .install .term { margin-top: 2rem; max-width: none; }
+  .install .term-note { color: var(--term-dim); }
+  .install a { color: #eceeef; }
+  .install a:hover { color: #5fafaf; }
+  .install .hero-ctas .cta { border-color: #eceeef; color: #eceeef; }
+  .install .hero-ctas .cta:hover { background: #eceeef; color: var(--term-bg); }
+  .install .hero-ctas .cta.solid { background: var(--t1); border-color: var(--t1); color: #fff; }
+  .install .hero-ctas .cta.solid:hover { background: #eceeef; border-color: #eceeef; color: var(--term-bg); }
+  .install-ramp { height: 10px; }
 
   /* ---------- footer ---------- */
 
-  footer { padding: 2.25rem 0 3.5rem; }
+  footer { padding: 2.5rem 0 3.5rem; border-top: 1px solid var(--rule); }
   footer .cols {
     display: flex;
     justify-content: space-between;
-    gap: 2rem;
+    gap: 1.5rem 2rem;
     flex-wrap: wrap;
     color: var(--ink-2);
   }
-  footer nav { display: flex; gap: 1.75rem; flex-wrap: wrap; }
+  footer nav { display: flex; gap: 1.6rem; flex-wrap: wrap; }
   footer nav a { color: var(--ink); }
-  footer .fine { margin-top: 1.5rem; max-width: 46em; color: var(--ink-2); }
+  footer .fine { margin-top: 1.4rem; max-width: 52em; color: var(--ink-3); }
 
-  @media (max-width: 760px) {
-    section { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
-    .body-col { min-width: 0; }
-    .figure-row { grid-template-columns: minmax(0, 1fr); }
-    .cmd-row { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
-    .hero-top { flex-direction: column; gap: 0.75rem; align-items: flex-start; }
-    .hero-fields { display: grid; grid-template-columns: 1fr; gap: 0.4rem; }
-    .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
-    .plate-figure figcaption { flex-direction: column; gap: 0.25rem; }
+  @media (max-width: 860px) {
+    .hero-grid, .bench { grid-template-columns: minmax(0, 1fr); }
+    .steps { grid-template-columns: minmax(0, 1fr); }
+    .guards { grid-template-columns: minmax(0, 1fr); }
+    .ask { grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }
+    .ask .c { justify-self: start; margin-top: 0.35rem; }
+    .bill-head { display: none; }
+    .bill-row { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; padding: 0.9rem 0; }
+    .navplate nav { display: none; }
   }
 </style>
 </head>
 <body>
 
-<header class="hero">
+<a class="sr-only" href="#main">Skip to content</a>
+
+<header>
   <div class="sheet">
-    <div class="hero-top mono">
-      <span class="hero-brand"><img src="assets/logo-dark.svg" alt="" width="14" height="14">Terminal coding workbench</span>
-      <div class="hero-fields">
-        <span>Version&nbsp;<span class="v">1.2.0</span></span>
-        <span>Platforms&nbsp;<span class="v">macOS, Linux</span></span>
-        <span>License&nbsp;<span class="v">MIT</span></span>
-        <span>Source&nbsp;<span class="v"><a href="https://github.com/switchboard-code/switchboard">switchboard-code/switchboard</a></span></span>
-      </div>
+    <div class="navplate">
+      <a class="brand" href="/"><img src="assets/logo.svg" alt="Switchboard logo: four ascending bars in the heat-ramp colors" width="18" height="18">Switchboard</a>
+      <nav aria-label="Sections">
+        <a href="#bill">The bill</a>
+        <a href="#how">How it works</a>
+        <a href="#receipts">Receipts</a>
+        <a href="#workbench">Workbench</a>
+        <a href="#safety">Safety</a>
+      </nav>
+      <a class="navpill" href="#install">Install</a>
     </div>
 
-    <h1>Switchboard</h1>
+    <div class="hero-meta mono" aria-label="Product facts">
+      <span>Terminal coding agent</span>
+      <span>Free &amp; open source · MIT</span>
+      <span>macOS · Linux</span>
+      <span>v1.2 · <a href="https://github.com/switchboard-code/switchboard">github.com/switchboard-code/switchboard</a></span>
+    </div>
+
+    <h1><span class="k">Switchboard — a coding agent for your terminal</span>
+      The model is<br>a slot<span class="dot">.</span>
+    </h1>
 
     <div class="hero-grid">
       <div>
-        <p class="pitch">One coding workbench, every model you have. It picks the lowest suitable feasible rung for each turn and moves up when the work proves it needs more.</p>
-        <p class="sub">Line up your models, cheapest at the bottom: a small local one, a bigger one, a paid API, your subscription. Before each turn, the router checks the request, capabilities, context, availability, cache, and budget. During the work it watches for trouble, and every move shows its reason. Afterwards the session answers the questions a transcript can&rsquo;t: what it cost, what it wrote, what broke.</p>
+        <p class="pitch">Line up the models you already have — a small local one, a bigger one, a paid API, the subscription you pay for anyway. Switchboard routes every turn to the cheapest one that can actually do the work, and climbs only when the work proves harder.</p>
+        <p class="hero-sub">Other agents ask you to pick one model up front, then spend it on everything — reading a file and redesigning a module at the same price. Switchboard treats the model as a slot your ladder fills, checks the real request before each turn, and shows the reason for every move. <code>/why</code> answers the question every other tool leaves you asking.</p>
+        <div class="hero-ctas">
+          <a class="cta solid" href="#install">Install — one script</a>
+          <a class="cta" href="https://github.com/switchboard-code/switchboard">Source on GitHub</a>
+        </div>
       </div>
-      <figure class="hero-art">
-        <div class="strip on-dark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        <img src="assets/patch-panel.jpg" alt="Screen-print illustration of a vintage switchboard patch panel: cords in the ladder's six heat colors patched across a grid of sockets" width="1440" height="966">
-        <figcaption class="mono">The namesake: a patch panel, every cord a route.</figcaption>
+    </div>
+
+      <figure class="schematic">
+        <div class="strip" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="schematic-head mono"><span>Fig. 1 — one turn, routed</span><span>live policy, not a guess</span></div>
+        <div class="schematic-body">
+          <svg viewBox="0 0 1180 560" role="img" aria-label="Routing schematic: a turn enters the router, which checks capability, context, cache, availability, and budget, then patches it to rung t1, a free local model. A paid API rung is excluded by the budget; higher rungs stay in reserve.">
+            <defs>
+              <pattern id="gp" width="24" height="24" patternUnits="userSpaceOnUse">
+                <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#dbdbd4" stroke-width="1"/>
+              </pattern>
+            </defs>
+            <rect width="1180" height="560" fill="url(#gp)"/>
+
+            <!-- turn node -->
+            <rect x="50" y="238" width="240" height="84" rx="8" fill="#f4f4f1" stroke="#131416" stroke-width="1.5"/>
+            <text x="170" y="272" text-anchor="middle" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" letter-spacing="2" fill="#131416">YOUR TURN</text>
+            <text x="170" y="298" text-anchor="middle" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="1" fill="#8b9094">PROMPT + CONTEXT + TOOLS</text>
+
+            <!-- router node -->
+            <rect x="470" y="220" width="220" height="120" rx="8" fill="#131416"/>
+            <text x="580" y="262" text-anchor="middle" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" letter-spacing="2" fill="#eceeef">ROUTER</text>
+            <text x="580" y="288" text-anchor="middle" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" letter-spacing="1" fill="#9aa3a8">CAPABILITY · CONTEXT · CACHE</text>
+            <text x="580" y="308" text-anchor="middle" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" letter-spacing="1" fill="#9aa3a8">REACHABILITY · BUDGET</text>
+
+            <!-- patch cords -->
+            <path d="M 290 280 H 470" fill="none" stroke="#131416" stroke-width="1.5"/>
+            <path d="M 690 280 H 740 V 70 H 800" fill="none" stroke="#008787" stroke-width="2.5" class="route-live"/>
+            <path d="M 690 280 H 740 V 160 H 800" fill="none" stroke="#b9bbb2" stroke-width="1.25"/>
+            <path d="M 690 280 H 740 V 250 H 800" fill="none" stroke="#b9bbb2" stroke-width="1.25"/>
+            <path d="M 690 280 H 740 V 340 H 800" fill="none" stroke="#b9bbb2" stroke-width="1.25"/>
+            <path d="M 690 280 H 740 V 430 H 800" fill="none" stroke="#b9bbb2" stroke-width="1.25" stroke-dasharray="4 5"/>
+            <path d="M 690 280 H 740 V 520 H 800" fill="none" stroke="#b9bbb2" stroke-width="1.25" stroke-dasharray="4 5"/>
+
+            <!-- rungs -->
+            <g font-family="SFMono-Regular, Menlo, Consolas, monospace">
+              <rect x="800" y="36" width="330" height="68" rx="8" fill="#f4f4f1" stroke="#008787" stroke-width="2"/>
+              <rect x="818" y="58" width="13" height="13" fill="#008787"/>
+              <text x="842" y="70" font-size="14" font-weight="600" letter-spacing="1.5" fill="#131416">T1 · SMALL LOCAL MODEL</text>
+              <text x="842" y="90" font-size="11" letter-spacing="1" fill="#008787">ROUTED HERE — $0, YOUR MACHINE</text>
+
+              <rect x="800" y="126" width="330" height="68" rx="8" fill="#f4f4f1" stroke="#54595d" stroke-width="1"/>
+              <rect x="818" y="148" width="13" height="13" fill="#005faf"/>
+              <text x="842" y="160" font-size="14" font-weight="600" letter-spacing="1.5" fill="#131416">T2 · BIGGER LOCAL MODEL</text>
+              <text x="842" y="180" font-size="11" letter-spacing="1" fill="#8b9094">FEASIBLE — $0, KEPT WARM</text>
+
+              <rect x="800" y="216" width="330" height="68" rx="8" fill="#f4f4f1" stroke="#54595d" stroke-width="1"/>
+              <rect x="818" y="238" width="13" height="13" fill="#8700af"/>
+              <text x="842" y="250" font-size="14" font-weight="600" letter-spacing="1.5" fill="#131416">T3 · PAID API MODEL</text>
+              <text x="842" y="270" font-size="11" letter-spacing="1" fill="#d7005f">EXCLUDED — OVER THIS TURN&#8217;S BUDGET</text>
+
+              <rect x="800" y="306" width="330" height="68" rx="8" fill="#f4f4f1" stroke="#54595d" stroke-width="1"/>
+              <rect x="818" y="328" width="13" height="13" fill="#af5f00"/>
+              <text x="842" y="340" font-size="14" font-weight="600" letter-spacing="1.5" fill="#131416">T4 · YOUR SUBSCRIPTION</text>
+              <text x="842" y="360" font-size="11" letter-spacing="1" fill="#8b9094">RESERVE — PLAN QUOTA, NOT DOLLARS</text>
+
+              <rect x="800" y="396" width="330" height="68" rx="8" fill="none" stroke="#8b9094" stroke-width="1" stroke-dasharray="4 5"/>
+              <rect x="818" y="418" width="13" height="13" fill="#af8700"/>
+              <text x="842" y="430" font-size="14" font-weight="600" letter-spacing="1.5" fill="#8b9094">T5 · SPARE</text>
+              <text x="842" y="450" font-size="11" letter-spacing="1" fill="#8b9094">YOUR CALL — PLAIN TOML</text>
+
+              <rect x="800" y="486" width="330" height="68" rx="8" fill="none" stroke="#8b9094" stroke-width="1" stroke-dasharray="4 5"/>
+              <rect x="818" y="508" width="13" height="13" fill="#d7005f"/>
+              <text x="842" y="520" font-size="14" font-weight="600" letter-spacing="1.5" fill="#8b9094">T6 · SPARE</text>
+              <text x="842" y="540" font-size="11" letter-spacing="1" fill="#8b9094">YOUR CALL — PLAIN TOML</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption class="mono">The namesake: a patch panel. Every cord a route, every route a reason.</figcaption>
       </figure>
-    </div>
-
-    <div class="term">
-      <div class="strip on-dark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-      <div class="term-cmd"><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/switchboard-code/switchboard/main/install.sh | bash</div>
-      <button class="copy" type="button" data-copy aria-label="Copy install command">Copy</button>
-      <span class="sr-only" data-copy-status aria-live="polite"></span>
-    </div>
-    <p class="term-note mono">Checksums verified · installs to ~/.local/bin · or build from source, Go 1.26</p>
-  </div>
-
-  <div class="hero-ramp">
-    <div class="sheet">
-      <div class="ramp-labels mono" aria-hidden="true"><span>t1</span><span>t2</span><span>t3</span><span>t4</span><span>t5</span><span>t6</span></div>
-    </div>
-    <div class="strip on-dark" role="img" aria-label="The heat ramp: the ladder rendered as temperature, cool teal at t1 warming to coral at the top"><i></i><i></i><i></i><i></i><i></i><i></i></div>
   </div>
 </header>
 
-<main class="sheet">
+<main id="main">
 
-  <figure class="plate-figure">
-    <img src="tui.svg" alt="Switchboard running a session: the ladder in heat colors, tool rails, a route escalation, and the status bar" width="812" height="606" loading="lazy">
-    <figcaption class="mono">
-      <span>The product</span>
-      <span>A real session mid-turn: tool calls on rails, one escalation from t1 to t3 with its reason, the status bar reading spend and context. Rendered from the actual view code by a test, not drawn for the page.</span>
-    </figcaption>
-  </figure>
+  <!-- ============ the bill ============ -->
+  <section id="bill" aria-labelledby="bill-h">
+    <div class="sheet">
+      <div class="sec-label"><span class="n">01</span><span class="mono">Field test · 16 Aug 2026 · public journal</span></div>
+      <h2 id="bill-h">Same tasks. Same judge.<br>Very different bills.</h2>
+      <p class="lede ink2">Eleven seeded coding tasks, one attempt each, run headless under one verifier: Switchboard, Claude Code, and Codex CLI. All three solved all eleven. What differed was what the identical outcomes cost.</p>
 
-  <section id="ladder">
-    <div class="sec-no"><span class="n">01</span><span class="mono">The ladder</span></div>
-    <div class="body-col">
-      <h2>Route low when the turn fits. Climb when the evidence says so.</h2>
-      <p>When one selected model handles the whole session, easy tasks can overpay and hard tasks can run underpowered. Switchboard treats the model as a slot, not a fixed property of the tool, and your ladder fills it.</p>
-      <p>The idle process boots on the first reachable rung. Before each actual user turn, the router assembles the request and chooses the lowest suitable feasible rung. During the turn it watches for repeated tool calls, tool-error spikes, new test-failure signatures, and hedging. Those signals can propose a move. Rungs change only between completed rounds, and dwell, feasibility, and budget gates may keep the session where it is. When it moves, the transcript shows the reason in the rung&rsquo;s own color. <code>/t3</code> switches by hand; <code>/t3 fix the flaky test</code> borrows a rung for one prompt and comes back.</p>
-
-      <table class="rung-table">
-        <thead>
-          <tr><th>Rung</th><th>What might sit there</th><th>What it costs</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="rung"><span class="chip" style="background:var(--t1)"></span>t1</td>
-            <td class="target">a small local model, via Ollama</td>
-            <td class="note">nothing; it&rsquo;s your machine</td>
-          </tr>
-          <tr>
-            <td class="rung"><span class="chip" style="background:var(--t2)"></span>t2</td>
-            <td class="target">a bigger local model</td>
-            <td class="note">nothing; it&rsquo;s your machine</td>
-          </tr>
-          <tr>
-            <td class="rung"><span class="chip" style="background:var(--t3)"></span>t3</td>
-            <td class="target">a frontier API model</td>
-            <td class="note">bills per token</td>
-          </tr>
-          <tr>
-            <td class="rung"><span class="chip" style="background:var(--t4)"></span>t4</td>
-            <td class="target">a subscription you already pay for</td>
-            <td class="note">consumes plan quota</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <p>Your ladder, your mix, declared in plain TOML. If a rung&rsquo;s server is down, its fallback steps in and says so before anything is sent. Local, plan, and dollars are counted separately everywhere, because telling a router all three are &ldquo;free&rdquo; teaches it the wrong lesson about two of them.</p>
-    </div>
-  </section>
-
-  <section id="workbench">
-    <div class="sec-no"><span class="n">02</span><span class="mono">The workbench</span></div>
-    <div class="body-col">
-      <h2>Find the code, inspect the evidence, then make the edit.</h2>
-      <p>The TUI handles the small navigation work that otherwise sends a terminal session back to an editor. File and literal-search results carry revisions, so a source view that changed under you is refused instead of opened as if it were current.</p>
-      <div class="cmd-index">
-        <div class="cmd-row"><span class="cmd">Ctrl+P</span><p>Search the command palette by name or purpose.</p></div>
-        <div class="cmd-row"><span class="cmd">/files + /search</span><p>Quick-open files or search literal text with revision checks and explicit partial-coverage labels.</p></div>
-        <div class="cmd-row"><span class="cmd">/diff</span><p>Read staged, unstaged, and untracked work against HEAD; truncation includes a bounded omitted-path inventory.</p></div>
-        <div class="cmd-row"><span class="cmd">/review [turn]</span><p>Inspect one agent turn&rsquo;s recorded write/edit mutations. Stale or redirected current bytes are refused, and the panel has no action that changes files.</p></div>
-        <div class="cmd-row"><span class="cmd">/outline + /symbols</span><p>Browse declarations from a trusted installed language server that starts only when a semantic query needs it.</p></div>
-        <div class="cmd-row"><span class="cmd">/definition + /references</span><p>Move through semantic locations inside the workspace; external locations stay copy-only.</p></div>
-        <div class="cmd-row"><span class="cmd">/problems</span><p>See published diagnostics with freshness and partial-coverage labels. An empty panel never calls the project clean.</p></div>
-        <div class="cmd-row"><span class="cmd">/tasks</span><p>Inspect live calls and observed cost, or cancel one delegate. Calls emitted together can overlap, up to four; results rejoin in order.</p></div>
-      </div>
-      <p>Writes publish complete files atomically. Edit and undo compare the expected file state immediately before publication and refuse a mismatch already present. The check and final rename cannot be one portable filesystem operation, so a simultaneous external replacement is outside the guarantee. The full workbench lives in the TUI; the line-oriented REPL and headless mode remain deliberately smaller.</p>
-    </div>
-  </section>
-
-  <section id="receipts">
-    <div class="sec-no"><span class="n">03</span><span class="mono">The receipts</span></div>
-    <div class="body-col">
-      <h2>Every session is a record. The tool reads it back.</h2>
-      <p>Everything is appended to a session log, which is what lets Switchboard answer questions no chat history can. A bounded, redacted continuity capsule carries recorded todo state and the next action once after a process or session boundary, or into a compaction seed, without changing the prompt you wrote or granting old file-read authority.</p>
-      <div class="cmd-index">
-        <div class="cmd-row"><span class="cmd">/why</span><p>Why this model, what was ruled out, and what the session would have cost on every other rung.</p></div>
-        <div class="cmd-row"><span class="cmd">/estimate</span><p>Price a prompt on every rung before you send it.</p></div>
-        <div class="cmd-row"><span class="cmd">/cost</span><p>The current session summary. <code>/cost turns</code> orders recorded work by bill; <code>/cost rungs</code> reprices it cold on every tier.</p></div>
-        <div class="cmd-row"><span class="cmd">/race</span><p>One prompt on two rungs at once, side by side. You keep the winner; a tie means the cheap one was enough.</p></div>
-        <div class="cmd-row"><span class="cmd">/destinations</span><p>Name the providers this workspace may reach. Everything else is refused before cost is considered, including the rung a delegate call asks for.</p></div>
-        <div class="cmd-row"><span class="cmd">/permissions</span><p>The standing rules that answer without asking, in the order they answer. <code>sb permissions -- &lt;command&gt;</code> says what they would do to one, with no session.</p></div>
-        <div class="cmd-row"><span class="cmd">/audit</span><p>A second rung reads the turn that just finished and says where the closing message and the record disagree.</p></div>
-        <div class="cmd-row"><span class="cmd">/blame</span><p>Which turn wrote this line, replayed from the logs. Lines the record can&rsquo;t explain say so; nothing is guessed.</p></div>
-        <div class="cmd-row"><span class="cmd">/bisect</span><p>Tests are red and you don&rsquo;t know since when: binary-search the session&rsquo;s turns and name the culprit.</p></div>
-        <div class="cmd-row"><span class="cmd">/recap</span><p>&ldquo;Where did I leave off&rdquo; answered from the record, with the bill and the two next actions.</p></div>
-        <div class="cmd-row"><span class="cmd">/mistakes</span><p>Failures more than one session has met, each naming its sessions so you can reopen the evidence.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="proof">
-    <div class="sec-no"><span class="n">04</span><span class="mono">The proof</span></div>
-    <div class="body-col">
-      <h2>Measured, not assumed.</h2>
-      <div class="figures">
-        <div class="figure-row">
-          <span class="fig">11/11</span>
-          <p>Tasks completed on an eleven-task corpus, headless, under the same verifier as Claude Code and Codex CLI. Completion tied; what differed was the ladder noticing which tasks a free rung could carry. The log is public: <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/head-to-head-2026-08-16.md">the head-to-head run</a>.</p>
+      <div class="bill" role="table" aria-label="Head-to-head cost comparison">
+        <div class="bill-head mono" role="row"><span role="columnheader">Tool</span><span role="columnheader">Solved</span><span role="columnheader">The bill</span></div>
+        <div class="bill-row" role="row">
+          <span class="tool" role="cell">Claude Code</span>
+          <span class="solved" role="cell">11 / 11</span>
+          <span class="cost" role="cell">$22.35 <small>metered API spend, frontier model throughout</small></span>
         </div>
-        <div class="figure-row">
-          <span class="fig">1</span>
-          <p>Assumed ladder falsified by the tool&rsquo;s own eval harness. A reputation-ordered ladder lost, and <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/eval.md">docs/eval.md</a> keeps the run plus the derivation that replaced it.</p> <!-- unslop-ignore: "eval harness" is this repo's own term (internal/gate), not the hype verb -->
+        <div class="bill-row" role="row">
+          <span class="tool" role="cell">Codex CLI</span>
+          <span class="solved" role="cell">11 / 11</span>
+          <span class="cost" role="cell">641,576 tokens <small>of gpt-5.6-sol plan quota</small></span>
         </div>
-        <div class="figure-row">
-          <span class="fig">0.70&ndash;1.10</span>
-          <p>The band the token estimator is held to, estimate over what providers actually reported, enforced by a live test. Move the estimator and the test fails, so <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/estimator.md">the numbers</a> and the code can&rsquo;t drift apart quietly.</p>
+        <div class="bill-row win" role="row">
+          <span class="tool" role="cell">Switchboard</span>
+          <span class="solved" role="cell">11 / 11</span>
+          <span class="cost" role="cell">$0 <small>4 tasks entirely on free local rungs · the rest on plan quota</small></span>
+        </div>
+      </div>
+
+      <p class="bill-note">The ladder is the interesting column: Switchboard bought a frontier rung only where its own escalation evidence said the cheap one was stuck. Eleven times out of eleven, paying frontier price bought nothing the verifier could see. One corpus, one machine, one day — the <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/head-to-head-2026-08-16.md">full run</a>, the <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/head-to-head-2026-08-16.jsonl">raw journal</a>, and the <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/eval.md">eval gate</a> are public, and the numbers are held in place by tests, not by memory.</p>
+    </div>
+  </section>
+
+  <!-- ============ how it works ============ -->
+  <section id="how" aria-labelledby="how-h">
+    <div class="sheet">
+      <div class="sec-label"><span class="n">02</span><span class="mono">How it works</span></div>
+      <h2 id="how-h">Cheapest rung first.<br>Climb on evidence.</h2>
+
+      <div class="steps">
+        <div class="step s1">
+          <span class="no">01</span>
+          <h3>Line up your models</h3>
+          <p>Cheapest at the bottom: a small local model, a bigger local one, a paid API, the subscription you already have. Four lines of TOML a rung. Your mix, your order, your ceiling.</p>
+        </div>
+        <div class="step s2">
+          <span class="no">02</span>
+          <h3>Every turn gets routed</h3>
+          <p>Before each turn, Switchboard measures the request that would actually be sent — its size, the tools it needs, what&#8217;s reachable, what&#8217;s warm in cache, what fits your budget — and picks the lowest rung that qualifies. Not vibes: the request itself.</p>
+        </div>
+        <div class="step s3">
+          <span class="no">03</span>
+          <h3>It climbs on evidence, and says why</h3>
+          <p>Stuck in a tool loop, fresh test failures, a model hedging — signals like these can move the turn upward between rounds, never mid-answer. Every move shows its reason in the transcript. <code>/t3</code> pins a rung by hand; <code>/tier auto</code> hands routing back.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <section id="reach">
-    <div class="sec-no"><span class="n">05</span><span class="mono">Reach is explicit</span></div>
-    <div class="body-col">
-      <h2>Host-direct by default. Guarded when you want it.</h2>
-      <p>Approved commands run with full host filesystem and network reach by default, and the approval screen says so. <code>auto</code> uses a low-cost reviewer only under active verified confinement; host-direct execution asks you because workspace builds can run code. A confined explicit full-network request can remain reviewable, while shared loopback, opaque, sensitive, external, and Windows commands stay with you. <code>yolo</code> remains the explicit full-host mode; sensitive and external actions stay gated.</p>
-      <p>Use <code>-sandbox</code> or <code>/sandbox on</code> to request verified Seatbelt on macOS or bubblewrap on Linux. Confinement limits writes to the workspace, temporary files, and build caches, but broad outside-home reads and host IPC remain; Seatbelt also shares host loopback. Switchboard reports those boundaries instead of calling them isolation.</p>
-      <p>Credentials can come from environment variables, helpers, OAuth, or the OS keychain. Agent exec, LSP and probe processes, and editor launches use a central scrubbed environment; explicit user shell and custom commands retain the ambient environment. Known secrets are redacted, and outbound prompts are scanned before they leave the machine. Native Claude and Codex extensions still require activation, policy approval, and trust.</p>
+  <!-- ============ receipts ============ -->
+  <section id="receipts" aria-labelledby="receipts-h">
+    <div class="sheet">
+      <div class="sec-label"><span class="n">03</span><span class="mono">The receipts</span></div>
+      <h2 id="receipts-h">Every session is a record.<br>Ask it questions.</h2>
+      <p class="lede ink2">Everything the agent does is appended to a session log — every call, every dollar, every diff. That turns the questions you&#8217;d normally ask a chat transcript into questions the record can actually answer.</p>
+
+      <div class="asks">
+        <div class="ask">
+          <span class="q">&#8220;Why this model?&#8221;</span>
+          <span class="a">What was ruled out, why, and what the turn would have cost on every other rung.</span>
+          <span class="c">/why</span>
+        </div>
+        <div class="ask">
+          <span class="q">&#8220;What did that cost?&#8221;</span>
+          <span class="a">The session bill by turn or by rung. Price the next prompt before you send it.</span>
+          <span class="c">/cost · /estimate</span>
+        </div>
+        <div class="ask">
+          <span class="q">&#8220;Which turn wrote this line?&#8221;</span>
+          <span class="a">Line provenance replayed from the log. Lines the record can&#8217;t explain say so — nothing is guessed.</span>
+          <span class="c">/blame</span>
+        </div>
+        <div class="ask">
+          <span class="q">&#8220;When did the tests go red?&#8221;</span>
+          <span class="a">Binary-search the session&#8217;s turns for the one that broke your verifier, then restore the tree exactly.</span>
+          <span class="c">/bisect</span>
+        </div>
+        <div class="ask">
+          <span class="q">&#8220;Was the cheap model enough?&#8221;</span>
+          <span class="a">Run one prompt on two rungs, side by side. Keep the winner; a tie means the cheap one sufficed.</span>
+          <span class="c">/race</span>
+        </div>
+        <div class="ask">
+          <span class="q">&#8220;Did it do what it claimed?&#8221;</span>
+          <span class="a">A second model reads the finished turn and reports where the closing message and the record disagree.</span>
+          <span class="c">/audit</span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <section id="install">
-    <div class="sec-no"><span class="n">06</span><span class="mono">Get it</span></div>
-    <div class="body-col">
-      <h2>One script, checksums verified.</h2>
-      <div class="term">
-        <div class="strip" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        <div class="term-cmd"><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/switchboard-code/switchboard/main/install.sh | bash</div>
-        <button class="copy" type="button" data-copy aria-label="Copy install command">Copy</button>
-        <span class="sr-only" data-copy-status aria-live="polite"></span>
+  <!-- ============ workbench ============ -->
+  <section id="workbench" aria-labelledby="bench-h">
+    <div class="sheet">
+      <div class="sec-label"><span class="n">04</span><span class="mono">The workbench</span></div>
+      <h2 id="bench-h">Not a chat log.<br>A workbench.</h2>
+
+      <div class="bench">
+        <div>
+          <p class="lede ink2">The terminal UI handles the navigation work that otherwise sends you back to an editor mid-session:</p>
+          <ul class="bench-list">
+            <li><b>Find and open code</b> with a command palette and revision-checked search — a file that changed under you is refused, not opened stale.</li>
+            <li><b>Review changes</b> with an exact Git diff and a per-turn view of what the agent actually wrote.</li>
+            <li><b>Navigate semantics</b> — outline, symbols, definitions, references, diagnostics — through your installed language server.</li>
+            <li><b>Delegate</b> one level of subagent, up to four in parallel, sharing your permission rules.</li>
+            <li><b>Extend it</b> with your Claude and Codex skills, plugins, MCP servers, and hooks — under your trust grants, never by default.</li>
+          </ul>
+          <p class="ink2" style="margin-top:1.5rem">The full command surface lives in the <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/session.md">session reference</a>.</p>
+        </div>
+        <figure>
+          <img src="tui.svg" alt="Switchboard running a real session: model rungs in heat colors, tool calls on rails, one escalation from t1 to t3 with its reason, and a status bar reading spend and context" width="812" height="606" loading="lazy">
+          <figcaption class="mono">The product, mid-session — rendered from the actual view code by a test, not drawn for the page.</figcaption>
+        </figure>
       </div>
-      <p class="term-note mono">macOS + Linux · ~/.local/bin · Go 1.26 if you&rsquo;d rather build it</p>
-      <p>The first run opens a setup checklist: which providers it can reach, a masked prompt for any keys, and a pick for the model t1 starts on. Basic setup stays in the terminal; the generated TOML remains available when you want finer control.</p>
-      <div class="cta-row">
-        <a class="cta" href="https://github.com/switchboard-code/switchboard">Source on GitHub</a>
-        <a class="cta" href="https://github.com/switchboard-code/switchboard#readme">Read the README</a>
+    </div>
+  </section>
+
+  <!-- ============ safety ============ -->
+  <section id="safety" aria-labelledby="safety-h">
+    <div class="sheet">
+      <div class="sec-label"><span class="n">05</span><span class="mono">Safety &amp; control</span></div>
+      <h2 id="safety-h">Your machine,<br>your rules.</h2>
+
+      <div class="guards">
+        <div class="guard">
+          <span class="mono">Approvals</span>
+          <h3>It asks before it acts</h3>
+          <p>Commands run host-direct only after you approve them. Standing rules you write yourself cover what you&#8217;ve already decided; a request carrying a credential always comes back to you.</p>
+        </div>
+        <div class="guard">
+          <span class="mono">Confinement</span>
+          <h3>A real sandbox when you want one</h3>
+          <p><code>-sandbox</code> runs commands inside verified macOS Seatbelt or Linux bubblewrap confinement — and reports the boundaries it finds instead of calling them isolation.</p>
+        </div>
+        <div class="guard">
+          <span class="mono">Secrets</span>
+          <h3>What leaves is scanned first</h3>
+          <p>Keys live in the OS keychain, prompts are scanned for key-shaped strings before they go out, and external tools are never inside the sandbox&#8217;s trust.</p>
+        </div>
+        <div class="guard">
+          <span class="mono">Reach</span>
+          <h3>You name the providers</h3>
+          <p>Decide which providers a workspace may reach and everything else is refused before cost is even considered. Local, plan, and dollars are counted separately, everywhere.</p>
+        </div>
       </div>
+      <p class="bill-note">The full posture — permissions, trust, credentials, confinement boundaries — is in <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/security.md">security.md</a> and <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/sandbox.md">sandbox.md</a>.</p>
     </div>
   </section>
 
 </main>
 
+<!-- ============ install ============ -->
+<section class="install" id="install" aria-labelledby="install-h">
+  <div class="sheet">
+    <div class="sec-label"><span class="n">06</span><span class="mono">Get it</span></div>
+    <h2 id="install-h">One script.<br>Then <code>sb</code>.</h2>
+    <div class="term">
+      <div class="strip" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="term-cmd"><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/switchboard-code/switchboard/main/install.sh | bash</div>
+      <button class="copy" type="button" data-copy aria-label="Copy install command">Copy</button>
+      <span class="sr-only" data-copy-status aria-live="polite"></span>
+    </div>
+    <p class="term-note mono">Checksums verified · installs to ~/.local/bin · or build from source with Go 1.26</p>
+    <p class="lede">The first run opens a setup checklist: which providers it can reach, a masked prompt for any keys, and a pick for the model t1 starts on. It can reuse an existing Codex CLI login. From there, every turn you type gets routed.</p>
+    <div class="hero-ctas">
+      <a class="cta solid" href="https://github.com/switchboard-code/switchboard">Source on GitHub</a>
+      <a class="cta" href="https://github.com/switchboard-code/switchboard#readme">Read the README</a>
+      <a class="cta" href="https://github.com/switchboard-code/switchboard/blob/main/docs/configuration.md">Configuration</a>
+    </div>
+  </div>
+  <div class="install-ramp strip" role="img" aria-label="The heat ramp: the model ladder rendered as temperature, cool teal at t1 warming to coral at t6" style="margin-top:4rem"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+</section>
+
 <footer class="sheet">
   <div class="cols mono">
-    <nav>
+    <nav aria-label="Documentation">
+      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/routing.md">Routing</a>
+      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/session.md">Commands</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/eval.md">Eval</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/comparison.md">Comparison</a>
-      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/release-1.2.md">1.2 notes</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/head-to-head-2026-08-16.md">Head-to-head</a>
-      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/estimator.md">Estimator</a>
-      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/sandbox.md">Sandbox</a>
       <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/extensions.md">Extensions</a>
+      <a href="https://github.com/switchboard-code/switchboard/blob/main/docs/release-1.2.md">1.2 notes</a>
     </nav>
     <span>MIT License</span>
   </div>
+  <p class="fine">Switchboard routes each turn across a ladder of models you configure — local, API, or subscription — choosing the lowest rung that can do the work, and records every decision, dollar, and diff so you can ask the session what happened. Free and open source for macOS and Linux.</p>
 </footer>
 
 <script>
-/* The copy button on the install plates. Falls back to execCommand where the
+/* The copy button on the install plate. Falls back to execCommand where the
    async clipboard API is unavailable (file://, older Safari). */
 document.querySelectorAll("[data-copy]").forEach(function (btn) {
   btn.addEventListener("click", function () {
