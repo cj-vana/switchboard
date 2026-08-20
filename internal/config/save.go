@@ -213,8 +213,8 @@ func (c *Config) render() ([]byte, error) {
 		buf.WriteString("\n")
 	}
 
-	if c.Theme != "" || !c.NotifyOn() {
-		ui := uiEntry{Theme: c.Theme}
+	if c.Theme != "" || !c.NotifyOn() || c.Mouse {
+		ui := uiEntry{Theme: c.Theme, Mouse: c.Mouse}
 		// Absent means on, so the file carries the setting only when it is
 		// the non-default quiet.
 		if !c.NotifyOn() {

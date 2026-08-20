@@ -14,9 +14,10 @@ active ladder position, route moves, streaming token rate, cost in its native
 metering, context occupancy, session age, and current verifier state. Less
 important decoration disappears first when the terminal becomes narrow.
 
-Tool rails and route records expand with Ctrl+O or a mouse click. Ctrl+F
-searches the transcript from newest match to oldest and marks every match in
-the margin. Ctrl+P opens a searchable palette over the TUI command registry.
+Tool rails and route records expand with Ctrl+O, or with a mouse click once
+`/mouse on` has handed the mouse to the session. Ctrl+F searches the transcript
+from newest match to oldest and marks every match in the margin. Ctrl+P opens a
+searchable palette over the TUI command registry.
 
 ## Input
 
@@ -79,6 +80,7 @@ task asking, so prompts do not overlap or lose their owner.
 | `/sandbox on|off|auto|status` | Change or inspect command confinement for this process |
 | `/theme <dark|light|auto>` | Set the persistent TUI theme |
 | `/notify [on|off]` | Control completion and approval notifications |
+| `/mouse [on|off]` | Give the wheel and click-to-expand to sb, at the cost of the terminal's own text selection |
 
 Routing, budget, cache, and cost semantics are detailed in
 [Routing and the model ladder](routing.md).
@@ -342,11 +344,23 @@ follow-up such as `fix it` carries the failing turn and first error.
 The outputs preserve local, plan, and dollar units. See
 [Routing and the model ladder](routing.md) for the accounting rules.
 
-## Clipboard and notifications
+## Clipboard, selection, and notifications
 
 `/copy` copies the last response. `/copy code` copies its newest fenced block,
 and `/copy code 2` selects the preceding block, counting newest first across
 session responses.
+
+The mouse belongs to the terminal by default, so dragging selects text in the
+transcript and in the composer the way it does anywhere else. A terminal that
+is reporting mouse events to a program will not select with them, which is the
+whole of the trade: `/mouse on` gives sb the wheel and click-to-expand and
+takes selection away, and `/mouse off` gives it back. The setting persists as
+`[ui] mouse`.
+
+Nothing is lost while the mouse is off. `pgup` and `pgdn` scroll a page,
+`ctrl+u` and `ctrl+d` scroll half a page, `home` and `end` reach the ends of the
+transcript, and `ctrl+o` expands the last route or tool entry, which is what a
+click on one would have done.
 
 `/notify` controls the terminal bell for completed turns and waiting approvals.
 The terminal title also marks active work. Notifications are enabled by

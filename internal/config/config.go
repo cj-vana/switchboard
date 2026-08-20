@@ -130,6 +130,18 @@ type Config struct {
 	// through NotifyOn.
 	Notify *bool
 
+	// Mouse hands the terminal's mouse to the TUI, where the wheel scrolls
+	// the transcript and a click expands a tool rail.
+	//
+	// Off by default, and a plain bool rather than the *bool the settings
+	// above use, because absent and off are the same state here rather than
+	// two different facts. A terminal reporting mouse events to a program is
+	// a terminal that will not select text, so this trades copy and paste for
+	// the wheel — and every scroll the wheel serves already has a key (pgup,
+	// ctrl+u, home), while lifting a command out of a transcript has no
+	// substitute at all.
+	Mouse bool
+
 	// Budget is a per-session dollar ceiling, persisted so /budget survives a
 	// restart. Zero means no ceiling. It governs what the catalog prices in
 	// dollars; a local rung consumes nothing scarce and a plan rung consumes
@@ -356,6 +368,7 @@ type routingEntry struct {
 type uiEntry struct {
 	Theme  string `toml:"theme,omitempty"`
 	Notify *bool  `toml:"notify,omitempty"`
+	Mouse  bool   `toml:"mouse,omitempty"`
 }
 
 // updatesEntry holds the update settings. Booleans are *bool so "absent" and
@@ -524,6 +537,7 @@ func LoadFile(path string) (*Config, error) {
 	}
 	c.Theme = f.UI.Theme
 	c.Notify = f.UI.Notify
+	c.Mouse = f.UI.Mouse
 	if f.Execution.Sandbox != nil {
 		var raw string
 		switch value := f.Execution.Sandbox.(type) {

@@ -62,6 +62,7 @@ func commands() []commandItem {
 		{name: "find", usage: "[all] <text>", desc: "search recorded sessions for what was said; all spans workspaces", busySafe: true, run: cmdFind},
 		{name: "cache", desc: "what the provider is believed to hold warm, and the evidence", run: cmdCache},
 		{name: "notify", usage: "[on|off]", desc: "ring the bell when a turn finishes or an approval waits", busySafe: true, run: cmdNotify},
+		{name: "mouse", usage: "[on|off]", desc: "give the wheel to sb, at the cost of the terminal's own text selection", busySafe: true, run: cmdMouse},
 		{name: "queue", usage: "[clear]", desc: "what is waiting to run after this turn", busySafe: true, run: cmdQueue},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|preview|auto|at]", desc: "summarize into a fresh context; preview says what that would take", run: cmdCompact},
@@ -148,7 +149,7 @@ var helpGroups = []struct {
 	{"files and work", []string{"files", "search", "diff", "review", "audit", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
 	{"language intelligence", []string{"lsp", "outline", "symbols", "problems", "definition", "references"}},
 	{"safety and reach", []string{"mode", "permissions", "routing", "destinations", "workflow", "trust", "sandbox", "doctor", "plugins", "mcp", "hooks", "tasks", "agents", "skills", "login", "logout"}},
-	{"the surface", []string{"help", "theme", "notify", "models", "setup", "update"}},
+	{"the surface", []string{"help", "theme", "notify", "mouse", "models", "setup", "update"}},
 }
 
 func cmdHelp(m *tuiModel, _ string) tea.Cmd {
@@ -192,10 +193,13 @@ keys
   shift+tab        cycle permission mode ctrl+t             tier picker
   alt+1…alt+9      jump straight to that rung
   ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
-  ctrl+o           expand the last route or tool entry; clicking one expands it too
+  ctrl+o           expand the last route or tool entry
   esc              interrupt the turn    ctrl+c ctrl+c      exit
-  pgup/pgdn        scroll                mouse wheel        scroll
-  home/end         top / bottom of the transcript`)
+  pgup/pgdn        scroll                ctrl+u / ctrl+d    half a page
+  home/end         top / bottom of the transcript
+
+  the mouse belongs to the terminal, so drag to select and copy as usual.
+  /mouse on gives sb the wheel and click-to-expand instead.`)
 	m.addInfo(b.String())
 	return nil
 }
@@ -1138,5 +1142,38 @@ func cmdNotify(m *tuiModel, args string) tea.Cmd {
 		return noticeCmd("", "notify is now "+args)
 	default:
 		return noticeCmd("error", "/notify takes on or off")
+	}
+}
+
+// cmdMouse hands the mouse to sb, or gives it back to the terminal.
+//
+// The two are exclusive, which is the whole of the setting: a terminal
+// reporting mouse events to a program will not select text with them, so the
+// wheel and click-to-expand are bought with copy and paste. Off is the
+// default. The setting persists the way /theme does, and the mode changes on
+// the running terminal at once rather than at the next launch.
+func cmdMouse(m *tuiModel, args string) tea.Cmd {
+	switch strings.TrimSpace(args) {
+	case "":
+		if m.app.config.Mouse {
+			return noticeCmd("", "mouse is on: the wheel scrolls and a click expands a rail, "+
+				"and the terminal will not select text. /mouse off gives selection back")
+		}
+		return noticeCmd("", "mouse is off, so selection and copy are the terminal's; "+
+			"pgup, ctrl+u, home, and ctrl+o do what the wheel and a click would. /mouse on trades that away")
+	case "on", "off":
+		m.app.config.Mouse = args == "on"
+		mode := tea.Cmd(tea.DisableMouse)
+		told := "mouse is off; the terminal selects text again"
+		if m.app.config.Mouse {
+			mode = tea.EnableMouseCellMotion
+			told = "mouse is on; the terminal will not select text while it is"
+		}
+		if err := m.app.config.Save(); err != nil {
+			return tea.Batch(mode, noticeCmd("error", told+", but saving it failed: "+err.Error()))
+		}
+		return tea.Batch(mode, noticeCmd("", told))
+	default:
+		return noticeCmd("error", "/mouse takes on or off")
 	}
 }

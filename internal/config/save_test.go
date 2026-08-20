@@ -51,6 +51,7 @@ at_percent = 70
 [ui]
 theme = "light"
 notify = false
+mouse = true
 `)
 	before, err := LoadFile(path)
 	if err != nil {
@@ -87,6 +88,9 @@ notify = false
 	}
 	if after.NotifyOn() {
 		t.Error("notify = false did not survive the rewrite")
+	}
+	if !after.Mouse {
+		t.Error("mouse = true did not survive the rewrite")
 	}
 }
 
