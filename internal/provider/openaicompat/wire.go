@@ -114,7 +114,65 @@ type wireError struct {
 }
 
 type modelList struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
+	Data []modelEntry `json:"data"`
+}
+
+// modelEntry is one served model. The chat-completions format defines only the
+// id; the window fields below are extensions several local servers add to it,
+// and they are worth reading because a local window is a serving decision
+// rather than a property of the model, so nothing but the server knows it.
+//
+// The names do not carry one meaning across servers. Captured from a running
+// unsloth-studio on 2026-08-20, max_context_length was 103168 against a
+// native_context_length of 262144 — there it is the allocation. LM Studio
+// documents the same name as "the maximum context length supported by the
+// model", which is the opposite. contextWindow resolves that without having to
+// know which server answered.
+type modelEntry struct {
+	ID string `json:"id"`
+
+	// ContextLength and NativeContextLength are the architecture's ceiling on
+	// the servers observed to send them.
+	ContextLength       int `json:"context_length"`
+	NativeContextLength int `json:"native_context_length"`
+
+	// MaxContextLength is the allocation on one server and the ceiling on
+	// another. LoadedContextLength, where it appears, is only ever what was
+	// actually loaded.
+	MaxContextLength    int `json:"max_context_length"`
+	LoadedContextLength int `json:"loaded_context_length"`
+
+	// MaxModelLen is vLLM's, and is the limit it enforces per request rather
+	// than anything the weights imply.
+	MaxModelLen int `json:"max_model_len"`
+}
+
+// contextWindow is the smallest window this entry states, or zero when it
+// states none.
+//
+// Smallest, rather than whichever field looks most specific, because the names
+// disagree across servers and the two errors are not symmetric. A window that
+// over-reports is worse than no window at all: everything downstream trusts
+// the number, so guessing high sends requests the server refuses outright,
+// while guessing low only compacts earlier than it strictly had to.
+func (m modelEntry) contextWindow() int {
+	window := 0
+	for _, stated := range []int{
+		m.ContextLength, m.NativeContextLength,
+		m.MaxContextLength, m.LoadedContextLength, m.MaxModelLen,
+	} {
+		if stated > 0 && (window == 0 || stated < window) {
+			window = stated
+		}
+	}
+	return window
+}
+
+// serverProps is llama.cpp's /props, narrowed to the one field worth reading.
+// n_ctx there is the per-slot allocation, which is the number that governs
+// what the server will accept.
+type serverProps struct {
+	DefaultGenerationSettings struct {
+		NCtx int `json:"n_ctx"`
+	} `json:"default_generation_settings"`
 }

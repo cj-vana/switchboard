@@ -505,3 +505,138 @@ func TestAProfileWithNoAddressNamesTheSettingItNeeds(t *testing.T) {
 		t.Fatalf("the error should name the config key, got: %v", err)
 	}
 }
+
+// The window is the one fact beyond the id that a local server sometimes puts
+// in its model list, and reading it is what gives a target on this surface a
+// context meter and auto-compaction at all: the catalog records zero here
+// because it cannot describe a server nobody has seen.
+//
+// The body is a capture of a running unsloth-studio, taken 2026-08-20. Note
+// which number is which: max_context_length is what this server allocated and
+// native_context_length is what the architecture allows, so a reading that
+// preferred the longer name would send requests 2.5x larger than the server
+// will take.
+func TestProbeReadsTheWindowTheServerAllocated(t *testing.T) {
+	c := serveBody(t, `{"object":"list","data":[{
+		"id":"qwen3","object":"model","owned_by":"unsloth-studio","quant":"Q5_K_M",
+		"context_length":262144,"max_context_length":103168,
+		"native_context_length":262144,"loaded":true}]}`)
+
+	res, err := c.Probe(context.Background(), provider.RouteTarget{ModelID: "qwen3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 103168 {
+		t.Errorf("ContextWindow = %d, want the 103168 this server allocated", res.ContextWindow)
+	}
+}
+
+// vLLM states one number and it is the limit it enforces per request.
+func TestProbeReadsVLLMMaxModelLen(t *testing.T) {
+	c := serveBody(t, `{"object":"list","data":[{"id":"m","object":"model","owned_by":"vllm","max_model_len":32768}]}`)
+
+	res, err := c.Probe(context.Background(), provider.RouteTarget{ModelID: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 32768 {
+		t.Errorf("ContextWindow = %d, want 32768", res.ContextWindow)
+	}
+}
+
+// A server that says nothing leaves the window unknown, because unknown is
+// what it is. Inventing one here would gate auto-compaction on a number that
+// describes nothing, which is worse than leaving /context to be told by hand.
+func TestProbeLeavesAnUnstatedWindowUnknown(t *testing.T) {
+	c := serveBody(t, `{"object":"list","data":[{"id":"m"}]}`)
+
+	res, err := c.Probe(context.Background(), provider.RouteTarget{ModelID: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0 from a server that stated none", res.ContextWindow)
+	}
+}
+
+// llama.cpp puts only n_ctx_train in its model list, which is the length the
+// model was trained at rather than the -c the server allocated. Reading it
+// would over-report by an order of magnitude on a default launch, so the
+// allocated number is fetched from /props instead — at the server root, which
+// is the configured address with the API path taken off.
+func TestProbeAsksLlamaCppPropsForTheAllocatedWindow(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/models":
+			io.WriteString(w, `{"object":"list","data":[{"id":"m","meta":{"n_ctx_train":131072}}]}`)
+		case "/props":
+			io.WriteString(w, `{"default_generation_settings":{"n_ctx":8192},"total_slots":1}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c, err := New("generic", WithBaseURL(srv.URL+"/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.Probe(context.Background(), provider.RouteTarget{ModelID: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 8192 {
+		t.Errorf("ContextWindow = %d, want the 8192 /props reported allocated, not n_ctx_train", res.ContextWindow)
+	}
+	if len(asked) != 2 || asked[1] != "/props" {
+		t.Errorf("asked for %v, want /v1/models then /props at the server root", asked)
+	}
+}
+
+// A server that reported its own window is not asked twice. The second request
+// exists for llama.cpp and costs everyone else nothing.
+func TestProbeDoesNotAskForPropsWhenTheListAnswered(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		io.WriteString(w, `{"object":"list","data":[{"id":"m","max_model_len":4096}]}`)
+	}))
+	defer srv.Close()
+
+	c, err := New("generic", WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Probe(context.Background(), provider.RouteTarget{ModelID: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 {
+		t.Errorf("asked for %v, want the model list alone", asked)
+	}
+}
+
+// The names disagree across servers, so the reading has to be the one that
+// cannot over-report: LM Studio spends max_context_length on the model's
+// ceiling and reports the loaded allocation separately, which is the exact
+// reverse of the capture above.
+func TestSmallestStatedWindowWins(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		entry modelEntry
+		want  int
+	}{
+		{"lm studio reports the ceiling and the load", modelEntry{MaxContextLength: 131072, LoadedContextLength: 8192}, 8192},
+		{"unsloth reports the load and the architecture", modelEntry{ContextLength: 262144, MaxContextLength: 103168}, 103168},
+		{"a single number is taken as stated", modelEntry{MaxModelLen: 32768}, 32768},
+		{"nothing stated is unknown", modelEntry{}, 0},
+		{"a negative or zero field states nothing", modelEntry{ContextLength: -1, MaxContextLength: 0}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.entry.contextWindow(); got != tt.want {
+				t.Errorf("contextWindow() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

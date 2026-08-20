@@ -259,6 +259,13 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 // model list is the only capability signal the format offers; everything else
 // comes from the profile, which is why profiles have to be tested rather than
 // assumed.
+//
+// The one thing the list does sometimes carry beyond the id is the context
+// window, and reading it is what lets a local target have one at all: the
+// catalog records zero for this surface because it cannot describe a server it
+// has never seen, and a zero window is what leaves auto-compaction off and the
+// meter blank. Where the server states nothing, it stays zero and /context
+// still takes the number by hand.
 func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provider.ProbeResult, error) {
 	var res provider.ProbeResult
 
@@ -279,12 +286,16 @@ func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provid
 	for _, m := range list.Data {
 		if m.ID == target.ModelID {
 			res.ModelPresent = true
+			res.ContextWindow = m.contextWindow()
 			break
 		}
 	}
 	if !res.ModelPresent {
 		res.Detail = fmt.Sprintf("model %q is not served at %s", target.ModelID, c.profile.BaseURL)
 		return res, nil
+	}
+	if res.ContextWindow == 0 {
+		res.ContextWindow = c.slotContextWindow(ctx)
 	}
 
 	if c.profile.Tools {
@@ -294,6 +305,50 @@ func (c *Client) Probe(ctx context.Context, target provider.RouteTarget) (provid
 	}
 	res.Detail = fmt.Sprintf("profile %q; the format reports no per-model capabilities, so this is the profile's word", c.profileName)
 	return res, nil
+}
+
+// slotContextWindow asks llama.cpp what it allocated, for the servers whose
+// model list says nothing.
+//
+// That one needs asking separately because its discovery response carries only
+// meta.n_ctx_train, the length the model was trained at, which is not what the
+// server will accept: llama-server allocates -c and defaults it far below the
+// trained length, so reading n_ctx_train would over-report by an order of
+// magnitude on a default launch. /props carries the allocated number, and it
+// sits at the server root rather than under the API path, so the trailing
+// version segment comes off the configured address.
+//
+// Anything other than an answer leaves the window unknown, which is already
+// the truth for every server that does not serve this endpoint. It costs one
+// GET, and only on a target that reported no window of its own.
+func (c *Client) slotContextWindow(ctx context.Context) int {
+	endpoint, err := url.JoinPath(strings.TrimSuffix(c.profile.BaseURL, "/v1"), "props")
+	if err != nil {
+		return 0
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	var props serverProps
+	if err := json.NewDecoder(resp.Body).Decode(&props); err != nil {
+		return 0
+	}
+	if n := props.DefaultGenerationSettings.NCtx; n > 0 {
+		return n
+	}
+	return 0
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {

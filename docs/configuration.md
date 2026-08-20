@@ -341,6 +341,36 @@ also redirect `openaicompat/ollama`, which serves the local server's
 compatibility endpoint. A tier that names `openaicompat/<model>` without a
 `surface` uses the `generic` profile.
 
+### Context window on a compatible endpoint
+
+The chat-completions format has no field for a context window, so the catalog
+records zero for this surface and the number has to come from the server or
+from you. A zero window is not cosmetic: it is what the context meter reads,
+and automatic compaction is gated on it, so a target without one runs until the
+server refuses a request.
+
+The startup probe reads a window where the server states one. Several local
+servers extend their model list with it, under `max_context_length`,
+`loaded_context_length`, `context_length`, `native_context_length`, or vLLM's
+`max_model_len`. The names do not mean the same thing on every server, so the
+probe takes the smallest number stated: guessing high sends requests the server
+rejects, while guessing low only compacts earlier than it had to. A server whose
+list says nothing is asked once for llama.cpp's `/props`, which reports the
+context actually allocated rather than the length the model was trained at.
+
+Where a server reports nothing at all, state it yourself. `/context 32768`
+records the number and turns automatic compaction back on for that endpoint,
+writing:
+
+```toml
+[providers."openaicompat/generic"]
+base_url = "http://localhost:1234/v1"
+context_window = 32768
+```
+
+A probed window wins over this one, because the server knows which model is
+loaded and how much of it was allocated.
+
 The local server's address resolves in this order: the `-host` flag, then
 `[providers.ollama] base_url`, then `OLLAMA_HOST`, then
 `http://localhost:11434`. Setting the address from the setup checklist
