@@ -563,19 +563,26 @@ func TestUnknownCommandIsANotice(t *testing.T) {
 func TestModeCycleMovesAndReports(t *testing.T) {
 	m := testModel(t)
 	for _, want := range []permission.Mode{
-		permission.ModeAcceptEdits, permission.ModeAuto, permission.ModePlan, permission.ModeDefault,
+		permission.ModeAcceptEdits, permission.ModeAuto, permission.ModePlan, permission.ModeYOLO, permission.ModeDefault,
 	} {
 		m.cycleMode()
 		if m.mode != want || m.app.loop.Perms.Mode() != want {
 			t.Fatalf("shift+tab moved UI=%s engine=%s, want %s", m.mode, m.app.loop.Perms.Mode(), want)
 		}
-		if m.mode == permission.ModeYOLO || m.mode == permission.ModeBypass {
+		if m.mode == permission.ModeBypass {
 			t.Fatalf("shift+tab entered explicit-only mode %s", m.mode)
 		}
+		if got := m.app.loop.Perms.Execution().FullAccess(); got != (want == permission.ModeYOLO) {
+			t.Fatalf("full host access = %v in %s, want it only under yolo", got, want)
+		}
 	}
-	cmdMode(m, "yolo")
-	if m.mode != permission.ModeYOLO || !m.app.loop.Perms.Execution().FullAccess() {
-		t.Fatal("explicit /mode yolo did not enable full access")
+	copy := stripANSI(strings.Join(m.tr.flat, "\n"))
+	if !strings.Contains(copy, "FULL HOST ACCESS") {
+		t.Fatal("cycling into yolo did not say what it grants")
+	}
+	cmdMode(m, "default")
+	if m.mode != permission.ModeDefault || m.app.loop.Perms.Execution().FullAccess() {
+		t.Fatal("leaving yolo did not restore the confined posture")
 	}
 }
 

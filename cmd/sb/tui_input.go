@@ -235,15 +235,19 @@ func (m *tuiModel) runSlash(v string) tea.Cmd {
 	return noticeCmd("error", "unknown command "+name+"; try /help")
 }
 
-// cycleMode keeps destructive postures out of an accidental keystroke:
-// default → acceptEdits → auto → plan → default. yolo and legacy bypass are
-// available only through an explicit /mode choice.
+// cycleMode puts the everyday postures first and the widest grant last:
+// default → acceptEdits → auto → plan → yolo → default. Yolo closes the
+// cycle so reaching it means passing every narrower mode, and setMode's
+// landing warning is what makes the grant conspicuous. Legacy bypass stays
+// explicit-only under /mode: without verified confinement it still prompts,
+// and the picker is where that is said.
 func (m *tuiModel) cycleMode() tea.Cmd {
 	order := []permission.Mode{
 		permission.ModeDefault,
 		permission.ModeAcceptEdits,
 		permission.ModeAuto,
 		permission.ModePlan,
+		permission.ModeYOLO,
 	}
 	i := slices.Index(order, m.mode)
 	next := order[(i+1)%len(order)]
