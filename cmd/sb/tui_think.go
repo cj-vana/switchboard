@@ -6,11 +6,14 @@ package main
 // the rung — and it is visible twice the moment it lands: the machine target
 // identity changes and the readable status label names the reasoning effort.
 //
-// The words on offer are the running target's own, read from the catalog the
-// way /models reads them. A fixed list here would be a second opinion about
-// what a target accepts, and it was wrong: xhigh is priced on the current Opus
-// and Sonnet models and /models will bind it, while this command refused to
-// type it. Where the catalog knows nothing — a local model, an unpriced
+// The words on offer are the running target's own: what its server stated at
+// probe time where the surface reports them, and the catalog's entry where
+// only the catalog has spoken. A fixed list here would be a second opinion
+// about what a target accepts, and it was wrong twice over: xhigh is priced
+// on the current Opus and Sonnet models and /models will bind it, while this
+// command refused to type it, and the subscription surface's floor stopped at
+// high while the endpoint lists xhigh and max for the model that is running.
+// Where neither source knows the target — a local model, an unpriced
 // endpoint — the four words below stand in, because a picker with no items is
 // worse than a conservative one.
 
@@ -25,10 +28,14 @@ import (
 
 var fallbackThinkLevels = []string{"low", "medium", "high", "max"}
 
-// thinkLevelsFor names what this target will take. The catalog's answer wins
-// when it has one; ok reports whether it did, so the caller can say which list
-// the user is looking at rather than presenting a guess as a fact.
-func (m *tuiModel) thinkLevelsFor(target provider.RouteTarget) (levels []string, fromCatalog bool) {
+// thinkLevelsFor names what this target will take. The live probe's answer
+// wins when the server stated the model's levels, then the catalog's; ok
+// reports whether either spoke, so the caller can say which list the user is
+// looking at rather than presenting a guess as a fact.
+func (m *tuiModel) thinkLevelsFor(target provider.RouteTarget) (levels []string, fromTarget bool) {
+	if stated, ok := m.app.providers.probedEffortLevels(target); ok {
+		return stated, true
+	}
 	if info, _, ok := m.app.catalog.Lookup(target); ok && len(info.EffortLevels) > 0 {
 		return info.EffortLevels, true
 	}
@@ -57,14 +64,14 @@ func cmdThink(m *tuiModel, args string) tea.Cmd {
 }
 
 func (m *tuiModel) applyThink(level string) tea.Cmd {
-	levels, fromCatalog := m.thinkLevelsFor(m.app.tier.Target)
+	levels, fromTarget := m.thinkLevelsFor(m.app.tier.Target)
 	switch {
 	case level == "default" || level == "off":
 		level = ""
 	case slices.Contains(levels, level):
 	default:
 		known := strings.Join(levels, ", ")
-		if fromCatalog {
+		if fromTarget {
 			return noticeCmd("error", m.app.tier.Target.Display()+" takes "+known+", or default")
 		}
 		// Nothing priced this target, so the list is this command's floor

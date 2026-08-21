@@ -288,7 +288,11 @@ external tools, and Windows execution stay human-gated.
 
 `/theme`, `/update`, `/compact`, and `/budget` update persistent settings.
 `/think` changes reasoning effort for the running process; use `/models` to
-persist a tier binding. `/theme` accepts `dark`, `light`, or `auto`.
+persist a tier binding. The levels on offer are the running model's own: what
+its server stated at probe time where the surface reports them (the
+ChatGPT-plan endpoint lists them per model), then the catalog's entry, then a
+conservative floor where neither knows the target. `/theme` accepts `dark`,
+`light`, or `auto`.
 
 ## Sandbox selection
 

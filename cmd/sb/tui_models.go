@@ -89,12 +89,18 @@ func gatherModelChoices(ctx context.Context, reg *providers, cat *catalog.Catalo
 	asked := listConnectedSurfaces(ctx, reg, cfg, surfaces)
 	for _, c := range surfaces {
 		for _, name := range asked[surfaceKey(c)].models {
+			// The model's own stated levels where the surface reported them,
+			// the surface's floor where it did not.
+			levels := c.effortLevels
+			if stated := asked[surfaceKey(c)].efforts[name]; len(stated) > 0 {
+				levels = stated
+			}
 			bound := modelChoice{
 				ref:          c.provider + "/" + name,
 				provider:     c.provider,
 				surface:      c.surface,
 				desc:         c.desc,
-				effortLevels: c.effortLevels,
+				effortLevels: levels,
 			}
 			add(bound.ref+" "+bound.surface, bound, bound.ref, bound.desc)
 		}
@@ -140,10 +146,13 @@ func browseDesc(c modelChoice, status surfaceModels, shown int) string {
 }
 
 // surfaceModels is one surface's live answer, including the refusal, which is
-// as informative as a list and is what the row above it has to report.
+// as informative as a list and is what the row above it has to report. The
+// efforts map is the per-model effort levels the same answer carried, nil
+// where the surface's discovery says nothing about them.
 type surfaceModels struct {
-	models []string
-	err    error
+	models  []string
+	efforts map[string][]string
+	err     error
 }
 
 // listConnectedSurfaces asks every surface that can answer right now what it
@@ -165,8 +174,8 @@ func listConnectedSurfaces(ctx context.Context, reg *providers, cfg *config.Conf
 		wg.Add(1)
 		go func(i int, c modelChoice) {
 			defer wg.Done()
-			names, err := listSurfaceModels(ctx, reg, c.provider, c.surface)
-			out[i] = surfaceModels{models: names, err: err}
+			names, efforts, err := listSurfaceModels(ctx, reg, c.provider, c.surface)
+			out[i] = surfaceModels{models: names, efforts: efforts, err: err}
 		}(i, c)
 	}
 	wg.Wait()

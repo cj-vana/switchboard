@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -361,6 +362,72 @@ func TestResponsesProbeListsWhatTheAccountHas(t *testing.T) {
 	}
 	if !strings.Contains(res.Detail, "gpt-5.5") {
 		t.Errorf("detail = %q; the slugs cannot be guessed, so they have to be listed", res.Detail)
+	}
+}
+
+// The discovery answer states each model's own effort levels, and they are
+// not the surface's floor: the capture lists six for Daybreak Blue and four
+// for gpt-5.5. Reporting the floor here is what hid xhigh and max from the
+// effort picker on a model that takes them.
+func TestResponsesProbeReportsTheModelsOwnEffortLevels(t *testing.T) {
+	c := serveResponsesFixture(t, "codex_models.json")
+
+	res, err := c.Probe(context.Background(), SubscriptionTarget("gpt-daybreak-blue-latest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"low", "medium", "high", "xhigh", "max", "ultra"}; !slices.Equal(res.EffortLevels, want) {
+		t.Errorf("EffortLevels = %v, want the endpoint's ordered list %v", res.EffortLevels, want)
+	}
+
+	res, err = c.Probe(context.Background(), SubscriptionTarget("gpt-5.5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"low", "medium", "high", "xhigh"}; !slices.Equal(res.EffortLevels, want) {
+		t.Errorf("EffortLevels = %v, want %v: the levels are the model's, not the surface's", res.EffortLevels, want)
+	}
+}
+
+// An entry with no supported_reasoning_levels leaves the list unknown. The
+// surface's floor is the caller's fallback, not a fact about this model.
+func TestResponsesProbeLeavesUnstatedEffortsUnknown(t *testing.T) {
+	c := serveResponses(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"models":[{"slug":"gpt-5.4-mini"}]}`)
+	})
+
+	res, err := c.Probe(context.Background(), SubscriptionTarget("gpt-5.4-mini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.EffortLevels != nil {
+		t.Errorf("EffortLevels = %v, want nil from an entry that stated none", res.EffortLevels)
+	}
+}
+
+// The picker's model set and its effort lists come from the one answer, so
+// every offered slug has an entry — empty where the model states none.
+func TestResponsesModelEffortsCoversEveryOfferedSlug(t *testing.T) {
+	c := serveResponsesFixture(t, "codex_models.json")
+
+	names, err := c.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	efforts, err := c.ModelEfforts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(efforts) != len(names) {
+		t.Fatalf("ModelEfforts covered %d slugs, Models listed %d", len(efforts), len(names))
+	}
+	for _, name := range names {
+		if _, ok := efforts[name]; !ok {
+			t.Errorf("%s is offered but has no entry in the effort map", name)
+		}
+	}
+	if want := []string{"low", "medium", "high", "xhigh", "max", "ultra"}; !slices.Equal(efforts["gpt-daybreak-blue-latest"], want) {
+		t.Errorf("daybreak efforts = %v, want %v", efforts["gpt-daybreak-blue-latest"], want)
 	}
 }
 

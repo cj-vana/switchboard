@@ -56,17 +56,31 @@ type providers struct {
 	// from the UI's goroutines as well as assembly.
 	mu     sync.Mutex
 	probes map[provider.RouteTargetID]provider.ProbeResult
+
+	// efforts remembers the reasoning levels a model's own server stated,
+	// keyed free of inference parameters: /think rebinds the target under a
+	// new parameterized identity when the effort changes, and the list the
+	// server gave for the model does not move with it.
+	efforts map[string][]string
 }
 
 func newProviders(host string, cfg *config.Config) *providers {
 	return &providers{
-		ollama: ollama.New(ollama.WithBaseURL(ollamaHost(host, cfg))),
-		compat: map[string]*openaicompat.Client{},
-		openai: map[string]*openaicompat.Client{},
-		config: cfg,
-		host:   host,
-		probes: map[provider.RouteTargetID]provider.ProbeResult{},
+		ollama:  ollama.New(ollama.WithBaseURL(ollamaHost(host, cfg))),
+		compat:  map[string]*openaicompat.Client{},
+		openai:  map[string]*openaicompat.Client{},
+		config:  cfg,
+		host:    host,
+		probes:  map[provider.RouteTargetID]provider.ProbeResult{},
+		efforts: map[string][]string{},
 	}
+}
+
+// effortKey identifies a model on a surface with the request's inference
+// parameters stripped, which is the identity a stated effort list attaches to.
+func effortKey(target provider.RouteTarget) string {
+	bare := provider.RouteTarget{Provider: target.Provider, Surface: target.Surface, ModelID: target.ModelID}
+	return string(bare.ID())
 }
 
 // ollamaHost resolves which server the local adapter talks to: the flag, then
@@ -158,6 +172,20 @@ func (p *providers) probedCapabilities(target provider.RouteTarget) (provider.Pr
 func (p *providers) probedContextWindow(target provider.RouteTarget) int {
 	probe, _ := p.probedCapabilities(target)
 	return probe.ContextWindow
+}
+
+// probedEffortLevels reports the reasoning efforts this target's server
+// listed for the model, in the server's order. The second return is false
+// where no probe carried a list, which is the caller's cue to fall back to
+// the catalog's surface floor rather than treat silence as a miss.
+func (p *providers) probedEffortLevels(target provider.RouteTarget) ([]string, bool) {
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	levels, ok := p.efforts[effortKey(target)]
+	return levels, ok
 }
 
 // baseURL is the configured address for a target's surface, or empty for the
@@ -350,6 +378,13 @@ func (p *providers) probeTier(ctx context.Context, tier config.Tier) (config.Tie
 	}
 	p.mu.Lock()
 	p.probes[tier.Target.ID()] = probe
+	if len(probe.EffortLevels) > 0 {
+		p.efforts[effortKey(tier.Target)] = probe.EffortLevels
+	} else {
+		// A fresh probe that states no levels replaces what an earlier one
+		// said: the latest answer is the truth, and absent stays absent.
+		delete(p.efforts, effortKey(tier.Target))
+	}
 	p.mu.Unlock()
 	switch {
 	case !probe.Reachable:

@@ -159,6 +159,7 @@ func (c *ResponsesClient) Probe(ctx context.Context, target provider.RouteTarget
 		offered = append(offered, m.Slug)
 		if m.Slug == target.ModelID {
 			res.ModelPresent = true
+			res.EffortLevels = m.effortLevels()
 		}
 	}
 	if !res.ModelPresent {
@@ -186,6 +187,28 @@ func (c *ResponsesClient) Models(ctx context.Context) ([]string, error) {
 	out := make([]string, 0, len(list.Models))
 	for _, m := range list.Models {
 		out = append(out, m.Slug)
+	}
+	return out, nil
+}
+
+// ModelEfforts pairs each offered slug with the reasoning efforts the
+// endpoint states for it, in the server's own order. Every slug appears, with
+// an empty list where the entry says nothing, so the caller's model set is
+// the same one Models would return.
+func (c *ResponsesClient) ModelEfforts(ctx context.Context) (map[string][]string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var list codexModelList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, &provider.ProtocolError{Provider: Name, Detail: "decoding the model list", Err: err}
+	}
+	out := make(map[string][]string, len(list.Models))
+	for _, m := range list.Models {
+		out[m.Slug] = m.effortLevels()
 	}
 	return out, nil
 }

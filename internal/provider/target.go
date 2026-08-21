@@ -346,6 +346,13 @@ type ProbeResult struct {
 	// model that is loaded on it.
 	ContextWindow int
 
+	// EffortLevels are the reasoning efforts the server states this model
+	// accepts, in the server's own order, or nil where discovery says
+	// nothing about them. The same live-answer rule as ContextWindow: the
+	// catalog's list describes a surface's floor, and the levels vary per
+	// model on the surfaces that report them.
+	EffortLevels []string
+
 	Detail string
 }
 

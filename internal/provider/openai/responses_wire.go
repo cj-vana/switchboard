@@ -140,8 +140,32 @@ type responsesUsage struct {
 // capabilities, which the chat-completions /models does not, so a probe here
 // can report what a model actually does instead of what a profile guesses.
 type codexModelList struct {
-	Models []struct {
-		Slug            string   `json:"slug"`
-		InputModalities []string `json:"input_modalities"`
-	} `json:"models"`
+	Models []codexModel `json:"models"`
+}
+
+type codexModel struct {
+	Slug            string   `json:"slug"`
+	InputModalities []string `json:"input_modalities"`
+
+	// SupportedReasoningLevels is the model's own effort list, in the
+	// endpoint's ascending order. It varies per model on this surface, which
+	// is exactly why a surface-wide floor under-reports it.
+	SupportedReasoningLevels []struct {
+		Effort string `json:"effort"`
+	} `json:"supported_reasoning_levels"`
+}
+
+// effortLevels extracts the effort words the endpoint listed, keeping its
+// order. A model whose entry says nothing yields nil: absent, not guessed.
+func (m codexModel) effortLevels() []string {
+	if len(m.SupportedReasoningLevels) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m.SupportedReasoningLevels))
+	for _, l := range m.SupportedReasoningLevels {
+		if l.Effort != "" {
+			out = append(out, l.Effort)
+		}
+	}
+	return out
 }

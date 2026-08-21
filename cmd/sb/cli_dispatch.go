@@ -32,7 +32,7 @@ func parseCLIOptions(args []string) (options, []string, error) {
 	flags.StringVar(&opts.host, "host", "", "Ollama base URL (default [providers.ollama] base_url, $OLLAMA_HOST, or http://localhost:11434)")
 	flags.StringVar(&opts.mode, "mode", "default", "permission mode: plan, default, acceptEdits, auto, yolo, or bypass")
 	flags.Var(sandboxFlag{target: &opts.sandbox}, "sandbox", "command confinement: bare flag means on; also accepts off, on, or auto (default: config, then off)")
-	flags.StringVar(&opts.think, "think", "", "reasoning effort: low, medium, high, or max")
+	flags.StringVar(&opts.think, "think", "", "reasoning effort: the target's own levels (low, medium, high, and where the model states them, xhigh, max, or ultra)")
 	flags.StringVar(&opts.workspace, "workspace", "", "workspace root (default: current directory)")
 	flags.StringVar(&opts.profile, "profile", "", "run on a named alternate ladder from [profiles.<name>] in the config")
 	flags.StringVar(&opts.prompt, "p", "", "run a single prompt and exit; piped stdin is attached to it")

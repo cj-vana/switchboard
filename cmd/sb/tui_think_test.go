@@ -75,3 +75,73 @@ func TestThinkFallsBackWhenNothingPricedTheTarget(t *testing.T) {
 		t.Errorf("refusal = %q, which reads as the target's word rather than this command's", notice.text)
 	}
 }
+
+// The subscription surface's catalog floor stops at high, but the endpoint's
+// own list for the running model does not: Daybreak Blue takes xhigh, max,
+// and ultra. What the server stated at probe time is the target's answer and
+// wins over the floor.
+func TestThinkOffersWhatTheServerStated(t *testing.T) {
+	cat, err := catalog.LoadBundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.RouteTarget{Provider: "openai", Surface: "subscription", ModelID: "gpt-daybreak-blue-latest"}
+	// The fixture's point is that the probed list does the work: the
+	// catalog's floor for this surface must not already contain the levels
+	// under test, or the test passes without the probe path.
+	info, _, ok := cat.Lookup(target)
+	if !ok || slices.Contains(info.EffortLevels, "xhigh") {
+		t.Fatalf("the catalog floor %v no longer isolates the probed answer", info.EffortLevels)
+	}
+
+	m := testModel(t)
+	m.app.catalog = cat
+	m.app.tier.Target = target
+	stated := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+	m.app.providers = &providers{efforts: map[string][]string{effortKey(target): stated}}
+
+	levels, fromTarget := m.thinkLevelsFor(target)
+	if !fromTarget {
+		t.Fatal("a probed target reported no effort levels")
+	}
+	if !slices.Equal(levels, stated) {
+		t.Errorf("levels = %v, want the server's own list %v", levels, stated)
+	}
+
+	if cmd := cmdThink(m, ""); cmd != nil {
+		t.Fatalf("opening the picker returned a command: %v", cmd)
+	}
+	dlg, ok := m.dlg.(*pickerDialog)
+	if !ok {
+		t.Fatalf("dlg = %T, want a picker", m.dlg)
+	}
+	offered := make([]string, 0, len(dlg.items))
+	for _, item := range dlg.items {
+		offered = append(offered, item.id)
+	}
+	for _, level := range []string{"xhigh", "max", "ultra"} {
+		if !slices.Contains(offered, level) {
+			t.Errorf("the picker offered %v, which is not what the server stated", offered)
+		}
+	}
+}
+
+// Changing the effort rebinds the target under a parameterized identity, and
+// the levels the server stated for the model do not move with it.
+func TestThinkLevelsSurviveAnEffortChange(t *testing.T) {
+	base := provider.RouteTarget{Provider: "openai", Surface: "subscription", ModelID: "gpt-daybreak-blue-latest"}
+	stated := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+
+	m := testModel(t)
+	m.app.providers = &providers{efforts: map[string][]string{effortKey(base): stated}}
+
+	moved := base
+	moved.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	if moved.ID() == base.ID() {
+		t.Fatal("an effort change did not change the target identity; the test proves nothing")
+	}
+	levels, fromTarget := m.thinkLevelsFor(moved)
+	if !fromTarget || !slices.Equal(levels, stated) {
+		t.Errorf("levels = %v (fromTarget %v), want %v under the rebound identity", levels, fromTarget, stated)
+	}
+}

@@ -125,6 +125,11 @@ source_urls = ["https://github.com/ollama/ollama/blob/main/docs/openai.md"]
 # The cache mechanics are real and are the reason this entry exists. The
 # endpoint reports cached and written prompt tokens separately, and it accepts
 # a caller-supplied routing key, which no other target here does.
+#
+# effort_levels is the floor every observed model here clears, not any one
+# model's list. The discovery endpoint states supported efforts per model and
+# they vary; the running target's probed answer is what /think and /models
+# offer, and this floor serves a model nobody has probed yet.
 # --------------------------------------------------------------------------
 
 [[surface_default]]

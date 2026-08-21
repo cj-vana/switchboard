@@ -48,6 +48,14 @@ type modelLister interface {
 	Models(ctx context.Context) ([]string, error)
 }
 
+// effortLister is the optional half of discovery: a surface whose model list
+// also states each model's reasoning efforts. It is consulted first so the
+// effort picker offers the model's own levels rather than the surface's
+// floor, and its answer already contains the slug set Models would return.
+type effortLister interface {
+	ModelEfforts(ctx context.Context) (map[string][]string, error)
+}
+
 // surfaceTarget is the route target that stands for a whole surface. It names
 // no model, which is exactly the question being asked.
 func surfaceTarget(providerName, surface string) provider.RouteTarget {
@@ -96,14 +104,18 @@ func browseSurfaceCmd(reg *providers, cfg *config.Config, choice modelChoice, on
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		names, listErr := listSurfaceModels(ctx, reg, providerName, surface)
+		names, efforts, listErr := listSurfaceModels(ctx, reg, providerName, surface)
 		bind := func(model string) modelChoice {
+			levels := choice.effortLevels
+			if stated := efforts[model]; len(stated) > 0 {
+				levels = stated
+			}
 			return modelChoice{
 				ref:          providerName + "/" + model,
 				provider:     providerName,
 				surface:      surface,
 				desc:         choice.desc,
-				effortLevels: choice.effortLevels,
+				effortLevels: levels,
 			}
 		}
 
@@ -235,22 +247,36 @@ func refusedForAuth(err error) bool {
 // listSurfaceModels asks the surface's own server what it serves. A failure is
 // returned rather than swallowed because the reason — no address, no key, a
 // server that is down — is what the caller shows next to the row that types an
-// id by hand.
-func listSurfaceModels(ctx context.Context, reg *providers, providerName, surface string) ([]string, error) {
+// id by hand. The map carries the effort levels the surface stated per model
+// where it states them at all, from the same answer, so a surface that reports
+// levels is not asked twice.
+func listSurfaceModels(ctx context.Context, reg *providers, providerName, surface string) ([]string, map[string][]string, error) {
 	client, err := reg.get(ctx, surfaceTarget(providerName, surface))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if el, ok := client.(effortLister); ok {
+		efforts, err := el.ModelEfforts(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		names := make([]string, 0, len(efforts))
+		for name := range efforts {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return names, efforts, nil
 	}
 	lister, ok := client.(modelLister)
 	if !ok {
-		return nil, fmt.Errorf("the %s adapter cannot list models", providerName)
+		return nil, nil, fmt.Errorf("the %s adapter cannot list models", providerName)
 	}
 	names, err := lister.Models(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sort.Strings(names)
-	return names, nil
+	return names, nil, nil
 }
 
 // listNote is the one line under the type-it-in row. It says why the list
