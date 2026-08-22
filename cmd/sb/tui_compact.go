@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -77,7 +76,11 @@ func compactCmd(m *tuiModel, instructions string, auto bool) tea.Cmd {
 	app := m.app
 	sourceSess := m.app.loop.Session
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(opCtx, 5*time.Minute)
+		// No fixed deadline: one streamed summary on a slow target can
+		// legitimately outlast any cap, and a cap's only answer was killing
+		// the compact at the five-minute mark. The operation stays
+		// cancellable, which is the same posture a turn has.
+		ctx, cancel := context.WithCancel(opCtx)
 		defer cancel()
 		finishNotice := func(level, text string) noticeMsg {
 			return noticeMsg{level: level, text: text, operation: generation, sourceID: sourceID}

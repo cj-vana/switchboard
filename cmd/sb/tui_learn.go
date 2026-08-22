@@ -84,7 +84,10 @@ func cmdLearn(m *tuiModel, args string) tea.Cmd {
 	app := m.app
 	sourceSess := m.app.loop.Session
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(opCtx, 5*time.Minute)
+		// No fixed deadline, for the same reason /compact dropped its:
+		// a slow target's summary outlasts any cap, and the operation stays
+		// cancellable.
+		ctx, cancel := context.WithCancel(opCtx)
 		defer cancel()
 		finishNotice := func(level, text string) noticeMsg {
 			return noticeMsg{level: level, text: text, operation: generation, sourceID: sourceID}

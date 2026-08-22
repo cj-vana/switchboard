@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 func (r *repl) compact(ctx context.Context, instructions string) {
@@ -27,7 +26,10 @@ func (r *repl) compact(ctx context.Context, instructions string) {
 		len(state.Messages), r.tier.Target.Display())))
 	r.out.flush()
 
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// No fixed deadline: a slow target's summary outlasts any cap, and a
+	// cap's only answer was killing the compact at five minutes. A turn has
+	// no cap either; interruption is ctrl-c, as everywhere in the REPL.
+	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	sess, err := compactSession(callCtx, compactInputs{
