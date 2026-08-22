@@ -33,7 +33,11 @@ func cmdWhy(m *tuiModel, _ string) tea.Cmd {
 			fmt.Fprintf(&b, "ruled out  %s\n", why)
 		}
 	} else if m.app.sticky != nil && !m.app.sticky.Pinned() {
-		b.WriteString("opening    automatic routing will choose from the next user turn; no prompt decision is pending\n")
+		if !m.app.config.RouteAutoOn() {
+			b.WriteString("opening    routing is off; the current rung stands until you change it\n")
+		} else {
+			b.WriteString("opening    automatic routing will choose from the next user turn; no prompt decision is pending\n")
+		}
 	} else {
 		b.WriteString("opening    picked by you, not the router\n")
 	}

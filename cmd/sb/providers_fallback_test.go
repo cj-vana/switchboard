@@ -266,6 +266,35 @@ func TestAutomaticInteractiveBootstrapSkipsUnavailableTier(t *testing.T) {
 	}
 }
 
+// Routing off is the user owning the rung on the headless surface too: the
+// bootstrap takes the first reachable rung, exactly as interactive startup
+// does, instead of letting the policy pick by prompt.
+func TestHeadlessBootstrapWithRoutingOffTakesTheFirstReachableRung(t *testing.T) {
+	cat := catalogWithLocalModels(t,
+		localModelSpec{name: "small", contextWindow: 100_000},
+		localModelSpec{name: "large", contextWindow: 100_000},
+	)
+	server := fakeOllama(t, "small", "large")
+	off := false
+	cfg := &config.Config{
+		Tiers:     []config.Tier{ollamaTier("t1", "small"), ollamaTier("t2", "large")},
+		RouteAuto: &off,
+	}
+	registry := newProviders(server.URL, cfg)
+	var chosen route.Decision
+	tier, _, _, err := resolveTier(context.Background(), registry, cfg, cat,
+		&options{prompt: "refactor the parser"}, "", &chosen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier.ID != "t1" {
+		t.Fatalf("routing-off headless bootstrap = %s, want the first reachable rung", tier.ID)
+	}
+	if chosen.Source != "" {
+		t.Fatalf("a routing-off bootstrap was recorded as a decision: %+v", chosen)
+	}
+}
+
 func TestAutomaticHeadlessBootstrapReroutesAroundUnavailableTier(t *testing.T) {
 	cat := catalogWithLocalModels(t,
 		localModelSpec{name: "missing", contextWindow: 100_000},

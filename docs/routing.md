@@ -49,6 +49,13 @@ Use `/t3` to pin the session to tier 3. `/tier auto` removes the pin. A command
 such as `/t3 fix the flaky test` runs one prompt on that feasible tier, then
 returns to the previous routing state.
 
+`/routing off` holds the current rung the way a pin does: the per-turn opening
+route hard-checks it and goes no further, mid-turn escalation stays paused,
+and relief is refused. A rung that cannot serve a turn is an actionable error
+there, never a silent move. Signals are still detected and recorded, so `/why`
+answers what the policy would have done. `/routing on` resumes automatic
+routing. The setting persists, and the rung still changes when you change it.
+
 ## Movement during a turn
 
 The sticky escalation policy watches repeated identical tool calls, tool error
@@ -85,8 +92,9 @@ route record: the router chose nothing, and writing one would tell `/why`,
 `/ladder`, and every per-rung total that a decision was made.
 
 Both pass every check a primary binding passes, in the same order: probe,
-capability, context, destination policy, then budget. A pinned session refuses
-relief outright, because a pin is the user saying which rung. A round that has
+capability, context, destination policy, then budget. A pinned session — or
+one with routing off — refuses
+relief outright, because the user has said which rung. A round that has
 already emitted content is never substituted, since half a streamed message
 finished by a second target is a turn nobody can attribute. At most two reliefs
 run per turn.

@@ -43,6 +43,9 @@ func (a *tuiApp) relief(ctx context.Context, reason agent.ReliefReason, cause er
 	if a.sticky != nil && a.sticky.Pinned() {
 		return agent.Binding{}, "", errors.New("the session is pinned, so the rung is yours to change")
 	}
+	if !a.config.RouteAutoOn() {
+		return agent.Binding{}, "", errors.New("routing is off, so the rung is yours to change")
+	}
 
 	_, current := a.runtimeSnapshot()
 	candidates := a.reliefCandidates(reason, cause)

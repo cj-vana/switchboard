@@ -94,9 +94,11 @@ type Config struct {
 	// as a percentage. Default 85.
 	CompactAtPercent int
 
-	// RouteAuto lets the escalation policy move the primary mid-task on its
-	// own signals. Default on: a visible move beats a session spent on the
-	// wrong rung. Off keeps every rung change the user's, and the signals are
+	// RouteAuto lets the routing policy choose the rung: the opening route at
+	// each user turn, and the escalation policy moving the primary mid-task on
+	// its own signals. Default on: a visible move beats a session spent on the
+	// wrong rung. Off keeps every rung change the user's — the current rung is
+	// held the way a pin holds it, hard checks included — and the signals are
 	// still detected and recorded, so /why answers what would have happened.
 	// Read it through RouteAutoOn.
 	RouteAuto *bool

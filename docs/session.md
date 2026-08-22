@@ -62,6 +62,7 @@ task asking, so prompts do not overlap or lose their owner.
 | `/tiers` | Show the ladder and active profile |
 | `/t3` | Pin the session to tier 3 |
 | `/tier auto` | Resume automatic per-turn routing |
+| `/routing on|off` | Let the policy move the rung, or hold the current one |
 | `/why` | Explain routing decisions and reprice the session on other tiers |
 | `/think high` | Change reasoning effort for the active target |
 | `/context` | Show estimated system, tool, and conversation use separately from provider-reported usage |

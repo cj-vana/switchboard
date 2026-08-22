@@ -126,7 +126,11 @@ func planUserTurnSkipping(
 		Requirements: requirements,
 		Budgets:      budgets,
 	}
-	if sticky != nil && sticky.Pinned() {
+	// Routing off and a user pin are the same instruction at this seam: the
+	// current rung is the decision, and the router's work is hard-checking it
+	// rather than choosing. Either way an infeasible rung is an actionable
+	// error, never a silent substitution.
+	if !cfg.RouteAutoOn() || (sticky != nil && sticky.Pinned()) {
 		in.Pin = current.ID
 	}
 

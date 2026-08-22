@@ -657,6 +657,13 @@ func resolveTier(ctx context.Context, reg *providers, cfg *config.Config, cat *c
 		return probeAutomaticBootstrap(ctx, reg, cfg, opts.think)
 	}
 
+	// Routing off is the user owning every rung change, on this surface too:
+	// bootstrap on the first reachable rung exactly as an interactive session
+	// does, and the per-turn path then holds it.
+	if !cfg.RouteAutoOn() {
+		return probeAutomaticBootstrap(ctx, reg, cfg, opts.think)
+	}
+
 	// A headless prompt is already known, so choose a feasible bootstrap target.
 	// The assembled loop still re-routes immediately before the call with exact
 	// system/tool/history token counts; this early pass avoids probing a rung the

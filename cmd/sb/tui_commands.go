@@ -319,6 +319,10 @@ func cmdTier(m *tuiModel, args string) tea.Cmd {
 			m.app.sticky.Unpin()
 		}
 		m.app.route = nil
+		if !m.app.config.RouteAutoOn() {
+			m.addNotice("route", "pin removed; routing is off, so the rung still changes only when you change it (/routing on resumes)")
+			return nil
+		}
 		m.addNotice("route", "automatic per-turn routing resumed from "+m.app.tier.ID)
 		return nil
 	}

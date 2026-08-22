@@ -120,6 +120,10 @@ evidence, context fit, cache state, and the remaining hard budget including
 retry reserve. Do not route on the prompt string alone, and do not record the
 empty startup bootstrap as a decision. A user pin still passes every hard
 feasibility check; `/tier auto` removes the pin and resumes this per-turn path.
+`/routing off` (`RouteAuto`) holds the current rung through the same pin path —
+the opening route hard-checks it and chooses nothing, the watcher stays
+paused, and relief is refused — so the rung changes only when the user changes
+it.
 
 **A route move is a prepared transaction at a completed model-round seam.**
 Planning a user turn and assessing a sticky escalation are pure proposals.
@@ -653,8 +657,9 @@ walked at a probe and a budget check per rung.
 
 Three constraints are load-bearing. A round that emitted content is never
 relieved: half a streamed message finished by a second target is a turn nobody
-can attribute. A pin refuses relief, because a pin is the user saying which
-rung and answering a refusal by leaving it would overrule that quietly. And the
+can attribute. A pin — or routing off — refuses relief, because the user has
+said which rung and answering a refusal by leaving it would overrule that
+quietly. And the
 two reasons keep different records — an overflow rebind is a move and is
 written as one, an availability substitution is a runtime binding only, since a
 route record would tell every per-rung aggregate the router made a decision it

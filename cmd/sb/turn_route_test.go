@@ -515,6 +515,50 @@ func TestPinnedTierMayFallbackButCannotJumpTiers(t *testing.T) {
 	}
 }
 
+// /routing off is the user holding the rung themselves, so the opening route
+// must treat the current tier the way a pin treats it — otherwise the rung
+// still moves at every turn and the setting is a lie. The current rung's own
+// fallback still serves, because availability is not routing.
+func TestRoutingOffHoldsTheCurrentRung(t *testing.T) {
+	loop, _, _, workspace := turnPlannerFixture(t)
+	loop.System = nil
+	loop.Tools = &tools.Registry{}
+	cat := catalogWithLocalModels(t,
+		localModelSpec{name: "tiny", contextWindow: 100},
+		localModelSpec{name: "roomy", contextWindow: 1_000},
+	)
+	server := capabilityOllama(t, map[string]bool{"tiny": false, "roomy": false})
+	opening := provider.UserText(strings.Repeat("x", 700))
+	off := false
+
+	withFallback := ollamaTier("t1", "tiny", "roomy")
+	cfg := &config.Config{Tiers: []config.Tier{withFallback}, RouteAuto: &off}
+	probes := newProviders(server.URL, cfg)
+	got, _, _, _, err := resolveUserTurn(context.Background(), loop, cfg, cat, probes, nil,
+		newCacheSet(withFallback.Target, nil), route.NewSticky(route.Policy{}, 0), withFallback, probes.ollama, opening, workspace)
+	if err != nil || got.ID != "t1" || got.Target.ModelID != "roomy" {
+		t.Fatalf("routing off with a live fallback = %s/%s, err=%v; want t1 served by its fallback", got.ID, got.Target.ModelID, err)
+	}
+
+	current := ollamaTier("t1", "tiny")
+	cfg = &config.Config{Tiers: []config.Tier{current, ollamaTier("t2", "roomy")}, RouteAuto: &off}
+	probes.config = cfg
+	if _, _, _, _, err := resolveUserTurn(context.Background(), loop, cfg, cat, probes, nil,
+		newCacheSet(current.Target, nil), route.NewSticky(route.Policy{}, 0), current, probes.ollama, opening, workspace); err == nil {
+		t.Fatal("routing off silently moved an infeasible current rung to another tier")
+	}
+
+	// The same ladder with routing on makes the move, so the hold above is
+	// the setting's doing and not the fixture's.
+	on := true
+	cfg.RouteAuto = &on
+	got, _, _, _, err = resolveUserTurn(context.Background(), loop, cfg, cat, probes, nil,
+		newCacheSet(current.Target, nil), route.NewSticky(route.Policy{}, 0), current, probes.ollama, opening, workspace)
+	if err != nil || got.ID != "t2" {
+		t.Fatalf("routing on resolved %s, err=%v; want the move the hold prevents", got.ID, err)
+	}
+}
+
 func TestResolveCurrentTierUsesVisionAndBudgetFallbacks(t *testing.T) {
 	t.Run("vision", func(t *testing.T) {
 		loop, _, _, workspace := turnPlannerFixture(t)

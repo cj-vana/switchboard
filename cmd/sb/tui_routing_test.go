@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/switchboard-code/switchboard/internal/agent"
 	"github.com/switchboard-code/switchboard/internal/config"
 	route "github.com/switchboard-code/switchboard/internal/router"
 )
@@ -63,5 +65,18 @@ func TestRoutingOffStopsMovesAndSurvivesTheSession(t *testing.T) {
 	}
 	if standing := m.routingStanding(); !strings.Contains(standing, "routing is on") {
 		t.Errorf("status = %q", standing)
+	}
+}
+
+// A relief substitutes another rung mid-turn, which is exactly the move
+// routing off reserves for the user.
+func TestRoutingOffRefusesRelief(t *testing.T) {
+	m := testModel(t)
+	off := false
+	m.app.config.RouteAuto = &off
+
+	_, _, err := m.app.relief(context.Background(), agent.ReliefAvailability, errors.New("the target stopped answering"))
+	if err == nil || !strings.Contains(err.Error(), "routing is off") {
+		t.Fatalf("relief with routing off = %v, want a refusal naming the setting", err)
 	}
 }

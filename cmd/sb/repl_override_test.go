@@ -484,3 +484,34 @@ func TestREPLOffLadderBudgetRefusesBeforeProviderCall(t *testing.T) {
 		t.Fatalf("off-ladder over-budget turn reached provider %d times", len(capture.bodies))
 	}
 }
+
+// The REPL is a first-class surface for the routing setting: /routing off
+// holds the current rung from here too, and the choice outlives the process.
+func TestREPLRoutingOffPersistsAndReports(t *testing.T) {
+	r, _, readOutput := newOverrideREPL(t, "small", "large", "backup")
+	r.config.Path = filepath.Join(t.TempDir(), config.FileName)
+
+	if r.command(context.Background(), "/routing off") {
+		t.Fatal("/routing off asked the REPL to exit")
+	}
+	if r.config.RouteAutoOn() {
+		t.Fatal("/routing off left the setting on")
+	}
+	saved, err := config.LoadFile(r.config.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.RouteAutoOn() {
+		t.Fatal("routing off did not persist")
+	}
+	if out := readOutput(); !strings.Contains(out, "routing off") {
+		t.Errorf("output did not confirm the hold: %q", out)
+	}
+
+	if r.command(context.Background(), "/routing on") {
+		t.Fatal("/routing on asked the REPL to exit")
+	}
+	if !r.config.RouteAutoOn() {
+		t.Fatal("/routing on did not restore the setting")
+	}
+}

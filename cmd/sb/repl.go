@@ -543,6 +543,7 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		r.out.line("  /tN                                       permanently pin tier N, for example /t2")
 		r.out.line("  /tN <prompt>                              run one prompt there, then restore")
 		r.out.line("  /tier auto                                return to automatic per-turn routing")
+		r.out.line("  /routing [on|off]                         show or change whether the policy may move the rung")
 		r.out.line("  /tiers                                    show the configured ladder")
 		r.out.line("  /mode [plan|default|acceptEdits|auto|yolo|bypass]  show or change permission mode")
 		r.out.line("  /cost                                     tokens and cost for this session")
@@ -568,10 +569,41 @@ func (r *repl) command(ctx context.Context, input string) bool {
 			if r.sticky != nil {
 				r.sticky.Unpin()
 			}
-			r.out.line("  automatic per-turn routing resumed from " + r.tier.ID)
+			if r.config.RouteAutoOn() {
+				r.out.line("  automatic per-turn routing resumed from " + r.tier.ID)
+			} else {
+				r.out.line("  pin removed; routing is off, so the rung still changes only when you change it (/routing on resumes)")
+			}
 			break
 		}
 		r.switchTier(ctx, rest)
+
+	case "routing":
+		switch strings.ToLower(rest) {
+		case "on", "off":
+			on := strings.ToLower(rest) == "on"
+			if r.watcher != nil {
+				r.watcher.setPaused(!on)
+			}
+			r.config.RouteAuto = &on
+			if err := r.config.Save(); err != nil {
+				r.out.Notice("error", "saving the routing setting failed: "+err.Error())
+				break
+			}
+			if on {
+				r.out.line("  routing on: the policy may move the primary on its own signals")
+			} else {
+				r.out.line("  routing off: the rung changes only when you change it")
+			}
+		default:
+			r.out.Notice("error", "routing takes on, off, or status")
+		case "", "status":
+			if r.config.RouteAutoOn() {
+				r.out.line("  routing is on; /routing off holds the current rung")
+			} else {
+				r.out.line("  routing is off; /routing on lets the policy move the primary again")
+			}
+		}
 
 	case "tiers":
 		if len(r.config.Tiers) == 0 {
