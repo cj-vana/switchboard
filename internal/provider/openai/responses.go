@@ -159,6 +159,7 @@ func (c *ResponsesClient) Probe(ctx context.Context, target provider.RouteTarget
 		offered = append(offered, m.Slug)
 		if m.Slug == target.ModelID {
 			res.ModelPresent = true
+			res.ContextWindow = m.ContextWindow
 			res.EffortLevels = m.effortLevels()
 		}
 	}

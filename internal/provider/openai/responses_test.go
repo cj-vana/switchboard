@@ -405,6 +405,39 @@ func TestResponsesProbeLeavesUnstatedEffortsUnknown(t *testing.T) {
 	}
 }
 
+// The discovery answer also states each model's context window, and the
+// number to believe is the operative one rather than the architecture's
+// maximum: gpt-5.4 reports context_window 272,000 against a
+// max_context_window of 1,000,000. Reading the maximum would gate
+// auto-compaction against room the server does not give the model.
+func TestResponsesProbeReportsTheModelsContextWindow(t *testing.T) {
+	c := serveResponsesFixture(t, "codex_models.json")
+
+	res, err := c.Probe(context.Background(), SubscriptionTarget("gpt-daybreak-blue-latest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 272000 {
+		t.Errorf("ContextWindow = %d, want the 272000 the endpoint states for daybreak", res.ContextWindow)
+	}
+
+	res, err = c.Probe(context.Background(), SubscriptionTarget("gpt-5.4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 272000 {
+		t.Errorf("gpt-5.4 ContextWindow = %d, want the operative 272000, not the 1000000 maximum", res.ContextWindow)
+	}
+
+	res, err = c.Probe(context.Background(), SubscriptionTarget("gpt-5.3-codex-spark"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContextWindow != 128000 {
+		t.Errorf("spark ContextWindow = %d, want 128000: the window is the model's, not the surface's", res.ContextWindow)
+	}
+}
+
 // The picker's model set and its effort lists come from the one answer, so
 // every offered slug has an entry — empty where the model states none.
 func TestResponsesModelEffortsCoversEveryOfferedSlug(t *testing.T) {

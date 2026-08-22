@@ -98,7 +98,7 @@ func TestThinkOffersWhatTheServerStated(t *testing.T) {
 	m.app.catalog = cat
 	m.app.tier.Target = target
 	stated := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
-	m.app.providers = &providers{efforts: map[string][]string{effortKey(target): stated}}
+	m.app.providers = &providers{efforts: map[string][]string{bareTargetKey(target): stated}}
 
 	levels, fromTarget := m.thinkLevelsFor(target)
 	if !fromTarget {
@@ -133,7 +133,7 @@ func TestThinkLevelsSurviveAnEffortChange(t *testing.T) {
 	stated := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
 
 	m := testModel(t)
-	m.app.providers = &providers{efforts: map[string][]string{effortKey(base): stated}}
+	m.app.providers = &providers{efforts: map[string][]string{bareTargetKey(base): stated}}
 
 	moved := base
 	moved.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}

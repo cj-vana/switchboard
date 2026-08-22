@@ -68,6 +68,25 @@ func TestAnUnknownWindowIsSaidRatherThanShownAsEmpty(t *testing.T) {
 	}
 }
 
+// An effort change rebinds the target under a parameterized identity, and
+// the window the server stated for the model does not move with it. Losing
+// the number at that seam is what disarmed the meter and auto-compaction
+// after a /think on a target the catalog cannot window, local servers
+// included.
+func TestProbedWindowSurvivesAnEffortChange(t *testing.T) {
+	base := provider.RouteTarget{Provider: "openaicompat", Surface: "generic", ModelID: "local"}
+	p := &providers{windows: map[string]int{bareTargetKey(base): 128000}}
+
+	moved := base
+	moved.Params.Reasoning = &provider.Reasoning{Enabled: true, Effort: "high"}
+	if moved.ID() == base.ID() {
+		t.Fatal("an effort change did not change the target identity; the test proves nothing")
+	}
+	if got := p.probedContextWindow(moved); got != 128000 {
+		t.Fatalf("window under the rebound identity = %d, want the 128000 the server stated", got)
+	}
+}
+
 // A server that answers with no usage block left occupancy at zero, which the
 // meter read as an empty window and auto-compaction read as nothing to do.
 func TestOccupancyFallsBackToTheEstimatorWhenNothingIsReported(t *testing.T) {

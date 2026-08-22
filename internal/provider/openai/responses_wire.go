@@ -147,6 +147,12 @@ type codexModel struct {
 	Slug            string   `json:"slug"`
 	InputModalities []string `json:"input_modalities"`
 
+	// ContextWindow is what the model will actually hold, which is not the
+	// architecture's maximum: the capture has gpt-5.4 at context_window
+	// 272,000 against a max_context_window of 1,000,000, so reading the max
+	// would compact against room that does not exist.
+	ContextWindow int `json:"context_window"`
+
 	// SupportedReasoningLevels is the model's own effort list, in the
 	// endpoint's ascending order. It varies per model on this surface, which
 	// is exactly why a surface-wide floor under-reports it.
