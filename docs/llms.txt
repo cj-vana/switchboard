@@ -20,8 +20,8 @@ Commands run without a sandbox by default. Auto mode uses a configured low-cost
 reviewer only under active verified confinement; host-direct, shared-loopback,
 opaque, sensitive, external, and Windows commands remain human-approved. A
 confined explicit full-network request can remain reviewable. Yolo mode runs
-ordinary edits and commands host-direct without prompts, while sensitive and
-external actions remain gated. Verified Seatbelt or bubblewrap confinement is
+edits, commands, and external tools host-direct without prompts; only an
+explicit deny rule refuses. Verified Seatbelt or bubblewrap confinement is
 available on request.
 
 ## Links

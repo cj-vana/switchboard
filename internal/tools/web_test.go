@@ -54,8 +54,8 @@ func TestWebsearchParsesTheCapturedResponse(t *testing.T) {
 	}
 }
 
-// Egress is the external effect: no mode auto-allows it, and the remember
-// key carries the host so one approval covers a host, not one URL.
+// Egress is the external effect: no bounded mode auto-allows it, and the
+// remember key carries the host so one approval covers a host, not one URL.
 func TestWebToolsCarryTheExternalEffectAndTheHost(t *testing.T) {
 	search := &websearchTool{client: newWebClient(), endpoint: ddgEndpoint}
 	plan, err := search.Plan(json.RawMessage(`{"query": "anything"}`))

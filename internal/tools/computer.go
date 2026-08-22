@@ -24,8 +24,9 @@ package tools
 //
 // The permission posture is the MCP one, because the action is the same
 // kind: this tool acts outside the workspace and outside any sandbox, on
-// the user's own screen, so every call carries EffectExternal — no mode
-// auto-allows it, bypass included. The request puts the app name in Path,
+// the user's own screen, so every call carries EffectExternal — no bounded
+// mode auto-allows it, bypass included; yolo alone does, because that grant
+// exempts nothing. The request puts the app name in Path,
 // so a remembered answer covers that app for the session rather than one
 // byte-exact call, the way web approvals cover a host. Outbound text (what
 // type and set would put into another app) passes the credential scan and

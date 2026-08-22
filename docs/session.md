@@ -430,7 +430,9 @@ Because stdin supplied content, it cannot answer an approval prompt. A tool
 that needs approval is refused and the reason is returned to the model. Bypass
 is prompt-free only when verified confinement isolates both host network and
 host IPC. The current macOS and Linux profiles retain host IPC, so command
-approvals still fail closed in a headless bypass run.
+approvals still fail closed in a headless bypass run. With `-mode yolo` a
+headless run asks nothing at all: external tools and credential-shaped
+commands run too, with no one present to ask.
 
 `-output json` writes exactly one JSON object on stdout while the transcript
 goes to stderr. The object contains the result, outcome, final tier and target,

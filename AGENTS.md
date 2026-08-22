@@ -442,9 +442,11 @@ has no contract about its size and the context is the scarce thing.
 
 **An external tool is never inside the sandbox.** An MCP server is a process
 this program started un-confined, acting wherever it acts, so a bridged call
-carries `permission.EffectExternal`: no mode auto-allows it, bypass included,
-because bypass suppresses prompts inside a granted sandbox and an external
-tool was never inside one. Only an explicit rule (the server's `allow` list)
+carries `permission.EffectExternal`: no bounded mode auto-allows it, bypass
+included, because bypass suppresses prompts inside a granted sandbox and an
+external tool was never inside one. Yolo alone covers it — the
+everything-grant that exempted the riskiest effect would not be what it says.
+Short of yolo, only an explicit rule (the server's `allow` list)
 or a remembered answer lets one run without asking, and the remembered answer
 covers the tool, not one byte-exact invocation — that is what the display-only
 `Request.Detail` field exists for. A legacy Switchboard stdio declaration
@@ -702,10 +704,11 @@ ahead of `mcpRules` on that strength — a rule the user wrote to tighten a
 server's tool has to outrank the allow list that server declared for itself.
 
 A rule-matched allow yields to a credential-bearing request (`Check`, the
-`SensitiveRequest` branch). A rule matches calls the user never saw, which is
-what separates it from a remembered answer to one exact request, and yolo — the
-widest mode there is — already stops for one of those. A standing rule must not
-be stronger than yolo.
+`SensitiveRequest` branch) in every mode short of yolo. A rule matches calls
+the user never saw, which is what separates it from a remembered answer to one
+exact request, so no standing rule approves a sensitive command unseen. Yolo
+lifts that gate too: the everything-grant exempts nothing, and a carve-out
+under it would be the mode lying about what it is.
 
 There is no repository-provided permissions file and no command that mints a
 rule mid-session. The first is the /watch refusal applied here: opening a

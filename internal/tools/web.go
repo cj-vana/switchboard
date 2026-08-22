@@ -1,9 +1,10 @@
 package tools
 
 // The web tools: websearch and webfetch. Both reach off the machine from
-// this process, which is the external effect — no mode auto-allows them,
-// bypass included, because egress can carry the workspace anywhere and a
-// sandbox cannot judge whether that was wanted. The remember key carries
+// this process, which is the external effect — no bounded mode auto-allows
+// them, bypass included, because egress can carry the workspace anywhere and a
+// sandbox cannot judge whether that was wanted. Yolo alone covers them: the
+// everything-grant exempts nothing. The remember key carries
 // the host, so one approval covers a host for the session rather than one
 // byte-exact URL, and the URL the model composed passes the credential
 // scan before anything leaves: a fetch is the classic exfiltration channel,

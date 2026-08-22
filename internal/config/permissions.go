@@ -107,9 +107,11 @@ func checkAllowIsNarrowerThanAMode(rule permission.Rule) error {
 		return nil
 	case permission.EffectExternal:
 		// The sharpest one. An external tool is a process this program started
-		// unconfined, acting wherever it acts, and no mode auto-allows one —
-		// bypass included. A blanket grant here would be wider than every mode.
-		return fmt.Errorf("an allow rule for every external tool is wider than any mode grants; name the tool it is for")
+		// unconfined, acting wherever it acts, and no bounded mode auto-allows
+		// one — bypass included. Yolo covers exactly this, but it is typed each
+		// time and visible while it holds; a blanket line in a file would be a
+		// standing grant with neither property.
+		return fmt.Errorf("an allow rule for every external tool is a session-scoped grant, not a standing one; use /mode yolo, or name the tool the rule is for")
 	default:
 		return fmt.Errorf("an allow rule whose only constraint is effect = %q approves every one of them; name a tool, path, or argv prefix, or use the matching /mode", rule.Effect)
 	}

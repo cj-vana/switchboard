@@ -334,10 +334,12 @@ func external() Request {
 }
 
 // An MCP tool acts outside every boundary this engine can reason about, so no
-// mode auto-allows it — bypass included, even on a host with a verified
-// sandbox, because the server was never inside it.
-func TestExternalEffectAsksInEveryMode(t *testing.T) {
-	for _, mode := range []Mode{ModeDefault, ModeAcceptEdits, ModeAuto, ModeYOLO, ModeBypass} {
+// bounded mode auto-allows it — bypass included, even on a host with a
+// verified sandbox, because the server was never inside it. Yolo is the one
+// exception: it is the everything-grant, and a grant that exempted the
+// riskiest effect would not be what it says.
+func TestExternalEffectAsksInEveryBoundedMode(t *testing.T) {
+	for _, mode := range []Mode{ModeDefault, ModeAcceptEdits, ModeAuto, ModeBypass} {
 		for _, cap := range []execution.Capability{noSandbox, verifiedSandbox} {
 			e := NewEngine(mode, cap)
 			if got := e.Check(external()).Decision; got != Ask {
@@ -348,6 +350,10 @@ func TestExternalEffectAsksInEveryMode(t *testing.T) {
 	e := NewEngine(ModePlan, noSandbox)
 	if got := e.Check(external()).Decision; got != Deny {
 		t.Errorf("plan mode: external = %s, want Deny", got)
+	}
+	yolo := NewEngine(ModeYOLO, noSandbox)
+	if got := yolo.Check(external()).Decision; got != Allow {
+		t.Errorf("yolo mode: external = %s, want Allow from the everything-grant", got)
 	}
 }
 
@@ -372,9 +378,9 @@ func TestExternalAllowRuleAndRememberArePerTool(t *testing.T) {
 }
 
 // A rule matches requests the user never saw, which is what separates it from a
-// remembered answer to one exact request. Yolo is the widest mode there is and
-// it still stops for a credential-bearing command, so a standing rule must not
-// outrank it.
+// remembered answer to one exact request. Short of yolo no standing rule
+// approves a credential-bearing command unseen; yolo exempts nothing, so there
+// the same command runs.
 func TestARuleDoesNotApproveASensitiveCommandUnseen(t *testing.T) {
 	engine := NewEngine(ModeDefault, execution.Capability{}, Rule{
 		Decision: Allow, Tool: "exec", ArgvPrefix: []string{"curl"},
@@ -389,10 +395,17 @@ func TestARuleDoesNotApproveASensitiveCommandUnseen(t *testing.T) {
 	sensitive.Sensitive = true
 	out := engine.Check(sensitive)
 	if out.Decision != Ask {
-		t.Errorf("decision = %s, want ask: a standing rule must not be stronger than yolo", out.Decision)
+		t.Errorf("decision = %s, want ask: outside yolo a standing rule never approves a sensitive command unseen", out.Decision)
 	}
 	if !strings.Contains(out.Reason, "credential-bearing") {
 		t.Errorf("reason = %q, which does not say why the rule yielded", out.Reason)
+	}
+
+	yolo := NewEngine(ModeYOLO, execution.Capability{}, Rule{
+		Decision: Allow, Tool: "exec", ArgvPrefix: []string{"curl"},
+	})
+	if out := yolo.Check(sensitive); out.Decision != Allow {
+		t.Errorf("yolo decision = %s, want allow: the everything-grant does not stop for a sensitive command", out.Decision)
 	}
 }
 

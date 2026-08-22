@@ -189,7 +189,7 @@ func TestAutoKeepsInlineInterpreterCodeWithTheHuman(t *testing.T) {
 	}
 }
 
-func TestInlineInterpreterCredentialReferencesStayHumanGatedInYOLO(t *testing.T) {
+func TestInlineInterpreterCredentialReferencesRunInYOLO(t *testing.T) {
 	for _, req := range []Request{
 		{Tool: "exec", Effect: EffectExecute, Argv: []string{"sh", "-c", "echo $DB_PASSWORD"}},
 		{Tool: "exec", Effect: EffectExecute, Argv: []string{"python", "-c", "import os; print(os.environ['API_TOKEN'])"}},
@@ -201,8 +201,8 @@ func TestInlineInterpreterCredentialReferencesStayHumanGatedInYOLO(t *testing.T)
 			t.Fatalf("inline credential reference was not sensitive: %#v", req.Argv)
 		}
 		engine := NewEngineWithExecution(ModeYOLO, execution.NewDefaultController(noSandbox))
-		if got := engine.Check(req); got.Decision != Ask {
-			t.Fatalf("yolo auto-allowed inline credential reference %#v: %+v", req.Argv, got)
+		if got := engine.Check(req); got.Decision != Allow {
+			t.Fatalf("yolo held back inline credential reference %#v: %+v", req.Argv, got)
 		}
 	}
 }
@@ -246,8 +246,8 @@ func TestWrappedInlineInterpretersStayWithHuman(t *testing.T) {
 		if ok, _, err := auto.Resolve(context.Background(), human, req); err != nil || ok {
 			t.Fatalf("auto wrapped secret %#v: ok=%v err=%v", req.Argv, ok, err)
 		}
-		if out := yolo.Check(req); out.Decision != Ask {
-			t.Fatalf("yolo auto-allowed wrapped secret %#v: %+v", req.Argv, out)
+		if out := yolo.Check(req); out.Decision != Allow {
+			t.Fatalf("yolo held back wrapped secret %#v: %+v", req.Argv, out)
 		}
 	}
 	if reviewer.calls != 0 || human.calls != len(secrets)+len(ordinary) {
@@ -255,7 +255,7 @@ func TestWrappedInlineInterpretersStayWithHuman(t *testing.T) {
 	}
 }
 
-func TestEmbeddedURLAndCookieCredentialsStayHumanGated(t *testing.T) {
+func TestEmbeddedURLAndCookieCredentialsStayHumanGatedInAuto(t *testing.T) {
 	requests := []Request{
 		{Tool: "exec", Effect: EffectExecute, Argv: []string{"curl", "-xhttp://alice:hunter2@proxy.example", "https://example.com"}},
 		{Tool: "exec", Effect: EffectExecute, Argv: []string{"curl", "-sxhttp://alice:hunter2@proxy.example", "https://example.com"}},
@@ -281,8 +281,8 @@ func TestEmbeddedURLAndCookieCredentialsStayHumanGated(t *testing.T) {
 		if ok, _, err := auto.Resolve(context.Background(), human, req); err != nil || ok {
 			t.Fatalf("auto credential request %#v: ok=%v err=%v", req.Argv, ok, err)
 		}
-		if out := yolo.Check(req); out.Decision != Ask {
-			t.Fatalf("yolo auto-allowed credential request %#v: %+v", req.Argv, out)
+		if out := yolo.Check(req); out.Decision != Allow {
+			t.Fatalf("yolo held back credential request %#v: %+v", req.Argv, out)
 		}
 	}
 	if reviewer.calls != 0 || human.calls != len(requests) {
@@ -290,7 +290,7 @@ func TestEmbeddedURLAndCookieCredentialsStayHumanGated(t *testing.T) {
 	}
 }
 
-func TestSensitiveCommandMetadataNeverLeavesForReviewerOrYOLOPolicy(t *testing.T) {
+func TestSensitiveCommandMetadataNeverLeavesForReviewer(t *testing.T) {
 	for _, req := range []Request{
 		{Tool: "exec", Effect: EffectExecute, Argv: []string{"curl", "-u", "alice:hunter2", "https://example.com"}},
 		{Tool: "exec", Effect: EffectExecute, Argv: []string{"curl", "-ualice:hunter2", "https://example.com"}},
@@ -325,8 +325,8 @@ func TestSensitiveCommandMetadataNeverLeavesForReviewerOrYOLOPolicy(t *testing.T
 	if sensitive, _ := SensitiveRequest(secretShell); !sensitive {
 		t.Fatal("shell credential reference was not detected")
 	}
-	if got := engine.Check(secretShell); got.Decision != Ask {
-		t.Fatalf("yolo auto-allowed detected secret-bearing shell command: %+v", got)
+	if got := engine.Check(secretShell); got.Decision != Allow {
+		t.Fatalf("yolo held back a detected secret-bearing shell command: %+v", got)
 	}
 }
 
@@ -353,8 +353,8 @@ func TestAttachedCredentialFlagsNeverReachReviewer(t *testing.T) {
 		if ok, _, err := engine.Resolve(context.Background(), human, req); err != nil || ok {
 			t.Fatalf("request %#v: ok=%v err=%v", req.Argv, ok, err)
 		}
-		if got := yolo.Check(req); got.Decision != Ask {
-			t.Fatalf("yolo auto-allowed attached credential %#v: %+v", req.Argv, got)
+		if got := yolo.Check(req); got.Decision != Allow {
+			t.Fatalf("yolo held back attached credential %#v: %+v", req.Argv, got)
 		}
 	}
 	if reviewer.calls != 0 || human.calls != 13 {
@@ -379,7 +379,7 @@ func TestHardDenyAndPlanNeverReachReviewer(t *testing.T) {
 	}
 }
 
-func TestYOLORunsHostDirectButSensitiveCommandsStillAsk(t *testing.T) {
+func TestYOLORunsHostDirectIncludingSensitiveCommands(t *testing.T) {
 	controller, err := execution.NewController(verifiedSandbox, execution.SandboxOn)
 	if err != nil {
 		t.Fatal(err)
@@ -394,8 +394,8 @@ func TestYOLORunsHostDirectButSensitiveCommandsStillAsk(t *testing.T) {
 
 	sensitive := exec()
 	sensitive.Sensitive = true
-	if got := engine.Check(sensitive); got.Decision != Ask {
-		t.Fatalf("sensitive yolo command = %+v, want ask", got)
+	if got := engine.Check(sensitive); got.Decision != Allow {
+		t.Fatalf("sensitive yolo command = %+v, want allow: the everything-grant exempts nothing", got)
 	}
 	engine.SetMode(ModeDefault)
 	if controller.FullAccess() || !controller.SandboxActive() {

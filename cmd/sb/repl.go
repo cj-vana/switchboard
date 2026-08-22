@@ -599,7 +599,7 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		r.loop.Perms.SetMode(mode)
 		r.out.line("  mode is now " + string(mode))
 		if mode == permission.ModeYOLO {
-			warning := "FULL HOST ACCESS: ordinary workspace edits and non-sensitive commands skip prompts; commands are unsandboxed with host filesystem and network reach. External and sensitive actions still ask"
+			warning := "FULL HOST ACCESS: edits, commands, and external tools run without asking; commands are unsandboxed with host filesystem and network reach. Only an explicit deny rule or a no you gave this session still refuses"
 			if r.capability.Platform == "windows" {
 				warning += ". Windows descendant processes may survive cancellation"
 			}

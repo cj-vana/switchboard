@@ -35,10 +35,12 @@ const (
 	// to the reviewer and still need the user.
 	ModeAuto Mode = "auto"
 
-	// ModeYOLO grants ordinary writes and commands direct host reach. Explicit
-	// deny rules, the outbound-secret gate, and external tools remain outside
-	// that grant. The deliberately conspicuous name matches the CLI contract:
-	// this is not a sandbox mode and must never be rendered as one.
+	// ModeYOLO is the whole grant: writes, commands, and external tools run
+	// without asking, and commands run unsandboxed with direct host reach.
+	// Explicit deny rules still refuse, and the outbound-secret gate still
+	// holds key-shaped strings back from the wire. The deliberately
+	// conspicuous name matches the CLI contract: this is not a sandbox mode
+	// and must never be rendered as one.
 	ModeYOLO Mode = "yolo"
 
 	// ModeBypass suppresses prompts inside a granted sandbox. Without verified
@@ -77,10 +79,12 @@ const (
 
 	// EffectExternal marks a tool whose action happens outside the workspace
 	// and outside any sandbox this host verified: an MCP server's tool, acting
-	// wherever that server acts. No mode auto-allows it, bypass included,
-	// because bypass suppresses prompts inside a granted sandbox and an
-	// external tool is never inside one. Only an explicit rule or a
-	// remembered answer lets one run without asking.
+	// wherever that server acts. No bounded mode auto-allows it, bypass
+	// included, because bypass suppresses prompts inside a granted sandbox and
+	// an external tool is never inside one. Yolo alone covers it, because the
+	// everything-grant that exempted the riskiest effect would be lying about
+	// what it is. Short of yolo, only an explicit rule or a remembered answer
+	// lets one run without asking.
 	EffectExternal Effect = "external"
 )
 
@@ -107,8 +111,9 @@ type Request struct {
 
 	// Sensitive is set by a tool that knows the request could carry a secret
 	// even when the generic known-token scan cannot see it. It is a policy bit,
-	// never a rendering of the secret. Sensitive execution is not automatically
-	// approved by yolo and is never sent to the model reviewer.
+	// never a rendering of the secret. Sensitive execution is never sent to
+	// the model reviewer, and every bounded mode keeps it with the user; yolo,
+	// the everything-grant, runs it.
 	Sensitive bool
 
 	// Execution is the immutable reach snapshot the command's Run closure will
@@ -363,12 +368,12 @@ func (e *Engine) Check(req Request) Outcome {
 			continue
 		}
 		// A rule matches requests the user never saw, which is what separates
-		// it from a remembered answer to one exact request. Yolo — the widest
-		// mode there is — still stops for a credential-bearing command, so a
-		// standing rule must not be stronger than yolo. The rule keeps its
-		// force for everything else it matches; this one request comes back to
-		// the human.
-		if r.Decision == Allow {
+		// it from a remembered answer to one exact request. Short of yolo no
+		// standing rule approves a credential-bearing command unseen; yolo
+		// exempts nothing, so there the rule is redundant rather than
+		// outranked. Elsewhere the rule keeps its force for everything else
+		// it matches, and this one request comes back to the human.
+		if r.Decision == Allow && mode != ModeYOLO {
 			if sensitive, _ := SensitiveRequest(req); sensitive {
 				return e.gate(Outcome{
 					Decision: Ask,
@@ -404,6 +409,9 @@ func (e *Engine) modeDefault(mode Mode, req Request) Outcome {
 		return Outcome{Decision: Allow, Reason: "reads do not change the workspace"}
 	}
 	if req.Effect == EffectExternal {
+		if mode == ModeYOLO {
+			return Outcome{Decision: Allow, Reason: "yolo mode covers external tools; the grant exempts nothing"}
+		}
 		return Outcome{Decision: Ask, Reason: "external MCP, web, and computer actions require their own approval; this mode does not cover them"}
 	}
 
@@ -435,9 +443,6 @@ func (e *Engine) modeDefault(mode Mode, req Request) Outcome {
 		return Outcome{Decision: Ask, Reason: "auto mode sends ordinary commands to the configured command reviewer"}
 	case ModeYOLO:
 		if req.Effect == EffectExecute {
-			if sensitive, _ := SensitiveRequest(req); sensitive {
-				return Outcome{Decision: Ask, Reason: "credential-shaped or explicitly sensitive command requires user approval even in yolo mode"}
-			}
 			reason := "yolo mode grants unsandboxed command execution with full host reach"
 			if e.capability.Platform == "windows" {
 				reason += "; descendant processes may survive cancellation"

@@ -167,8 +167,9 @@ interpreter commands, sensitive commands, and external tools stay human-gated.
 
 Permission mode is separate. `bypass` is prompt-free only when verified
 confinement isolates both host network and host IPC; neither current production
-profile does. `yolo` is an explicit grant of full, unconfined host reach; deny
-rules, secret checks, and external MCP or computer calls still apply. Windows
+profile does. `yolo` is an explicit grant of full, unconfined host reach:
+edits, commands, and external MCP or computer calls all run without asking;
+deny rules and secret checks still apply. Windows
 has no verified confinement profile.
 
 See [Confining commands](docs/sandbox.md) for filesystem, network, and platform

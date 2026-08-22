@@ -376,7 +376,7 @@ func cmdMode(m *tuiModel, args string) tea.Cmd {
 		permission.ModeDefault:     "writes and commands ask first",
 		permission.ModeAcceptEdits: "edits apply, commands ask first",
 		permission.ModeAuto:        "edits apply; a cheap model reviews confined commands, while host-direct commands ask you",
-		permission.ModeYOLO:        "FULL HOST ACCESS: ordinary edits and non-sensitive commands skip prompts",
+		permission.ModeYOLO:        "FULL HOST ACCESS: edits, commands, and external tools all run without asking",
 		permission.ModeBypass:      "promptless only with verified confinement that isolates host network and IPC",
 	}
 	var items []pickerItem

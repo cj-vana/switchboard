@@ -347,7 +347,8 @@ and does not decode is reported as such rather than handed over as bytes.
 Audio and every other non-text block is still named and omitted.
 
 MCP tools remain external effects. A server process is not inside the command
-sandbox, so neither `bypass` nor `yolo` auto-approves its tools. An `allow`
+sandbox, so `bypass` never auto-approves its tools and `yolo` always does,
+because that grant exempts nothing. An `allow`
 entry is joined to the raw server and tool identity and becomes a permission
 rule only after that exact bridged tool wins name-collision resolution and
 registers.

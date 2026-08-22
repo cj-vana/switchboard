@@ -242,9 +242,10 @@ refused because they are a permission mode wearing a rule's clothes: an `allow`
 that names no tool, path, or argv prefix, and an `allow` whose only constraint
 is `effect` for writes, commands, or external tools. Those are `/mode` yolo,
 acceptEdits, and bypass, which are typed on purpose and visible while they are
-in force. One thing outranks a rule: a command that looks credential-bearing
-comes back to you even when a rule allows it, because no standing rule approves
-one of those unseen, and yolo does not either.
+in force. One thing outranks a rule outside yolo: a command that looks
+credential-bearing comes back to you even when a rule allows it, because no
+standing rule approves one of those unseen. Yolo alone lifts that gate — the
+everything-grant covers a sensitive command too.
 
 There is deliberately no repository-provided permissions file. A checkout must
 not pre-approve a command by the act of being opened, which is the same reason

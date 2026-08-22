@@ -128,8 +128,9 @@ activation as separate decisions.
 - `bypass` suppresses prompts only when verified confinement isolates host
   network and IPC. Both current production profiles retain host IPC, so bypass
   asks today. `yolo` is a separate explicit grant of full host reach.
-- MCP and computer-use tools act outside the command sandbox. Neither `bypass`
-  nor `yolo` auto-approves them.
+- MCP and computer-use tools act outside the command sandbox. `bypass` never
+  auto-approves them; `yolo` does, because the everything-grant exempts
+  nothing.
 - Repository hooks, project MCP, and language servers require Switchboard
   workspace trust. Another client's remembered trust does not transfer.
 - Native MCP definitions need explicit Switchboard activation, applicable

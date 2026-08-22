@@ -47,8 +47,9 @@ probe explicitly.
 ## Permission and secrets
 
 Every computer action has the external permission effect. It occurs outside
-the workspace and outside command confinement, so no permission mode
-auto-approves it, including bypass and yolo. Plan mode denies it. An approval
+the workspace and outside command confinement, so no bounded permission mode
+auto-approves it, including bypass; yolo, the everything-grant, does. Plan
+mode denies it. An approval
 is scoped to the application for the current session.
 
 The approval detail uses non-sensitive metadata, for example

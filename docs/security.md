@@ -14,12 +14,14 @@ engine applies rules and the active mode to that effect.
 | `default` | Allowed | Ask | Ask | Ask |
 | `acceptEdits` | Allowed | Allowed | Ask | Ask |
 | `auto` | Allowed | Allowed | Under active verified confinement, eligible direct commands receive bounded model review; host-direct, opaque interpreter, sensitive, and shared-loopback commands ask | Ask |
-| `yolo` | Allowed | Allowed | Allowed with full, unconfined host reach; sensitive commands ask | Ask |
+| `yolo` | Allowed | Allowed | Allowed with full, unconfined host reach | Allowed |
 | `bypass` | Allowed | Allowed | Allowed only when verified confinement isolates host network and IPC; current production profiles ask | Ask |
 
 External tools act outside the workspace and outside Switchboard's command
 sandbox. MCP and computer-use calls therefore require an explicit rule or user
-approval even in bypass or yolo mode. A remembered approval lasts for the
+approval in every bounded mode, bypass included. Yolo alone covers them: it is
+the everything-grant, and a grant that exempted the riskiest effect would not
+be what it says. A remembered approval lasts for the
 current session and is scoped to the permission identity, not to arbitrary new
 tools that happen to sanitize to the same display name.
 
@@ -41,15 +43,16 @@ host loopback. An explicit full-network request under verified confinement can
 remain reviewable, with retained host IPC authority disclosed. Eligible Linux
 direct argv is reviewable only while verified bubblewrap confinement is active.
 Windows execution remains human-gated because no verified profile exists and
-descendant cleanup is not guaranteed. External tools always ask unless an
-explicit rule or remembered human answer covers them.
+descendant cleanup is not guaranteed. Outside yolo, external tools always ask
+unless an explicit rule or remembered human answer covers them.
 
 Human approval views escape terminal controls. A very large command is visibly
 shortened while retaining its executable and early flags, its tail, and an
 omitted-character count; the shortening is display-only.
 
-`yolo` is deliberately unconfined. It does not override explicit deny rules,
-the outbound-secret gate, or external-tool approval. The current sandbox
+`yolo` is deliberately unconfined and exempts nothing: writes, commands,
+sensitive commands, and external tools all run without asking. It does not
+override explicit deny rules or the outbound-secret gate. The current sandbox
 selection is retained while `yolo` forces full host reach, so leaving `yolo` can
 restore the selected posture.
 
@@ -135,8 +138,9 @@ headless `sb -p` run cannot ask, so it refuses the send unless
 `-allow-secrets` is present. Diagnostics name the credential type and prefix
 without repeating the value.
 
-Web queries and URLs are scanned before egress. The first request to a host
-asks for approval, and that approval covers only that host for the session. A
+Web queries and URLs are scanned before egress. Outside yolo, the first
+request to a host asks for approval, and that approval covers only that host
+for the session. A
 redirect to a different host is refused. No permission mode skips this check.
 
 Computer-use text is scanned before it is typed into another application, and
