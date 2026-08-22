@@ -55,3 +55,30 @@ func (m *tuiModel) openSecretGate(leaks []credential.Leak, prompt string, procee
 	}
 	return nil
 }
+
+// openSecretGateForStorage is the gate's durable-copy form: the prompt is
+// about to sit at rest in a file and refire later, so "send as typed" is not
+// an answer — every other durable artifact this program writes redacts
+// unconditionally, and a reminder is that artifact. Redact arms the redacted
+// copy; anything else stores nothing.
+func (m *tuiModel) openSecretGateForStorage(leaks []credential.Leak, prompt string, proceed func(string) tea.Cmd) tea.Cmd {
+	found := make([]string, len(leaks))
+	for i, l := range leaks {
+		found[i] = l.String()
+	}
+	m.dlg = &pickerDialog{
+		title: "the prompt contains " + strings.Join(found, ", ") + ", and a schedule keeps it on disk",
+		items: []pickerItem{
+			{id: "redact", label: "redact and arm", desc: "each key becomes a placeholder naming what stood there"},
+			{id: "drop", label: "don't arm", desc: "nothing is scheduled and nothing is stored"},
+		},
+		onPick: func(id string) tea.Cmd {
+			if id == "redact" {
+				return proceed(credential.Redact(prompt, leaks))
+			}
+			m.addNotice("", "not scheduled; the prompt was dropped before anything was stored")
+			return nil
+		},
+	}
+	return nil
+}

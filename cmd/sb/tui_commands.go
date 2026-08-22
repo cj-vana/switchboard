@@ -55,7 +55,7 @@ func commands() []commandItem {
 		{name: "routing", usage: "[on|off|status]", desc: "whether the policy may move the primary on its own signals", busySafe: true, run: cmdRouting},
 		{name: "destinations", usage: "[<provider>… |any]", desc: "which providers this workspace's turns may reach", busySafe: true, run: cmdDestinations},
 		{name: "workflow", usage: "[list|show <name>|run <name> [args]]", desc: "run a multi-stage subagent script from a file", run: cmdWorkflow},
-		{name: "mode", usage: "[plan|default|acceptEdits|auto|yolo|bypass]", desc: "show or change the permission mode", run: cmdMode},
+		{name: "mode", usage: "[plan|default|acceptEdits|auto|yolo|bypass]", desc: "show or change the permission mode, including mid-turn", busySafe: true, run: cmdMode},
 		{name: "cost", aliases: []string{"usage"}, usage: "[rungs|turns]", desc: "tokens and cost; rungs reprices the session per rung, turns orders its asks by bill", busySafe: true, run: cmdCost},
 		{name: "estimate", usage: "[prompt]", desc: "price the next turn on every rung before it is sent", run: cmdEstimate},
 		{name: "stats", usage: "[all]", desc: "every session this workspace has recorded, repriced on today's ladder; all spans workspaces", busySafe: true, run: cmdStats},
@@ -64,6 +64,10 @@ func commands() []commandItem {
 		{name: "notify", usage: "[on|off]", desc: "ring the bell when a turn finishes or an approval waits", busySafe: true, run: cmdNotify},
 		{name: "mouse", usage: "[on|off]", desc: "give the wheel to sb, at the cost of the terminal's own text selection", busySafe: true, run: cmdMouse},
 		{name: "queue", usage: "[clear]", desc: "what is waiting to run after this turn", busySafe: true, run: cmdQueue},
+		{name: "steer", usage: "<text>", desc: "send your words into the running turn at its next round boundary", busySafe: true, run: cmdSteer},
+		{name: "every", usage: "<interval> <prompt>", desc: "run a prompt on an interval, firing as a turn while sb runs", busySafe: true, run: cmdEvery},
+		{name: "at", usage: "<HH:MM> <prompt>", desc: "run a prompt once at a local clock time", busySafe: true, run: cmdAt},
+		{name: "schedule", usage: "[cancel <id>]", desc: "armed reminders and recurring prompts, kept per workspace", busySafe: true, run: cmdSchedule},
 		{name: "budget", usage: "[amount|off]", desc: "a dollar ceiling the session must stay under", busySafe: true, run: cmdBudget},
 		{name: "compact", usage: "[guidance|preview|auto|at]", desc: "summarize into a fresh context; preview says what that would take", run: cmdCompact},
 		{name: "context", usage: "[tokens]", desc: "how much of the window is in use; a count records what this target accepts", busySafe: true, run: cmdContext},
@@ -144,7 +148,7 @@ var helpGroups = []struct {
 	title string
 	names []string
 }{
-	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "exit"}},
+	{"session", []string{"clear", "resume", "recap", "fork", "pin", "retry", "compact", "context", "session", "export", "find", "queue", "steer", "every", "at", "schedule", "exit"}},
 	{"the ladder", []string{"tier", "tiers", "ladder", "why", "race", "races", "cost", "estimate", "stats", "budget", "think", "cache", "advisor"}},
 	{"files and work", []string{"files", "search", "diff", "review", "audit", "changes", "blame", "mistakes", "undo", "watch", "bisect", "copy", "init", "skill", "learn"}},
 	{"language intelligence", []string{"lsp", "outline", "symbols", "problems", "definition", "references"}},
@@ -185,6 +189,8 @@ func cmdHelp(m *tuiModel, _ string) tea.Cmd {
 input
   @path            attach a file (tab completes)   !cmd    run a shell command yourself
   \ then enter     continue the line               alt+enter / ctrl+j   newline
+  /every 30m …     run a prompt on an interval     /at 14:30 …         run it once at a clock time
+                   (/schedule lists and cancels; entries persist per workspace and fire only while sb runs)
 
 keys
   enter            send                  tab                complete
@@ -195,8 +201,9 @@ keys
   ctrl+p           command palette       ctrl+g             edit the prompt in $EDITOR
   ctrl+o           expand the last route or tool entry
   esc              interrupt the turn    ctrl+c ctrl+c      exit
+  ctrl+s           steer the running turn with what you typed
   pgup/pgdn        scroll                ctrl+u / ctrl+d    half a page
-  home/end         top / bottom of the transcript
+  shift+↑/↓        scroll a few lines    home/end           top / bottom
 
   the mouse belongs to the terminal, so drag to select and copy as usual.
   /mouse on gives sb the wheel and click-to-expand instead.`)

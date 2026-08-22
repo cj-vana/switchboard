@@ -21,6 +21,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/schedule"
 	"github.com/switchboard-code/switchboard/internal/session"
 )
 
@@ -54,6 +55,12 @@ type repl struct {
 	// could not compact at all without it, which is why a long scripted run
 	// used to end at the provider's refusal rather than at a handoff.
 	store *session.Store
+
+	// schedules is the per-workspace reminder ledger behind /every, /at, and
+	// /schedule. Nil when it could not load, with schedulesErr holding the
+	// reason in a form the commands append to "schedules are unavailable".
+	schedules    *schedule.Store
+	schedulesErr string
 
 	// callTokens is the size of the last request the provider actually saw.
 	// Auto-compaction reads it at turn end for the same reason the TUI does:
@@ -163,6 +170,10 @@ func (r *repl) once(ctx context.Context, prompt string) error {
 
 func (r *repl) interactive(ctx context.Context) error {
 	for {
+		// Due reminders fire here: the loop top is both "before each read"
+		// and "after each completed turn", the only seams a line reader has.
+		r.fireDueSchedules(ctx)
+
 		r.out.w.WriteString(r.out.style(bold, "› "))
 		r.out.atLineTop = false
 		r.out.flush()
@@ -550,11 +561,23 @@ func (r *repl) command(ctx context.Context, input string) bool {
 		r.out.line("  /session                                  session id, target, and message count")
 		r.out.line("  /sandbox [off|on|auto]                    show or change command confinement")
 		r.out.line("  /compact [instructions]                   summarize this session into a fresh one")
-		r.out.line("  /doctor extensions                       every startup extension diagnostic")
+		r.out.line("  /every <interval> <prompt>                fire a prompt on an interval while sb runs")
+		r.out.line("  /at <HH:MM> <prompt>                      fire a prompt once at a local clock time")
+		r.out.line("  /schedule [cancel <id>]                   the workspace's scheduled prompts")
+		r.out.line("  /doctor extensions                        every startup extension diagnostic")
 		r.out.line("  /exit                                     leave")
 
 	case "compact":
 		r.compact(ctx, rest)
+
+	case "every":
+		r.scheduleEvery(rest)
+
+	case "at":
+		r.scheduleAt(rest)
+
+	case "schedule":
+		r.scheduleCommand(rest)
 
 	case "tier":
 		if rest == "" {

@@ -28,6 +28,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/schedule"
 	"github.com/switchboard-code/switchboard/internal/session"
 	"github.com/switchboard-code/switchboard/internal/skills"
 	"github.com/switchboard-code/switchboard/internal/tools"
@@ -412,6 +413,21 @@ func runTUI(
 	if trustErr != nil {
 		app.trustErr = trustErr.Error()
 	}
+	// The schedule ledger rides the per-workspace directory the session logs
+	// already live in. A ledger that will not load costs the feature, never
+	// the session: the commands say why, and nothing fires.
+	if dir, err := store.WorkspaceDir(workspace); err != nil {
+		app.schedulesErr = ": " + err.Error()
+	} else if ledger, err := schedule.Open(dir); err != nil {
+		if errors.Is(err, schedule.ErrLocked) {
+			app.schedulesErr = ": another sb process in this workspace holds them"
+		} else {
+			app.schedulesErr = ": " + err.Error()
+		}
+	} else {
+		app.schedules = ledger
+		defer ledger.Close()
+	}
 	if app.lsp != nil {
 		app.lspProblems, app.lspProblemsCancel = app.lsp.Problems().Subscribe()
 		defer app.lspProblemsCancel()
@@ -463,6 +479,9 @@ func runTUI(
 	})
 	app.startupNotes = aggregateStartupNotes(startupNotes, droppedStartupNotes)
 	addStartupNoteReport(m, app.startupNotes)
+	if app.schedulesErr != "" {
+		m.addNotice("warn", "schedules are unavailable"+app.schedulesErr)
+	}
 	if routeDec != nil {
 		m.addRoute(routeSummary(*routeDec), describeRoute(*routeDec))
 	}
@@ -473,6 +492,12 @@ func runTUI(
 	var initial []tea.Cmd
 	if app.lspProblems != nil {
 		initial = append(initial, waitLSPProblems(app.lsp, app.lspProblems))
+	}
+	// The schedule poller starts here and re-arms itself from its handler
+	// until the program ends; a ledger that did not load has nothing to fire
+	// and gets no clock.
+	if app.schedules != nil {
+		initial = append(initial, scheduleTick())
 	}
 	if updateCheck {
 		initial = append(initial, startupUpdate(cfg))
@@ -650,6 +675,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchReportMsg:
 		m.onWatchReport(msg)
 		return m, nil
+
+	case scheduleTickMsg:
+		return m, m.fireScheduled()
 
 	case bisectProbeMsg:
 		m.onBisectProbe(msg)
@@ -968,9 +996,11 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case "shift+tab":
-		if m.busy || m.turnPlanning || m.operationActive {
-			return noticeCmd("warn", "a turn is running; esc to interrupt it before changing mode")
-		}
+		// Mid-turn is exactly when a mode change earns its place: the engine
+		// publishes mode and reach under one lock, every later tool call in
+		// the turn is checked against the new mode, and an approval that
+		// straddled the change fails closed. Clamping a wandering turn to
+		// plan without killing it is the point.
 		return m.cycleMode()
 	case "ctrl+t":
 		return m.openTierPicker()
@@ -991,6 +1021,16 @@ func (m *tuiModel) key(msg tea.KeyMsg) tea.Cmd {
 	case "pgdown":
 		m.tr.scrollBy(-m.pageSize())
 		return nil
+	case "shift+up":
+		// The wheel's granularity on keys: several terminals keep pgup for
+		// their own scrollback, and the plain arrows are the composer's.
+		m.tr.scrollBy(3)
+		return nil
+	case "shift+down":
+		m.tr.scrollBy(-3)
+		return nil
+	case "ctrl+s":
+		return m.steerKey()
 	case "ctrl+u":
 		m.tr.scrollBy(m.pageSize() / 2)
 		return nil
@@ -1195,9 +1235,11 @@ func (m *tuiModel) submit() tea.Cmd {
 	return m.enqueue(v, "")
 }
 
-// enqueue starts the turn now or lines it up behind the running one.
+// enqueue starts the turn now or lines it up behind the running one. Planning
+// counts as running: a turn whose route is still being probed is a turn about
+// to exist, and a second start would race it.
 func (m *tuiModel) enqueue(prompt, override string) tea.Cmd {
-	if m.busy {
+	if m.busy || m.turnPlanning {
 		m.queue = append(m.queue, prompt)
 		m.addNotice("", "queued; it runs when the current turn finishes")
 		return nil
@@ -1523,6 +1565,11 @@ func (m *tuiModel) applyOverrideBinding(msg overrideProbeMsg) {
 }
 
 func (m *tuiModel) nextQueuedTurn() tea.Cmd {
+	// Turn exits that bypass the verdict — a refused route, a cancelled plan —
+	// come through here; a steer caught in one still leads what runs next.
+	if !m.busy && !m.turnPlanning {
+		m.foldSteers()
+	}
 	if len(m.queue) == 0 || m.busy {
 		return nil
 	}
@@ -1648,6 +1695,12 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		m.restoreOverride()
 	}
 
+	// A steer that outlived its turn was typed before anything queued behind
+	// it, so it leads the queue rather than dying with the turn it missed.
+	// This runs before the compact branch on purpose: the queue survives that
+	// swap, and a folded steer is an ordinary queued prompt by then.
+	m.foldSteers()
+
 	// Auto-compaction runs ahead of the queue: a queued prompt sent into a
 	// nearly-full window would inherit the failure this exists to prevent,
 	// and the queue survives the swap (onSessionSwap drains it).
@@ -1664,6 +1717,14 @@ func (m *tuiModel) onTurnDone(msg turnDoneMsg) tea.Cmd {
 		return tea.Batch(watchCmd, m.startTurn(next, ""))
 	}
 	return watchCmd
+}
+
+// foldSteers moves undrained steers to the head of the prompt queue. It runs
+// at turn end, before the queue is consulted.
+func (m *tuiModel) foldSteers() {
+	if steers := m.app.takeSteers(); len(steers) > 0 {
+		m.queue = append(steers, m.queue...)
+	}
 }
 
 // estimatedOccupancy is what the next request would carry, counted locally.
@@ -1942,6 +2003,12 @@ func (m *tuiModel) onSessionSwap(msg sessionSwapMsg) tea.Cmd {
 	// The old session's occupancy does not describe the new one, and leaving
 	// it would re-trigger the auto-compaction that produced this swap.
 	m.callTokens = 0
+	// A steer nobody drained was typed into the session this swap replaces.
+	// It does not follow into the new one — the same answer undelivered tool
+	// images get, and for the same reason: it answered a context that is gone.
+	if dropped := m.app.takeSteers(); len(dropped) > 0 {
+		m.addNotice("", fmt.Sprintf("%d steered note(s) dropped with the session they were typed into", len(dropped)))
+	}
 	if msg.operation != 0 {
 		m.finishOperation(msg.operation, false)
 	}
@@ -2331,7 +2398,7 @@ func (m *tuiModel) workingLine() string {
 	}
 	elapsed := time.Since(m.started).Round(time.Second)
 	line := " " + who + mid + m.th.dim.Render(" · "+elapsed.String())
-	line += m.th.faint.Render("  esc interrupts")
+	line += m.th.faint.Render("  esc interrupts · ctrl+s steers")
 	if len(m.queue) > 0 {
 		line += m.th.faint.Render(fmt.Sprintf("  %d queued", len(m.queue)))
 	}

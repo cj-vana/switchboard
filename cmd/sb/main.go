@@ -25,6 +25,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/provider"
 	"github.com/switchboard-code/switchboard/internal/provider/ollama"
 	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/schedule"
 	"github.com/switchboard-code/switchboard/internal/session"
 	"github.com/switchboard-code/switchboard/internal/tools"
 	"github.com/switchboard-code/switchboard/internal/trust"
@@ -474,7 +475,31 @@ func run() error {
 	r.watcher.setPaused(!cfg.RouteAutoOn())
 	loop.SetObserver(r.watcher)
 
+	// The schedule ledger rides the per-workspace directory the session logs
+	// already live in. A ledger that will not load costs the feature, never
+	// the session: the commands say why, and nothing fires. Headless runs
+	// skip the load entirely — they cannot fire, so loading would hold the
+	// workspace's lock for nothing and print a feature notice on a surface
+	// that cannot use it.
+	if opts.prompt == "" && opts.workflow == "" {
+		if dir, err := store.WorkspaceDir(workspace); err != nil {
+			r.schedulesErr = ": " + err.Error()
+		} else if ledger, err := schedule.Open(dir); err != nil {
+			if errors.Is(err, schedule.ErrLocked) {
+				r.schedulesErr = ": another sb process in this workspace holds them"
+			} else {
+				r.schedulesErr = ": " + err.Error()
+			}
+		} else {
+			r.schedules = ledger
+			defer ledger.Close()
+		}
+	}
+
 	r.banner(sess, resumed)
+	if r.schedulesErr != "" {
+		out.Notice("warn", "schedules are unavailable"+r.schedulesErr)
+	}
 	// The REPL drains what buffered and attaches no live target: the
 	// renderer is driven from the loop's goroutine, and a client's read
 	// loop writing to it concurrently would race. Later notes buffer,

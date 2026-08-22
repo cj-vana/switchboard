@@ -39,6 +39,13 @@ ignore it.
 Prompts entered while a turn is running join a queue. `/queue` shows them and
 `/queue clear` removes them. They run after the active turn completes.
 
+To redirect the running turn instead, type the correction and press `ctrl+s`
+(or use `/steer <text>`): the words reach the model at the turn's next round
+boundary, marked `[steer]` in the log. What the turn ends before reading is
+not dropped — it leads the queue and starts a turn of its own. A session swap
+drops what was never delivered, and `/tasks steer <id> <text>` addresses a
+delegate task rather than the primary.
+
 ## Questions and approvals
 
 The `ask` tool can present up to several choices plus a free-text answer. Arrow
@@ -77,7 +84,7 @@ task asking, so prompts do not overlap or lose their owner.
 | `/doctor extensions` | Inspect every retained startup extension diagnostic in discovery order |
 | `/tasks [cancel <id>]` | Inspect current-session delegate work or cancel one queued or running task |
 | `/setup` | Reopen provider setup |
-| `/mode <plan|default|acceptEdits|auto|yolo|bypass>` | Change the permission policy |
+| `/mode <plan|default|acceptEdits|auto|yolo|bypass>` | Change the permission policy, including mid-turn |
 | `/sandbox on|off|auto|status` | Change or inspect command confinement for this process |
 | `/theme <dark|light|auto>` | Set the persistent TUI theme |
 | `/notify [on|off]` | Control completion and approval notifications |
@@ -99,6 +106,38 @@ capped at 100, and its
 IDs live only in the current process, although delegate session logs remain
 durable. Targeted cancel does not cancel sibling tasks. The full batch rules are
 in [Delegation and named agents](extensions.md#delegation-and-named-agents).
+
+## Scheduled prompts
+
+`/every <interval> <prompt>` arms a recurring prompt, `/at <HH:MM> <prompt>`
+a one-shot at a 24-hour local clock time, and `/schedule` lists what is armed
+with each entry's next fire, both relative and on the wall clock.
+`/schedule cancel <id>` removes one. A fired entry opens an ordinary user
+turn with a `[scheduled sN]` lead, so the transcript and the model can tell
+it from typed text; a turn already in flight delays the fire into the queue
+rather than dropping it.
+
+Entries persist per workspace, in `schedule.json` beside the session logs
+under `~/.switchboard/sessions/`, and resume when sb next runs in that
+workspace. There is no daemon: nothing fires while sb is not running. An
+entry whose moment passed while the process was down fires once at startup,
+and a recurring entry reschedules from then — it never catches up the ticks
+it missed. The TUI checks what is due every few seconds; the REPL checks
+before each prompt is read, so an entry that comes due while a line reader
+sits idle waits for the next line.
+
+Intervals start at one minute and a workspace holds at most 32 entries. A new
+entry's prompt passes the same credential scan a typed prompt does, and
+because the ledger keeps it on disk the answers are redact or drop — the
+TUI's gate offers no as-typed arm and the REPL refuses outright, naming the
+finding kinds. Firing replays what was armed; the schedule adds no gate of
+its own beyond the outbound scan every send passes.
+
+One running sb owns a workspace's ledger; a second sb opened in the same
+workspace reports the schedule as held and fires nothing. Headless `-p` runs
+never load it. Ids are the lowest free number and are reused after a cancel,
+so an old transcript's `[scheduled s2]` can name a different prompt than a
+new entry's.
 
 ## Workspace workbench
 
@@ -359,7 +398,8 @@ takes selection away, and `/mouse off` gives it back. The setting persists as
 `[ui] mouse`.
 
 Nothing is lost while the mouse is off. `pgup` and `pgdn` scroll a page,
-`ctrl+u` and `ctrl+d` scroll half a page, `home` and `end` reach the ends of the
+`shift+↑` and `shift+↓` scroll a few lines, `ctrl+u` and `ctrl+d` scroll half a
+page, `home` and `end` reach the ends of the
 transcript, and `ctrl+o` expands the last route or tool entry, which is what a
 click on one would have done.
 

@@ -242,7 +242,7 @@ func lastTurnOpening(messages []provider.Message) int {
 // opening, and the source session /retry never writes is the recovery.
 func injectionShaped(msg provider.Message) bool {
 	text := msg.AuthoredText()
-	return strings.HasPrefix(text, "[advisor]") || strings.HasPrefix(text, "[watch]")
+	return strings.HasPrefix(text, "[advisor]") || strings.HasPrefix(text, "[watch]") || strings.HasPrefix(text, "[steer]")
 }
 
 func retryUndoRefusal(restored, removed int, skipped, failed []string, undoErr error) string {

@@ -61,6 +61,10 @@ point into it, and this file restates the constraints that bind the code.
                          turned the declared verifier red; mutates the
                          tree in place and restores it on every exit
                          path, cancellation included
+    internal/schedule/   the per-workspace ledger behind /every, /at, and
+                         /schedule: prompts that fire as ordinary user turns
+                         while sb runs; no daemon, and an overdue entry
+                         fires once rather than catching up missed ticks
     internal/config/     the ladder and settings; the TUI owns the file and
                          Save regenerates it, so nothing may depend on
                          comments in config.toml surviving
@@ -331,7 +335,10 @@ included and to end-of-text when the END was lost in the paste, because a
 redaction that replaced only the header would send the body it was asked
 to hold back. The TUI holds the send behind redact/send/drop through one
 chokepoint (`tui_secretgate.go`) that covers plain turns, /tN overrides,
-and races, with esc meaning drop; the interactive REPL asks the same
+steers, and races, with esc meaning drop; the storage form
+(`openSecretGateForStorage`) guards what will sit at rest — a scheduled
+prompt — and offers only redact or drop, because every durable artifact this
+program writes redacts unconditionally; the interactive REPL asks the same
 three answers in line; headless refuses outright and names
 `-allow-secrets` as the stated widening, because a surface with no one to
 ask fails closed. A race's verdict record redacts its stored prompt
@@ -982,8 +989,8 @@ what the original rung read and the pair is a controlled comparison. A
 retry onto another rung is the /tN one-shot, probe and restore included.
 The set-aside answer's log gets a user_corrected note before the fork
 cuts, and routing consumes none of it. `lastTurnOpening` exists because
-injected advice and watch reports are user-role messages that did not open
-a turn; a retry that replayed one would replay a fragment.
+injected advice, watch reports, and steers are user-role messages that did
+not open a turn; a retry that replayed one would replay a fragment.
 
 **A race arm is byte-identical upstream and read-only downstream.** /race
 (`cmd/sb/race.go`) runs one prompt on two rungs from two forks of the

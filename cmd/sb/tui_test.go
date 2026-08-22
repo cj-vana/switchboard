@@ -612,16 +612,15 @@ func TestAutoModeCopyKeepsHostDirectCommandsWithTheHuman(t *testing.T) {
 	t.Fatal("mode picker omitted auto")
 }
 
-func TestModeCycleRefusesWhileTurnIsBusy(t *testing.T) {
+func TestModeCycleWorksWhileTurnIsBusy(t *testing.T) {
 	m := testModel(t)
 	m.busy = true
-	before := m.mode
-	returned := m.key(tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.mode != before || m.app.loop.Perms.Mode() != before {
-		t.Fatalf("shift+tab changed mode while busy: UI=%s engine=%s", m.mode, m.app.loop.Perms.Mode())
-	}
-	if returned == nil {
-		t.Fatal("busy shift+tab did not return a visible warning")
+	// The engine publishes mode and reach under one lock, and every later
+	// tool call in the turn is checked against the new mode — clamping a
+	// wandering turn to plan without killing it is the point.
+	m.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.mode != permission.ModeAcceptEdits || m.app.loop.Perms.Mode() != permission.ModeAcceptEdits {
+		t.Fatalf("mid-turn shift+tab: UI=%s engine=%s, want acceptEdits", m.mode, m.app.loop.Perms.Mode())
 	}
 }
 

@@ -300,6 +300,22 @@ func (s *Store) Create(workspace string, target provider.RouteTargetID, catalogR
 	return sess, nil
 }
 
+// WorkspaceDir is the per-workspace directory the store keeps logs in,
+// created if absent. Per-workspace state that is not a session log — the
+// schedule ledger — lives beside the logs under the same key, so it follows
+// the same machine-local placement rule DefaultStore states.
+func (s *Store) WorkspaceDir(workspace string) (string, error) {
+	workspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(s.root, workspaceKey(workspace))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 // Open replays a session by ID and reopens it for appending.
 func (s *Store) Open(id string) (*Session, error) {
 	matches, err := filepath.Glob(filepath.Join(s.root, "*", id+".log"))

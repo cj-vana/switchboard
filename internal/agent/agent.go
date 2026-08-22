@@ -135,10 +135,10 @@ type Loop struct {
 
 	// Inject, when set, is drained at the top of every round. What it returns
 	// is appended to the session before the request is built, which is how
-	// advice — or the user, one day — reaches a turn already in flight. The
-	// round boundary is the only safe seam: tool results are recorded, no
-	// call is outstanding, and a user-role message is legal in every wire
-	// format this program speaks.
+	// advice, a watch verdict, or the user's own steer reaches a turn already
+	// in flight. The round boundary is the only safe seam: tool results are
+	// recorded, no call is outstanding, and a user-role message is legal in
+	// every wire format this program speaks.
 	Inject func() []provider.Message
 
 	// Hooks, when non-nil, runs the user's commands around each tool call: a

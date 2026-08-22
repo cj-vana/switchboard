@@ -142,13 +142,15 @@ func (ws *watchState) takeFold() []string {
 	return out
 }
 
-// inject is the loop's round-boundary seam, composed once at assembly:
-// whatever the advisor queued, then the watch's delta. Each part
+// inject is the loop's round-boundary seam, composed once at assembly: the
+// user's steers first, then whatever the advisor queued, then the watch's
+// delta. Each part
 // contributes nothing when off, so the loop never needs its Inject swapped.
 // Every message leaves marked Injected, because a log reader — /retry above
 // all — must be able to tell a turn's opening from what rode in mid-turn.
 func (a *tuiApp) inject() []provider.Message {
 	var out []provider.Message
+	out = append(out, a.steerRound()...)
 	if adv := a.currentAdvisor(); adv != nil {
 		out = append(out, adv.Drain()...)
 	}

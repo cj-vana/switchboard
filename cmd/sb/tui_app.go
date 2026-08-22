@@ -22,6 +22,7 @@ import (
 	"github.com/switchboard-code/switchboard/internal/prefix"
 	"github.com/switchboard-code/switchboard/internal/provider"
 	route "github.com/switchboard-code/switchboard/internal/router"
+	"github.com/switchboard-code/switchboard/internal/schedule"
 	"github.com/switchboard-code/switchboard/internal/session"
 	"github.com/switchboard-code/switchboard/internal/skills"
 	"github.com/switchboard-code/switchboard/internal/tools"
@@ -53,6 +54,12 @@ type tuiApp struct {
 	routeFeatures route.SessionFeatures
 	sticky        *route.Sticky
 	watcher       *watcher
+
+	// steers holds the user's mid-turn corrections until the loop's next
+	// round boundary drains them. Written from the UI goroutine, read from
+	// the loop's; the mutex is the whole protocol.
+	steerMu sync.Mutex
+	steers  []string
 
 	// trust is the standing record of which checkouts may run what they
 	// declare. Nil when the store could not open; trustErr says why.
@@ -87,6 +94,13 @@ type tuiApp struct {
 	// skills are the loaded skill definitions, for /skills; the tool serving
 	// them was registered at assembly.
 	skills []skills.Skill
+
+	// schedules is the per-workspace reminder ledger behind /every, /at, and
+	// /schedule (internal/schedule). Nil when the ledger could not load, and
+	// schedulesErr then holds the reason in a form the commands append to
+	// "schedules are unavailable".
+	schedules    *schedule.Store
+	schedulesErr string
 
 	// budget is the shared dollar ceiling, for /budget and the escalation
 	// guard; the loop reads the same state before every call.
